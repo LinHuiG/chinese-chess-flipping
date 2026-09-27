@@ -2,6 +2,13 @@
 
 更新时间：2026-09-27（Asia/Shanghai）。新线程先阅读本文和 README.md，再检查 git status；当前代码、测试和远端状态优先于历史记录。
 
+## APK 交付（2026-09-27）
+
+- 用户要求提供 APK。本轮没有修改业务源码，没有重新发布镜像或操作远端服务器；用户要求仅本地提交，不推送。
+- 再次执行 Android `:app:assembleDebug` 成功，33 项任务均为 up-to-date，复用已验证构建产物，没有重新运行功能回归。交付副本位于 `client/build/deliverables/chinese-chess-flipping-0.2.0-debug.apk`，965287 字节，0.2.0/versionCode 2，调试签名；apksigner 校验通过。
+- 交付 APK 的 SHA-256 为 `04DBB9E80A6826B576F6030C424FC77744A68AF7B54C2A2A0E16C0C140777028`，与上一阶段 APK 一致。APK 位于忽略的构建目录，不加入源码仓库；未创建发行签名密钥或上传 GitHub Release。
+- 再次通过 GitHub API 核对 Actions 36308099105 为 completed/success，对应源码 5a165bf；未查询或变更服务器运行状态。此前的模拟器验收边界保持不变，本轮未做真机验收。
+
 ## 最新阶段：完整功能已推送，Actions 镜像发布成功（2026-09-27）
 
 - 本阶段用户已明确授权开发、统一测试、提交并推送 GitHub，通过 Actions 发布镜像。用户自行在服务器拉取和部署；助手不操作远端服务器。已有未提交的加密通信源码已与本轮业务实现一并纳入发布范围。
