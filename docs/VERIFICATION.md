@@ -15,7 +15,11 @@
 
 本地 Java 21、Windows 环境的最终 Maven 测试合计 42 项，0 失败、0 错误、0 跳过。该次 verify 的测试阶段成功，后续 Spring Boot repackage 因测试服务器占用同名 JAR 而失败；停止该进程后，执行 -DskipTests package 成功，并以新包重新启动完成联调。CI 将在干净环境再次执行完整 verify。
 
+后续 CI 核实：代码提交 5a165bf 的 [Actions test 作业](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36308099105) 已完成并成功，完整 Maven verify 在干净 Linux 环境通过。镜像发布状态另见部署文档。
+
 Android 调试包为 client/app/build/outputs/apk/debug/app-debug.apk，版本 0.2.0、versionCode 2。未创建或提交正式发行签名。独立 server/ 构建缺少 client/ 时按设计不运行 Android 源码相关检查。
+
+APK 大小 965287 字节，SHA-256：04DBB9E80A6826B576F6030C424FC77744A68AF7B54C2A2A0E16C0C140777028。
 
 ## 双模拟器联调
 
@@ -32,6 +36,8 @@ Android 调试包为 client/app/build/outputs/apk/debug/app-debug.apk，版本 0
 - 本地服务停止再启动：两台自动重连并回大厅，旧房间/棋局不恢复。
 
 以上是模拟器上的有限场景验证，不等于真实手机厂商策略、全部 Android 版本、长时间 Doze 或弱网环境已经验收。
+
+验收后已关闭两台测试模拟器和本地 TCP 服务，避免继续占用资源；虚拟设备配置、APK 和截图保留。需要继续联调时按 README 启动本地服务和已有虚拟设备。
 
 ## 界面记录
 

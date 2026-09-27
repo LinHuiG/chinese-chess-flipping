@@ -8,6 +8,16 @@
 
 发布镜像为 ghcr.io/linhuig/chinese-chess-flipping:latest，支持 linux/amd64 和 linux/arm64；正式拉取前应确认对应 Actions 发布成功。
 
+## 本次发布已确认
+
+- 源代码：5a165bf0f43b41c90fc818a5cb437ca5f240378d。
+- [Actions 36308099105](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36308099105)：test/publish 均成功，2026-09-27 17:06（北京时间）完成。
+- 标签：latest、sha-5a165bf；匿名获取镜像清单成功，已确认 linux/amd64、linux/arm64。
+- 两个标签共同摘要：sha256:82b97016a0fa80912ade6b676fa8f132b2e235df3291cf247162c2219b674c94。
+- 需要固定本次版本时，可将下面 image 改为 ghcr.io/linhuig/chinese-chess-flipping:sha-5a165bf，或使用 @sha256 摘要格式。
+
+本次只发布镜像，没有连接或修改用户服务器；实际拉取和运行由用户完成。
+
 ## compose.yaml
 
 在服务器的部署目录中使用：

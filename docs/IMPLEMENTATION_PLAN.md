@@ -33,5 +33,5 @@
 - 开发前：服务端和 Android 增量编译成功；无连接的 adb 设备、无已配置模拟器、未检测到可用 Docker。
 - 已实现完整功能。最终集中检查：42 项 Maven 测试通过，打包的本地文件锁问题在停止测试服务后解决；Android assembleDebug 和 lintDebug 通过，0 errors、7 warnings。具体命令状态见 VERIFICATION.md，不把文件锁失败的 verify 记为全流程成功。
 - 已安装 Android 17（API 37）系统镜像并创建两台虚拟设备，实际连接本地 Java 服务；大厅、房间、棋局、阵亡角标、规则、横竖屏、后台锁屏约 2 分钟、30 秒超时、退出/解散、服务重启后重连均已检查。界面截图和资源短测已归档到 VERIFICATION.md。
-- 待完成：最终检查结果归档、GitHub 推送、Actions 发布。用户自行拉取镜像部署，配置见 DEPLOYMENT.md。
+- 已完成结果归档和代码 5a165bf 推送，Actions 36308099105 的 test/publish 成功；已匿名核实 latest 与 sha-5a165bf 的清单一致，包含 amd64/arm64。用户自行拉取镜像部署，配置和精确摘要见 DEPLOYMENT.md。
 - 真机后台/锁屏、系统网络权限、厂商兼容和实际公网部署需按可用设备及服务器条件另行核实，编译不等于设备验收。
