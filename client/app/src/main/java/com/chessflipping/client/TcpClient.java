@@ -32,7 +32,7 @@ public final class TcpClient implements AutoCloseable {
                 output = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
                 if (closed) return;
                 listener.onConnected();
-                writer.scheduleAtFixedRate(() -> write("{\"type\":\"PING\"}"), 20, 20, TimeUnit.SECONDS);
+                writer.scheduleWithFixedDelay(() -> write("{\"type\":\"PING\"}"), 20, 20, TimeUnit.SECONDS);
                 BufferedReader input = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
                 StringBuilder line = new StringBuilder();
                 int c;
