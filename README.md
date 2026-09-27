@@ -38,13 +38,13 @@ gradlew.bat assembleDebug lintDebug
 
 ## 镜像与部署
 
-推送 main 后，根目录 .github/workflows/publish.yml 先运行 Maven verify，再构建并发布 linux/amd64、linux/arm64 镜像：
+推送 main 后，根目录 .github/workflows/publish.yml 运行 Maven verify；只有整次推送前后 server/ 存在差异，才在测试通过后构建并发布 linux/amd64、linux/arm64 镜像：
 
 ~~~text
 ghcr.io/linhuig/chinese-chess-flipping:latest
 ~~~
 
-另提供 sha-* 标签。客户端和文档的 main 推送也会触发此流水线。发布结果以实际 Actions 运行和镜像清单为准。
+另提供 sha-* 标签。仅客户端、文档或工作流变更仍运行测试，但跳过镜像发布；PR 只测试。server/ 的源码、依赖、Dockerfile 和配置等变更都计入发布范围。单独推送 Git 标签不自动发布；需要主动重建时，在 Actions 中手动 Run workflow，仍先测试再发布。发布结果以实际 Actions 运行和镜像清单为准。
 
 用户自行部署的完整配置和命令见 [服务器部署](docs/DEPLOYMENT.md)。示例对外端口为 8888；进程本身未设置 TCP_PORT 时仍默认 9000。
 

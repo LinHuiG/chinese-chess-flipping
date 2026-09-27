@@ -2,7 +2,6 @@ name: Test and publish Docker image
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -10,8 +9,33 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    outputs:
+      publish_image: ${{ steps.scope.outputs.publish_image }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check server changes
+        id: scope
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          publish_image=false
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            publish_image=true
+          elif [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            base="$BEFORE_SHA"
+            if [[ "$base" =~ ^0+$ ]]; then
+              base=$(git hash-object -w -t tree /dev/null)
+            else
+              git cat-file -e "$base^{commit}" || git fetch --no-tags origin "$base"
+            fi
+            changed_files=$(git diff --name-only "$base" "$GITHUB_SHA" -- server/)
+            if [[ -n "$changed_files" ]]; then publish_image=true; fi
+          fi
+          echo "publish_image=$publish_image" >> "$GITHUB_OUTPUT"
+          echo "Publish image: $publish_image" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -19,7 +43,7 @@ jobs:
           cache: maven
       - run: mvn --batch-mode --no-transfer-progress -f server/pom.xml verify
   publish:
-    if: github.event_name != 'pull_request'
+    if: needs.test.outputs.publish_image == 'true'
     needs: test
     runs-on: ubuntu-latest
     permissions:

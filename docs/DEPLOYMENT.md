@@ -10,13 +10,15 @@
 
 ## 本次发布已确认
 
-- 源代码：5a165bf0f43b41c90fc818a5cb437ca5f240378d。
-- [Actions 36308099105](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36308099105)：test/publish 均成功，2026-09-27 17:06（北京时间）完成。
-- 标签：latest、sha-5a165bf；匿名获取镜像清单成功，已确认 linux/amd64、linux/arm64。
-- 两个标签共同摘要：sha256:82b97016a0fa80912ade6b676fa8f132b2e235df3291cf247162c2219b674c94。
-- 需要固定本次版本时，可将下面 image 改为 ghcr.io/linhuig/chinese-chess-flipping:sha-5a165bf，或使用 @sha256 摘要格式。
+- 源代码：b47535fe2a0e6f24e81b9c372342cbdab979a86a，包含本轮服务端同步恢复与 START 大小校验修复。
+- [Actions 36313268361](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36313268361)：test/publish 均成功，2026-09-27 18:44:50（北京时间）完成。
+- 标签：latest、sha-b47535f；匿名获取镜像清单成功，已确认 linux/amd64、linux/arm64。
+- 两个标签共同摘要：sha256:32378fc8281a443e023bc0deb723c52bafb8b1f0d0d8a7f4a1d0f39f7def967e。
+- 需要固定本次版本时，可将下面 image 改为 ghcr.io/linhuig/chinese-chess-flipping:sha-b47535f，或使用 @sha256 摘要格式。上一发布标签 sha-5a165bf 保留作回滚参考。
 
 本次只发布镜像，没有连接或修改用户服务器；实际拉取和运行由用户完成。
+
+自动发布只针对 main 整次推送前后 server/ 的变化，包含源码、依赖与 Docker 配置。客户端/文档/工作流单独变化仅测试，不重新构建镜像；PR 只测试，单独推送标签不自动发布。手动 Run workflow 可以主动重建，仍须测试通过。
 
 ## compose.yaml
 
