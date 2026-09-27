@@ -6,7 +6,9 @@
 
 - 用户要求避免仅修改 App 却重新打包服务端镜像。工作流保留 main/PR 自动测试，发布 job 改为仅 main 整次推送前后 server/ 有差异时执行；包含该目录下源码、依赖、Dockerfile 与配置。读取 push.before 到当前 SHA 的净差异，不只检查最后一个提交；比较失败会让检查失败，不静默跳过。
 - 客户端、文档、工作流单独修改只测试，不发布；PR 不发布。取消单独推送 v* 标签的自动发布，保留 workflow_dispatch 手动重建入口。GitHub 的 push 路径过滤不适用于标签，不能简单添加 paths 后继续让标签无条件发布。
-- 本次只修改工作流及项目记录，不重新运行本地业务测试；将通过本次无 server/ 变化的实际 Actions 运行确认 test 成功、publish 跳过。结果待核实。
+- 工作流及记录提交 bc57a9cc8bb171774a8396f70fcfc1b59a35fdb6 已推送。用历史 Git 差异核对：服务端变更会选中发布，纯文档变更不会；本次未重复运行本地业务测试。
+- [Actions 36313801610](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36313801610) 于 2026-09-27 18:50:40（北京时间）完成：test=success，publish=skipped。实际验证本次无 server/ 变更不重建镜像；手动发布和新分支首次推送的分支逻辑未额外触发验收。
+- 验证结果以纯文档提交 [skip ci] 推送，避免为归档重复运行测试。可拉取的最新业务镜像仍对应 b47535f；本机 client/gradle/gradle-daemon-jvm.properties 继续保留，不提交。
 
 ## 0.3.0 提交与发布（2026-09-27，成功）
 
