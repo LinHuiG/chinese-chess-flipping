@@ -2,6 +2,8 @@
 
 同一个 GitHub 仓库管理两个独立工程，Docker 镜像只包含 `server/`。
 
+**新线程接手请先阅读 [项目执行记录与交接](PROJECT_STATUS.md)**，其中记录已完成的功能、实际验证结果、GitHub 发布状态、本机环境和待办事项。协作约定见 [AGENTS.md](AGENTS.md)。
+
 | 目录 | 用途 | IDE |
 | --- | --- | --- |
 | `server/` | Java 21 + Spring Boot + Netty TCP 服务 | IntelliJ IDEA |
