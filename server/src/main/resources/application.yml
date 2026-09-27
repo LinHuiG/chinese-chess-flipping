@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: chess-server
+  main:
+    web-application-type: none
+chess:
+  tcp:
+    port: ${TCP_PORT:9000}
+    worker-threads: ${TCP_WORKER_THREADS:4}

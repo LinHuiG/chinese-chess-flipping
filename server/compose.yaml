@@ -1,0 +1,15 @@
+services:
+  server:
+    image: ${SERVER_IMAGE:-chess-server:local}
+    build: .
+    ports:
+      - "${TCP_PORT:-9000}:${TCP_PORT:-9000}/tcp"
+    environment:
+      TCP_PORT: ${TCP_PORT:-9000}
+      TCP_WORKER_THREADS: ${TCP_WORKER_THREADS:-4}
+    restart: unless-stopped
+    stop_grace_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

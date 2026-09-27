@@ -1,0 +1,10 @@
+.idea/
+*.iml
+**/target/
+**/build/
+**/.gradle/
+**/local.properties
+**/.env
+*.log
+*.jks
+*.keystore
