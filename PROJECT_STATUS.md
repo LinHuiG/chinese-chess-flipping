@@ -2,6 +2,14 @@
 
 更新时间：2026-09-27（Asia/Shanghai）。新线程先阅读本文和 README.md，再检查 git status；当前代码、测试和远端状态优先于历史记录。
 
+## 0.4.0 提交与镜像发布（2026-09-27，成功）
+
+- 业务提交 61a32a5e98a87a94f5ea1098172f355cdae29464 已推送 origin/main，包含 HTTP/WS、响应式网页、安卓目录迁移和三种传输设置、网页走子与最后吃子动画、检查中发现的问题修复及资源优化。
+- [Actions 36318713210](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36318713210) 的 test / publish 均成功，2026-09-27 20:26:12（北京时间）发布完成。匿名核实 latest 与 sha-61a32a5 同指向 `sha256:9b35c381efce43638194e65786ef46271ebcd74ae4b711e514bf059910cca574`，OCI 清单包含 linux/amd64、linux/arm64。
+- 提交后核对发现 Windows 目录迁移把 android_client/gradlew 执行位变成 100644，已恢复为 100755，与本次结果归档一并后续提交。仅涉及执行位与文档，不改变已发布服务端源码；使用 [skip ci] 避免相同服务端重复检查。
+- 本地检查结果和 APK 校验见下一节；未远程部署、未更换证书。用户需更新端口映射并自行拉取新镜像，见 docs/DEPLOYMENT.md。本地旧服务仍未重启，网页新资源以已发布镜像或新 JAR 为准。
+- 仅保留来源已说明的 android_client/gradle/gradle-daemon-jvm.properties 未跟踪；不提交 SDK 路径、缓存、签名或 APK。以下“尚未提交/发布”的条目均是历史阶段。
+
 ## 0.4.0 发布前检查与修复（2026-09-27）
 
 - 用户明确要求再次检查 bug/性能，完成后 commit 并 push。本次提交包含此前完整 0.4.0、网页走子动画、以下修复和记录；本机 Gradle JVM 配置继续保留不入库，不远程部署。
@@ -10,7 +18,7 @@
 - 补紧 WEB 的 JSON body 对象验证与发送失败返回值，Android WS 的 CODE 改为数值精确比较，避免小数错误码被截断为 0。
 - 最终本地 Maven verify：57 项通过，0 失败/错误/跳过；Android assembleDebug lintDebug 通过，0 errors、9 warnings。scripts/web-review-smoke.cjs 定向检查消息格式、失败发送、移动帧、吃子、重复快照、减少动态效果、无变化确认不写棋盘、最终吃子与结算清理，全部通过。未重复真机/公网/容量检查。
 - 最新交付 APK 已替换为修复后的 0.4.0，1622147 字节；SHA-256：132804776234C9F57CB4B7222C338BCE3273ED7568230D020F8AFD4EBAEFB24E。此前同路径文件的大小/hash 属于历史构建。
-- 代码待本次提交推送，Actions 结果随后记录。先前被拦截的本地 80 端口服务未重启；它仍运行旧资源，不能用它判断最新修复是否生效。
+- 检查完成后已提交推送，Actions 结果见上方发布节。先前被拦截的本地 80 端口服务未重启；它仍运行旧资源，不能用它判断最新修复是否生效。
 
 ## 网页走子过渡补充（2026-09-27）
 

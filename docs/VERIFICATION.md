@@ -12,7 +12,7 @@
 - 上述脚本需要 Node 和可用 Playwright 浏览器，在根目录执行，使用本地源码路由和隔离状态，不连接或影响已有玩家。没有重复整套手工联机、真机或容量检查。
 - 最新 APK 仍为 android_client/build/deliverables/chinese-chess-flipping-0.4.0-debug.apk，1622147 字节，SHA-256：132804776234C9F57CB4B7222C338BCE3273ED7568230D020F8AFD4EBAEFB24E。以下旧大小/hash 为先前构建。
 
-本次 Actions 结果发布后归档到 PROJECT_STATUS.md / DEPLOYMENT.md。本地 80 端口尚未更新，公网证书、真机与容器实际运行仍是未验证项。
+[Actions 36318713210](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36318713210) 已通过 test / publish，镜像对应源码 61a32a5。已确认 amd64 / arm64 清单，摘要见 DEPLOYMENT.md。本地 80 端口尚未更新，公网证书、真机与容器实际运行仍是未验证项。Gradle 启动脚本执行位已恢复为 100755；该文件内容没有变化。
 
 ## 0.4.0 跨端检查
 

@@ -4,11 +4,15 @@
 
 ## 发布状态
 
-0.4.0 已完成本地检查，用户已授权本次提交和推送。Actions 发布结果将在完成后归档；在确认发布成功前，**不要把现有 latest 当成已包含网页版的新镜像。**
+**0.4.0 已发布成功，latest 已包含网页版与 WebSocket。**
 
-最近一次已归档的业务镜像是 0.3.0：源码 b47535fe2a0e6f24e81b9c372342cbdab979a86a；[Actions 36313268361](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36313268361) test/publish 成功；标签 latest、sha-b47535f，当时共同摘要为 `sha256:32378fc8281a443e023bc0deb723c52bafb8b1f0d0d8a7f4a1d0f39f7def967e`，包含 linux/amd64 和 linux/arm64。该旧版只有 TCP。
+- 源码：61a32a5e98a87a94f5ea1098172f355cdae29464。
+- [Actions 36318713210](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36318713210)：test / publish 均成功，2026-09-27 20:26:12（北京时间）完成发布。
+- 镜像标签：`ghcr.io/linhuig/chinese-chess-flipping:latest`、`:sha-61a32a5`。
+- 两个标签共同摘要：`sha256:9b35c381efce43638194e65786ef46271ebcd74ae4b711e514bf059910cca574`；已匿名核实包含 linux/amd64、linux/arm64。
+- 可用旧版回滚标签：`:sha-b47535f`（0.3.0，只有 TCP）。
 
-下面配置用于新版本发布后，或自行从当前源码构建。自动发布只针对 main 整次推送前后 server/ 的变化；客户端、文档和工作流单独变化仅测试。PR 只测试，单独推送标签不自动发布；手动 Run workflow 可以重建，仍须测试通过。
+已有部署需按下面配置补上 HTTP 端口映射再更新；仅拉镜像不会自动修改旧 compose 文件。未操作用户服务器。自动发布只针对 main 整次推送前后 server/ 的变化；客户端、文档和工作流单独变化仅测试。PR 只测试，单独推送标签不自动发布；手动 Run workflow 可以重建，仍须测试通过。
 
 ## 使用仓库配置
 
