@@ -3,9 +3,11 @@ services:
     image: ${SERVER_IMAGE:-chess-server:local}
     build: .
     ports:
-      - "${TCP_PORT:-9000}:${TCP_PORT:-9000}/tcp"
+      - "${TCP_PORT:-8888}:${TCP_PORT:-8888}/tcp"
+      - "${HTTP_BIND_ADDRESS:-127.0.0.1}:${HTTP_PUBLISH_PORT:-80}:${HTTP_PORT:-80}/tcp"
     environment:
-      TCP_PORT: ${TCP_PORT:-9000}
+      TCP_PORT: ${TCP_PORT:-8888}
+      HTTP_PORT: ${HTTP_PORT:-80}
       TCP_WORKER_THREADS: ${TCP_WORKER_THREADS:-4}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Xms16m -Xmx128m -XX:+UseSerialGC -XX:MaxDirectMemorySize=16m -Xss512k}
     restart: unless-stopped
@@ -14,3 +16,5 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"

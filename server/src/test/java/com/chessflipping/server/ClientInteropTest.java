@@ -12,6 +12,8 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import org.json.JSONObject;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.io.TempDir;
 import javax.tools.ToolProvider;
 import java.lang.reflect.Proxy;
@@ -33,11 +35,11 @@ class ClientInteropTest {
 
     @BeforeAll static void compileActualAndroidTransport() throws Exception {
         Path serverRoot = Path.of(System.getProperty("basedir", ".")).toAbsolutePath();
-        Path clientRoot = serverRoot.resolve("../client/app/src/main/java").normalize();
+        Path clientRoot = serverRoot.resolve("../android_client/app/src/main/java").normalize();
         Assumptions.assumeTrue(Files.isDirectory(clientRoot), "Server-only Docker context: Android sources absent");
         URL jsonJar = JSONObject.class.getProtectionDomain().getCodeSource().getLocation();
         List<String> arguments = new ArrayList<>(List.of("--release", "17", "-encoding", "UTF-8",
-                "-classpath", Path.of(jsonJar.toURI()).toString(), "-d", compiled.toString()));
+                "-classpath", System.getProperty("java.class.path"), "-d", compiled.toString()));
         for (String name : List.of("WireProtocol.java", "KeyExchange.java", "SecureSession.java")) {
             Path relative = Path.of("com/chessflipping/protocol", name);
             assertEquals(Files.readString(serverRoot.resolve("src/main/java").resolve(relative)),
@@ -45,11 +47,15 @@ class ClientInteropTest {
             arguments.add(clientRoot.resolve(relative).toString());
         }
         arguments.add(clientRoot.resolve("com/chessflipping/client/TcpClient.java").toString());
+        arguments.add(clientRoot.resolve("com/chessflipping/client/GameConnection.java").toString());
+        arguments.add(clientRoot.resolve("com/chessflipping/client/WsClient.java").toString());
         arguments.add(clientRoot.resolve("com/chessflipping/game/GameEngine.java").toString());
         arguments.add(clientRoot.resolve("com/chessflipping/game/HostController.java").toString());
         assertNotNull(ToolProvider.getSystemJavaCompiler(), "Tests require a JDK");
         assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null, arguments.toArray(String[]::new)));
-        loader = new URLClassLoader(new URL[]{compiled.toUri().toURL(), jsonJar}, ClassLoader.getPlatformClassLoader());
+        List<URL> classpath = new ArrayList<>(); classpath.add(compiled.toUri().toURL());
+        for (String entry : System.getProperty("java.class.path").split(java.io.File.pathSeparator)) classpath.add(Path.of(entry).toUri().toURL());
+        loader = new URLClassLoader(classpath.toArray(URL[]::new), ClassLoader.getPlatformClassLoader());
         clientType = loader.loadClass("com.chessflipping.client.TcpClient");
         listenerType = loader.loadClass("com.chessflipping.client.TcpClient$Listener");
     }
@@ -58,6 +64,7 @@ class ClientInteropTest {
 
     private static final class Client implements AutoCloseable {
         final Object instance;
+        final Class<?> transportType;
         final LinkedBlockingQueue<String> messages = new LinkedBlockingQueue<>();
         final CountDownLatch connected = new CountDownLatch(1), closed = new CountDownLatch(1);
         final AtomicInteger connections = new AtomicInteger();
@@ -72,6 +79,10 @@ class ClientInteropTest {
             this(port, UUID.randomUUID().toString().replace("-", ""));
         }
         Client(int port, String did) throws Exception {
+            this(port, did, false);
+        }
+        Client(int port, String did, boolean websocket) throws Exception {
+            transportType = websocket ? loader.loadClass("com.chessflipping.client.WsClient") : clientType;
             Class<?> refereeType = loader.loadClass("com.chessflipping.game.HostController");
             referee = refereeType.getConstructor(java.util.function.Consumer.class, java.util.function.LongSupplier.class)
                     .newInstance((java.util.function.Consumer<Object>)this::requestObject, (java.util.function.LongSupplier)now::get);
@@ -90,14 +101,16 @@ class ClientInteropTest {
                 }
                 return null;
             });
-            instance = clientType.getConstructor(String.class, String.class, String.class, listenerType)
-                    .newInstance(did, "test.android", "0.2.0", listener);
-            clientType.getMethod("connect", String.class, int.class).invoke(instance, "127.0.0.1", port);
+            instance = websocket ? transportType.getConstructor(String.class, String.class, String.class, boolean.class, listenerType)
+                    .newInstance(did, "test.android", "0.4.0", false, listener)
+                    : transportType.getConstructor(String.class, String.class, String.class, listenerType)
+                    .newInstance(did, "test.android", "0.4.0", listener);
+            transportType.getMethod("connect", String.class, int.class).invoke(instance, "127.0.0.1", port);
         }
         void connected() throws Exception { assertTrue(connected.await(5, TimeUnit.SECONDS), "Connection failed: " + reason); }
         void echo(String message) throws Exception { clientType.getMethod("echo", String.class).invoke(instance, message); }
         void requestObject(Object value) {
-            try { clientType.getMethod("request", loader.loadClass("org.json.JSONObject")).invoke(instance, value); }
+            try { transportType.getMethod("request", loader.loadClass("org.json.JSONObject")).invoke(instance, value); }
             catch (Exception ex) { throw new RuntimeException(ex); }
         }
         void request(JSONObject value) throws Exception {
@@ -138,14 +151,14 @@ class ClientInteropTest {
             assertNotNull(message, "No message received; close reason: " + reason);
             return message;
         }
-        @Override public void close() throws Exception { clientType.getMethod("close").invoke(instance); refereeQueue.shutdown(); }
+        @Override public void close() throws Exception { transportType.getMethod("close").invoke(instance); refereeQueue.shutdown(); }
     }
 
     private static final class Server implements AutoCloseable {
         final EventLoopGroup boss = new NioEventLoopGroup(1), workers = new NioEventLoopGroup(2);
         final DefaultChannelGroup channels = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
         final Queue<WireProtocol.Frame> received = new ConcurrentLinkedQueue<>();
-        final int port;
+        final int port, httpPort;
         Server(boolean tamper, boolean stall) throws Exception {
             var key = KeyExchange.generateKeyPair();
             RoomHub rooms = new RoomHub();
@@ -184,6 +197,14 @@ class ClientInteropTest {
                     }).bind("127.0.0.1", 0).sync().channel();
             channels.add(listener);
             port = ((InetSocketAddress)listener.localAddress()).getPort();
+            HttpAssets assets = new HttpAssets();
+            Channel webListener = new ServerBootstrap().group(boss, workers).channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override protected void initChannel(SocketChannel channel) {
+                            channels.add(channel); TcpServer.configureHttpPipeline(channel.pipeline(), rooms, assets);
+                        }
+                    }).bind("127.0.0.1", 0).sync().channel();
+            channels.add(webListener); httpPort = ((InetSocketAddress)webListener.localAddress()).getPort();
         }
         @Override public void close() {
             channels.close().awaitUninterruptibly();
@@ -240,9 +261,12 @@ class ClientInteropTest {
         }
     }
 
-    @Test @Timeout(30) void completeRoomGameClockReplacementAndHostMigrationUseActualClientReferee() throws Exception {
+    @ParameterizedTest @ValueSource(booleans = {false, true}) @Timeout(30)
+    void completeRoomGameClockReplacementAndHostMigrationUseActualClientReferee(boolean webHost) throws Exception {
         String did = UUID.randomUUID().toString().replace("-", "");
-        try (Server server = new Server(false, false); Client host = new Client(server.port, did); Client guest = new Client(server.port)) {
+        try (Server server = new Server(false, false);
+             Client host = new Client(webHost ? server.httpPort : server.port, did, webHost);
+             Client guest = new Client(webHost ? server.port : server.httpPort, UUID.randomUUID().toString().replace("-", ""), !webHost)) {
             host.connected(); guest.connected();
             host.waitEvent("SESSION", e -> true); guest.waitEvent("SESSION", e -> true);
             host.request(new JSONObject().put("type", "CREATE").put("name", "联机验收"));

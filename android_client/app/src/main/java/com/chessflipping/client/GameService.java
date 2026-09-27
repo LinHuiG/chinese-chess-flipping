@@ -10,7 +10,7 @@ import java.util.*;
 /** Owns the connection and host referee independently of Activity/lock-screen lifetime. */
 public final class GameService extends Service {
     public static final String DEFAULT_HOST = "hgame.tudoucoding.tech";
-    public static final int DEFAULT_PORT = 8888;
+    public static final int DEFAULT_PORT = 80;
     public interface Observer { void changed(); void notice(String text); }
     public final class LocalBinder extends Binder { public GameService service() { return GameService.this; } }
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -31,7 +31,7 @@ public final class GameService extends Service {
     private Outcome outcome;
     private String resultGameId = "";
     private Observer observer;
-    private TcpClient client;
+    private GameConnection client;
     private boolean foreground, enabled;
     private int generation;
     private final HostController referee = new HostController(this::send, SystemClock::elapsedRealtime);
@@ -77,6 +77,8 @@ public final class GameService extends Service {
     }
     public String host() { return preferences().getString("host", DEFAULT_HOST); }
     public int port() { return preferences().getInt("port", DEFAULT_PORT); }
+    public String transport() { return preferences().getString("transport", preferences().contains("port") ? "TCP" : "HTTP"); }
+    public String endpoint() { return transport().toLowerCase(java.util.Locale.ROOT) + "://" + host() + ":" + port(); }
     public void observe(Observer value) { observer = value; if (value != null) value.changed(); }
     public void foreground(boolean value) {
         foreground = value;
@@ -92,9 +94,9 @@ public final class GameService extends Service {
             did = getSharedPreferences("MainActivity", MODE_PRIVATE).getString("device_id", UUID.randomUUID().toString().replace("-", ""));
             preferences().edit().putString("did", did).apply();
         }
-        status = "正在连接 " + host() + ":" + port();
+        status = "正在连接 " + endpoint();
         changed();
-        client = new TcpClient(did, getPackageName(), "0.3.0", new TcpClient.Listener() {
+        TcpClient.Listener listener = new TcpClient.Listener() {
             private void dispatch(Runnable action) { handler.post(() -> { if (generation == current) action.run(); }); }
             public void onStatus(String text) { dispatch(() -> { status = text; changed(); }); }
             public void onConnected() { dispatch(() -> {
@@ -112,7 +114,9 @@ public final class GameService extends Service {
                 changed();
                 if (foreground && enabled) handler.postDelayed(retry, 3000);
             }); }
-        });
+        };
+        client = transport().equals("TCP") ? new TcpClient(did, getPackageName(), "0.4.0", listener)
+                : new WsClient(did, getPackageName(), "0.4.0", transport().equals("HTTPS"), listener);
         client.connect(host(), port());
     }
     public void disconnect() {
@@ -126,8 +130,11 @@ public final class GameService extends Service {
         stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); changed();
     }
     public void saveServer(String host, int port) {
+        saveServer(host, port, "TCP");
+    }
+    public void saveServer(String host, int port, String transport) {
         disconnect();
-        preferences().edit().putString("host", host).putInt("port", port).apply();
+        preferences().edit().putString("host", host).putInt("port", port).putString("transport", transport).apply();
     }
     private void clearRoom() {
         room = state = null; lastResult = ""; referee.clear(); handler.removeCallbacks(tick);

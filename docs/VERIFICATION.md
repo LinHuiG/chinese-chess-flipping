@@ -2,6 +2,42 @@
 
 日期：2026-09-27。功能完成后集中检查；发布结果以 PROJECT_STATUS.md 的最新阶段和 GitHub Actions 为准。
 
+## 0.4.0 最终提交前复核
+
+用户要求检查后提交推送。修复最终吃子被等待页截断、网页重复棋盘更新和 WS 消息校验问题；减少心跳临时数组、服务端正则编译和 WS 输出重复编码。只对源码中可确认的路径作优化，没有新的性能压测，也没有量化节省承诺。
+
+- 最终 Maven verify：57 项通过，0 失败/错误/跳过，JAR 打包成功，包含双向 TCP / 实际 Android WS 混合联调。
+- Android assembleDebug lintDebug：成功，0 errors、9 warnings。
+- scripts/web-review-smoke.cjs：实际传输模块的非法 body 拒绝、合法握手与发送失败返回值；Edge/Chromium 隔离呈现的起点/中间/终点、吃子淡出、重复状态、动画开关、减少动态效果、结束清理；确认消息引起的棋盘 DOM 变更为 0；最终吃子在 GAME_OVER / ROOM / 等待 STATE 后仍播放，结算后回等待并清理动画。全部通过，无页面错误。
+- 上述脚本需要 Node 和可用 Playwright 浏览器，在根目录执行，使用本地源码路由和隔离状态，不连接或影响已有玩家。没有重复整套手工联机、真机或容量检查。
+- 最新 APK 仍为 android_client/build/deliverables/chinese-chess-flipping-0.4.0-debug.apk，1622147 字节，SHA-256：132804776234C9F57CB4B7222C338BCE3273ED7568230D020F8AFD4EBAEFB24E。以下旧大小/hash 为先前构建。
+
+本次 Actions 结果发布后归档到 PROJECT_STATUS.md / DEPLOYMENT.md。本地 80 端口尚未更新，公网证书、真机与容器实际运行仍是未验证项。
+
+## 0.4.0 跨端检查
+
+后续走子过渡补充：原网页版只有落点缩放，现改为 220 ms 实际位移、280 ms 吃子位移与被吃棋子淡出。使用 Edge/Chromium 的隔离呈现夹具检查起点/中间帧/终点位置、结束清理、重复快照不重播、动画关闭与系统减少动态效果，全部通过；不是新的完整联机/规则回归。JS 语法检查与 `mvn -DskipTests package` 成功。本地服务更新被自动审批拦截，当前 80 端口仍为旧资源，待用户确认重启；尚未发布。
+
+- 服务端 Maven verify 集中检查 56 项全部通过（49 项原有检查、3 组 CHL 握手和 4 项 HTTP/WS 检查），没有失败或跳过。HTTP/WS 覆盖静态资源与私有路径、三种 CHL、分片 HELLO、两端房间转发、PING、非法渠道、同 DID 替换和异源拒绝。
+- 随后扩展 ClientInteropTest，将实际 Android WsClient 与 TcpClient 编译到独立类加载器，以 TCP 房主 / WS 客人和 WS 房主 / TCP 客人两种参数执行，定向 2 组通过，覆盖开局、翻棋、时钟、会话替换、房主迁移及清理。没有再重复全量执行，不能将两次计数简单相加成独立测试总数。
+- 最终 `mvn -DskipTests package` 成功，打包网页 10 个资源；三个 JavaScript 模块语法检查通过。服务端 0.4.0 的实际 JAR 同时监听 8888 和 80。
+- Android `assembleDebug lintDebug` 最终成功，0 errors、9 warnings。期间 lint 曾发现新设置页使用硬编码 ID，已改为系统生成 ID 后复查通过；剩余为工具版本、属性、图标、构造器和文字国际化等提示，不等于全系统兼容验收。
+- Playwright/Chromium 双浏览器：创建/加入、计时同步、准备开局、四步轮流翻棋、棋面一致、设置、完整规则、退出判负及解散通过，无页面或控制台错误。手机横竖屏没有横向溢出，布局修正后重查并保存最终截图。
+- API 37 模拟器实际安装新版 App，HTTP 连接本机 80 成功；Android 房主与浏览器客人真实联机，通过准备、开局、双方各翻一子、红黑分配、客人退出后 Android 获胜和解散。实际 TCP 与 HTTP 都已连接；HTTPS 分段选择及自动填入 443 已检查，尚未做公网 WSS 连接。
+- 以上保留可复现辅助脚本 scripts/web-smoke.cjs、scripts/android-web-smoke.cjs。前者需要 Node、Playwright 和已启动本地服务；后者另需 Windows adb、pwsh，以及已用 HTTP 创建“Android-smoke”无限时等待房间的模拟器。脚本不属于用户端运行依赖。
+
+### 交付与截图
+
+0.4.0 / versionCode 4 调试 APK：android_client/build/deliverables/chinese-chess-flipping-0.4.0-debug.apk，1622112 字节，apksigner v2 验证通过。SHA-256：12229F57171433F4745B12733D30C646F7E5D5CF9AAAE8DA401F39F64C63ACD6。APK、缓存、本机配置不入库，新增 OkHttp/Okio/Kotlin 的许可随包保留。
+
+- [网页桌面大厅](screenshots/v0.4/desktop-lobby.png)、[桌面棋盘](screenshots/v0.4/desktop-game.png)
+- [手机竖屏](screenshots/v0.4/mobile-game.png)、[手机横屏](screenshots/v0.4/mobile-landscape.png)
+- [Android 与网页实际联机](screenshots/v0.4/android-with-web.png)、[Android 协议设置](screenshots/v0.4/android-settings.png)
+
+设置截图显示待保存的 HTTPS 选择，顶部仍是当时的 HTTP 已连接状态，不能作为 HTTPS 握手证据。模拟器已恢复原 TCP 192.168.0.108:8888 设置。
+
+公网证书/WSS、iOS Safari 真机、多厂商 Android、长时间后台/弱网和新 Docker 低端口配置未验证；本机未进行新的容量压测。网页房主可能被浏览器后台冻结，断线仍判负，不支持无损恢复。当前未提交或推送本阶段代码，现有 latest 镜像不能代表本地 0.4.0。
+
 ## 0.3.0 本地检查
 
 本轮先完成 UI、图标、反馈和有明确复现条件的问题修复，再集中检查。该次本地验收时尚未发布；后续 b47535f 已推送，Actions 36313268361 的 test/publish 均成功，最新发布信息见 [部署记录](DEPLOYMENT.md)。

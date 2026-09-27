@@ -77,7 +77,7 @@ public final class ProtocolHandler extends SimpleChannelInboundHandler<WireProto
             case EXPECT_FINISHED -> {
                 require(packet.type == CLIENT_FINISHED && handshakeTid.equals(tid)
                         && MessageDigest.isEqual(transcript, packet.body));
-                require("ANDROID".equals(control.path("CHL").asText())
+                require(java.util.Set.of("ANDROID", "IOS", "WEB").contains(control.path("CHL").asText())
                         && control.path("DID").asText().matches("[0-9a-f]{32}"));
                 requiredText(control, "APP", 256);
                 requiredText(control, "VER", 64);

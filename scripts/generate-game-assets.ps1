@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$res = Join-Path $root 'client/app/src/main/res'
+$res = Join-Path $root 'android_client/app/src/main/res'
 $raw = Join-Path $res 'raw'
 New-Item -ItemType Directory -Path $raw -Force | Out-Null
 

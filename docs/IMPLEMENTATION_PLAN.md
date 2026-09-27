@@ -1,5 +1,13 @@
 # 房间与完整棋局实施记录
 
+## 0.4.0 跨端扩展（2026-09-27）
+
+- 保留 Java 21 / Spring / Netty 与 TCP 8888，增加共用事件循环和 RoomHub 的 HTTP 80、JSON WebSocket /ws；CHL 接受 ANDROID、IOS、WEB。
+- 网页静态文件随服务端 JAR / Docker 镜像交付，使用原生 JavaScript、CSS 和安卓相同规则，不引入单独前端构建服务。
+- client/ 源码迁至 android_client/；新增 OkHttp WS/WSS，实现 HTTP/HTTPS 与原 TCP 切换，保留旧版服务器偏好。
+- 网页和安卓采用浅色分组、圆角与蓝色主操作；网页适配桌面侧栏、手机横竖屏，安卓保留原生棋盘。
+- 本阶段功能和联调已完成，具体检查与边界见 VERIFICATION.md；发布状态见 DEPLOYMENT.md。下文保留 0.2.0 最初实施记录，旧路径和端口默认值不代表当前版本。
+
 开始日期：2026-09-27。用户已授权完成开发、测试后提交并推送 GitHub，使用 Actions 构建和发布镜像。
 
 ## 本轮范围

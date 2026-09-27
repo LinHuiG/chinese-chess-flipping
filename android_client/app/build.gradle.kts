@@ -7,8 +7,8 @@ android {
         applicationId = "com.chessflipping.client"
         minSdk = 26
         targetSdk = 37
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
         testInstrumentationRunner = "com.chessflipping.client.PresentationChecks"
     }
     compileOptions {
@@ -16,3 +16,5 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
+
+dependencies { implementation("com.squareup.okhttp3:okhttp:4.12.0") }

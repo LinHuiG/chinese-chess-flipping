@@ -51,7 +51,7 @@ TOTAL = 21 + 12 + X + Y + 16
 | TID | 必填，32 位小写十六进制字符串；响应原样返回。同一握手的所有报文复用一个 TID；每个后续请求生成新 TID |
 | CODE | 服务端响应必填整数；0 成功，400 请求错误，413 响应过大 |
 | MSG | 错误描述，如 INVALID_JSON；成功时省略 |
-| CHL | 客户端加密确认时必填，目前为 ANDROID |
+| CHL | 客户端加密确认时必填，允许 ANDROID、IOS、WEB |
 | DID | 客户端加密确认时必填，32 位小写十六进制安装标识 |
 | APP | 客户端加密确认时必填，非空包名，最多 256 字符 |
 | VER | 客户端加密确认时必填，非空版本名，最多 64 字符 |
@@ -179,9 +179,31 @@ Nonce = 方向对应的4字节前缀 || 8字节大端序号
 两端保持独立工程，Docker 构建上下文仅为 server/。三个平台无关协议类在两端各保留一份，完整仓库中的 ClientInteropTest 会检查源码完全一致，并在独立类加载器中编译/运行实际 Android TcpClient，与真实 Netty TCP 端口联调。
 
 - 服务端：server/src/main/java/com/chessflipping/server/。
-- 协议实现：server/src/main/java/com/chessflipping/protocol/ 和 client/app/src/main/java/com/chessflipping/protocol/。
-- Android 网络层：client/app/src/main/java/com/chessflipping/client/TcpClient.java。
+- 协议实现：server/src/main/java/com/chessflipping/protocol/ 和 android_client/app/src/main/java/com/chessflipping/protocol/。
+- Android 网络层：android_client/app/src/main/java/com/chessflipping/android_client/TcpClient.java。
 - 完整仓库验证：mvn -f server/pom.xml verify，包含协议测试、HKDF 官方向量和 Android 网络代码 JVM 联调。
-- 独立 server/ 或 Docker 上下文没有 client/ 时，跳过 ClientInteropTest，其他协议测试继续运行；GitHub Actions 在完整仓库执行互通测试。
-- Android 构建与静态检查：在 client/ 执行 gradlew.bat assembleDebug lintDebug。
+- 独立 server/ 或 Docker 上下文没有 android_client/ 时，跳过 ClientInteropTest，其他协议测试继续运行；GitHub Actions 在完整仓库执行互通测试。
+- Android 构建与静态检查：在 android_client/ 执行 gradlew.bat assembleDebug lintDebug。
 - JVM 联调不等同于 Android 系统加密提供者、模拟器、手机安装和厂商真机验证。
+
+## 7. HTTP / WebSocket 入口（0.4.0）
+
+TCP_PORT 默认 8888，HTTP_PORT 默认 80。HTTP GET / 提供网页版，GET /ws 通过 RFC 6455 升级为 WebSocket。浏览器自动随页面协议选择 WS/WSS；安卓设置 HTTP/HTTPS 时对应 WS/WSS。HTTPS 在用户反向代理终止，服务端不加载证书。
+
+WS 是独立文本 JSON 传输，不套用 TCP 的二进制头、CRC、ECDH 或 AES-GCM；WSS 依赖 TLS 加密，普通 WS 没有传输加密。业务房间规则及 state 字段保持第 5 节不变，共用同一个 RoomHub。
+
+首条消息（连接建立后 10 秒内）：
+
+```json
+{"type":"HELLO","TID":"32位小写十六进制","CHL":"WEB","DID":"32位小写十六进制","APP":"chess-flipping.web","VER":"0.4.0"}
+```
+
+CHL 仅接受 ANDROID、IOS、WEB。APP/VER 长度约束沿用 TCP。服务端先返回 READY，再发送 SESSION 事件。每个浏览器页面使用独立随机 DID，在该页面的重连期间保持不变，避免多个标签页互相踢出；刷新页面会重新建会话，不恢复棋局。安卓沿用本地 DID，切换传输后仍遵守旧连接替换。
+
+请求：`{"type":"REQUEST","TID":"...","body":{"type":"LIST"}}`。心跳：`{"type":"PING","TID":"..."}`。
+
+响应统一为 `{"type":"READY|RESPONSE|EVENT|PONG","TID":"...","CODE":0,"body":{...}}`；RESPONSE/PONG 复用请求 TID，EVENT 使用新 TID。业务失败仍由 body 中 RESULT/ok/error 表达，格式错误关闭连接。
+
+最大完整 WS 文本消息 69632 字节，业务 body 最大 65536 字节，房间快照仍小于 48000 字节。支持分片聚合，拒绝二进制业务帧。每 5 秒有效应用层 PING，30 秒未收到则关闭；WebSocket 控制帧 Ping 不代替业务心跳。连接登记、退出判负、同 DID 替换及迟到事件清理共用原逻辑。浏览器不保证后台持续执行，前台断线后每次失败结束等待 3 秒重连。
+
+浏览器 Origin 必须与 Host 匹配，原生客户端可以不带 Origin。代理须保留外部 Host（包括非标准端口）。Origin 不构成账号认证。

@@ -5,5 +5,7 @@ spring:
     web-application-type: none
 chess:
   tcp:
-    port: ${TCP_PORT:9000}
+    port: ${TCP_PORT:8888}
     worker-threads: ${TCP_WORKER_THREADS:4}
+  http:
+    port: ${HTTP_PORT:80}

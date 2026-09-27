@@ -143,7 +143,7 @@ public final class MainActivity extends Activity implements GameService.Observer
     }
     @Override public void changed() {
         if (service == null || !visible) return;
-        setText(connection, service.status + "  ·  " + service.host() + ":" + service.port());
+        setText(connection, service.status + "  ·  " + service.endpoint());
         connection.setTextColor(service.connected ? Color.rgb(36, 129, 70) : MUTED);
         GameService.Outcome outcome = service.takeOutcome();
         if (outcome != null) {
@@ -332,13 +332,46 @@ public final class MainActivity extends Activity implements GameService.Observer
         addText(inner, "游戏反馈", 14);
         toggle(inner, "音效", "sound"); toggle(inner, "动画", "motion");
         addText(inner, "服务器", 14);
+        Switch tcp = new Switch(this); tcp.setText("使用 TCP 连接"); tcp.setTextSize(17); tcp.setTextColor(INK);
+        tcp.setPadding(dp(14), dp(12), dp(14), dp(12)); tcp.setBackground(surface(Color.WHITE, 12));
+        tcp.setChecked(service != null && service.transport().equals("TCP"));
+        tcp.setThumbTintList(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_checked}, new int[0]}, new int[]{Color.WHITE, Color.WHITE}));
+        tcp.setTrackTintList(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_checked}, new int[0]}, new int[]{Color.rgb(52, 199, 89), LINE}));
+        inner.addView(tcp, new LinearLayout.LayoutParams(-1, dp(58)));
+        RadioGroup protocol = new RadioGroup(this); protocol.setOrientation(LinearLayout.HORIZONTAL);
+        final int httpId = View.generateViewId(), httpsId = View.generateViewId();
+        protocol.setPadding(dp(3), dp(3), dp(3), dp(3)); protocol.setBackground(surface(LINE, 10));
+        for (int i = 0; i < 2; i++) {
+            RadioButton option = new RadioButton(this); option.setId(i == 0 ? httpId : httpsId); option.setText(i == 0 ? "HTTP" : "HTTPS");
+            option.setButtonDrawable(null); option.setGravity(Gravity.CENTER); option.setTextSize(15); option.setTextColor(INK);
+            android.graphics.drawable.GradientDrawable bg = surface(Color.TRANSPARENT, 8);
+            bg.setColor(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_checked}, new int[0]}, new int[]{Color.WHITE, Color.TRANSPARENT}));
+            option.setBackground(bg); protocol.addView(option, new RadioGroup.LayoutParams(0, dp(40), 1));
+        }
+        protocol.check(service != null && service.transport().equals("HTTPS") ? httpsId : httpId);
+        LinearLayout.LayoutParams protocolLayout = new LinearLayout.LayoutParams(-1, -2); protocolLayout.topMargin = dp(10);
+        inner.addView(protocol, protocolLayout); protocol.setVisibility(tcp.isChecked() ? View.GONE : View.VISIBLE);
+        TextView transportNote = text("", 13); transportNote.setTextColor(MUTED); transportNote.setPadding(0, dp(8), 0, dp(10)); inner.addView(transportNote);
         addText(inner, "服务器地址", 15);
         EditText host = new EditText(this); host.setSingleLine(true);
         host.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         host.setText(service == null ? GameService.DEFAULT_HOST : service.host()); inputStyle(host); inner.addView(host);
-        addText(inner, "TCP 端口", 15);
+        addText(inner, "端口", 15);
         EditText port = new EditText(this); port.setSingleLine(true); port.setInputType(InputType.TYPE_CLASS_NUMBER);
         port.setText(Integer.toString(service == null ? GameService.DEFAULT_PORT : service.port())); inputStyle(port); inner.addView(port);
+        Runnable updateTransport = () -> {
+            protocol.setVisibility(tcp.isChecked() ? View.GONE : View.VISIBLE);
+            transportNote.setText(tcp.isChecked() ? "使用原有加密 TCP 通道，默认端口 8888。"
+                    : protocol.getCheckedRadioButtonId() == httpsId ? "通过 HTTPS 安全连接，默认端口 443。" : "通过 HTTP 连接，默认端口 80。");
+        };
+        Runnable updatePort = () -> {
+            String old = port.getText().toString();
+            if (old.equals("80") || old.equals("443") || old.equals("8888"))
+                port.setText(tcp.isChecked() ? "8888" : protocol.getCheckedRadioButtonId() == httpsId ? "443" : "80");
+            updateTransport.run();
+        };
+        tcp.setOnCheckedChangeListener((v, value) -> updatePort.run());
+        protocol.setOnCheckedChangeListener((v, id) -> updatePort.run()); updateTransport.run();
         button(inner, "保存并连接", () -> {
             if (service == null) return;
             String address = host.getText().toString().trim();
@@ -348,13 +381,14 @@ public final class MainActivity extends Activity implements GameService.Observer
             int number;
             try { number = Integer.parseInt(port.getText().toString()); if (number < 1 || number > 65535) throw new NumberFormatException(); }
             catch (NumberFormatException ex) { port.setError("端口范围为 1 至 65535"); return; }
-            Runnable save = () -> { service.saveServer(address, number); settings = false; changed(); connect(); };
+            String mode = tcp.isChecked() ? "TCP" : protocol.getCheckedRadioButtonId() == httpsId ? "HTTPS" : "HTTP";
+            Runnable save = () -> { service.saveServer(address, number, mode); settings = false; changed(); connect(); };
             if (service.room != null) new AlertDialog.Builder(this).setTitle("更换服务器？")
                     .setMessage(service.playing() ? "当前对局将按退出判负。" : "将退出当前房间并重新连接。")
                     .setNegativeButton("取消", null).setPositiveButton("保存并连接", (d, w) -> save.run()).show();
             else save.run();
         });
-        button(inner, "恢复默认值", () -> { host.setText(GameService.DEFAULT_HOST); port.setText(Integer.toString(GameService.DEFAULT_PORT)); });
+        button(inner, "恢复默认值", () -> { host.setText(GameService.DEFAULT_HOST); tcp.setChecked(false); protocol.check(httpId); port.setText(Integer.toString(GameService.DEFAULT_PORT)); });
         button(inner, "返回", () -> { settings = false; changed(); });
         button(inner, "开源许可", () -> {
             try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(getResources().openRawResource(R.raw.third_party_notices), java.nio.charset.StandardCharsets.UTF_8))) {
@@ -402,7 +436,7 @@ public final class MainActivity extends Activity implements GameService.Observer
         button.setTextColor(new android.content.res.ColorStateList(states, new int[]{Color.GRAY, primary ? Color.WHITE : ink}));
         android.graphics.drawable.GradientDrawable surface = new android.graphics.drawable.GradientDrawable();
         surface.setColor(new android.content.res.ColorStateList(states, new int[]{primary ? LINE : Color.TRANSPARENT, primary ? BLUE : Color.TRANSPARENT}));
-        surface.setCornerRadius(dp(8));
+        surface.setCornerRadius(dp(12));
         button.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.rgb(195, 216, 249)), surface, null));
         button.setPadding(dp(14), 0, dp(14), 0); button.setMinHeight(dp(46)); button.setMinimumHeight(dp(46));
         button.setOnClickListener(v -> action.run());
@@ -427,7 +461,7 @@ public final class MainActivity extends Activity implements GameService.Observer
     private android.graphics.drawable.GradientDrawable surface(int color, int radius) {
         android.graphics.drawable.GradientDrawable value = new android.graphics.drawable.GradientDrawable(); value.setColor(color); value.setCornerRadius(dp(radius)); return value;
     }
-    private void inputStyle(EditText input) { input.setTextSize(17); input.setPadding(dp(14), dp(10), dp(14), dp(10)); input.setBackground(surface(Color.WHITE, 6)); }
+    private void inputStyle(EditText input) { input.setTextSize(17); input.setPadding(dp(14), dp(12), dp(14), dp(12)); input.setBackground(surface(Color.WHITE, 12)); }
     private void mark(LinearLayout parent) {
         ImageView art = new ImageView(this); art.setImageResource(R.drawable.ic_launcher_foreground);
         LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(dp(132), dp(132)); layout.gravity = Gravity.CENTER; parent.addView(art, layout);

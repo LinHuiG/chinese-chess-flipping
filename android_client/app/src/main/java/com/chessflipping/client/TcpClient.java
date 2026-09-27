@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static com.chessflipping.protocol.WireProtocol.*;
 
 /** Pure Java transport. All socket I/O is off the UI thread; one client per connection. */
-public final class TcpClient implements AutoCloseable {
+public final class TcpClient implements GameConnection {
     public interface Listener {
         void onStatus(String status);
         void onConnected();

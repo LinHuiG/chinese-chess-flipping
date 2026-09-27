@@ -104,6 +104,16 @@ class ProtocolTest {
         }
     }
 
+    @ParameterizedTest @ValueSource(strings = {"ANDROID", "IOS", "WEB"})
+    void acceptsAllSupportedClientChannels(String platform) throws Exception {
+        try (Peer peer = new Peer(KeyExchange.generateKeyPair(), false, false)) {
+            byte[] metadata = bytes(new String(METADATA, StandardCharsets.UTF_8).replace("ANDROID", platform));
+            send(peer.channel, peer.client.encrypt(new WireProtocol.Packet(CLIENT_FINISHED, metadata, peer.transcript)));
+            assertEquals(READY, peer.response().type);
+            assertTrue(peer.channel.isActive());
+        }
+    }
+
     @Test void invalidBusinessJsonReturnsEncryptedErrorAndConnectionRemainsUsable() throws Exception {
         try (Peer peer = new Peer(KeyExchange.generateKeyPair(), true, false)) {
             for (String body : new String[]{"oops", "[]", "{} {}", "{\"type\":\"ECHO\",\"type\":\"ECHO\"}"}) {
