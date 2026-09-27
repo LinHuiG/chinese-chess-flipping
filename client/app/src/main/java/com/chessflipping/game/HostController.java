@@ -32,6 +32,7 @@ public final class HostController {
     public boolean needsTick() {
         return host() && room.optBoolean("playing") && game != null && game.seconds > 0 && !finishing;
     }
+    public long nextTickDelay() { return needsTick() ? Math.max(1, game.remaining(clock.getAsLong())) : -1; }
     public void tick() throws JSONException { if (needsTick() && game.checkTimeout(clock.getAsLong())) finish(); }
     public void failed(String command) { if ("START".equals(command)) { starting = false; game = null; } }
     private boolean host() { return room != null && self.equals(room.optString("hostId")); }

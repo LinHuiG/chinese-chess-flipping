@@ -178,6 +178,7 @@ public final class RoomHub {
                     require(!room.playing() && room.members.size() == 2, "开局条件已变化");
                     JsonNode state = request.path("state");
                     require(state.isObject() && state.path("seq").asLong(-1) == 0, "开局状态无效");
+                    checkStateSize(state);
                     invalidate(room);
                     room.gameId = UUID.randomUUID().toString();
                     room.version++;
@@ -206,13 +207,18 @@ public final class RoomHub {
     }
 
     private void publish(Room room, JsonNode state) {
-        require(state.isObject() && state.path("seq").isIntegralNumber()
-                && state.path("seq").asLong() == room.sequence + 1, "状态版本不一致，请刷新");
-        require(state.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 48000, "房间状态过大");
-        room.sequence++;
+        // Full snapshots may skip a sequence after an expired forwarded reply.
+        require(state.isObject() && state.path("seq").isIntegralNumber() && state.path("seq").canConvertToLong()
+                && state.path("seq").asLong() > room.sequence, "状态版本不一致，请刷新");
+        checkStateSize(state);
+        room.sequence = state.path("seq").asLong();
         ObjectNode event = envelope("STATE", room);
         event.set("state", state.deepCopy());
         broadcast(room, event);
+    }
+
+    private static void checkStateSize(JsonNode state) {
+        require(state.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 48000, "房间状态过大");
     }
 
     private Room checked(Session user, JsonNode request) {

@@ -7,6 +7,32 @@ import java.util.concurrent.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class RoomHubTest {
+    @Test void snapshotCanRecoverAfterExpiredReplyWithoutAcceptingReplay() throws Exception {
+        RoomHub hub = new RoomHub(); Peer peer = new Peer(); var host = hub.register("host", peer);
+        send(hub, host, request("CREATE").put("name", "恢复"));
+        ObjectNode action = context("ACTION", peer); action.set("action", request("SYNC")); send(hub, host, action);
+        String id = peer.last("FORWARD").path("requestId").asText();
+        var expire = RoomHub.class.getDeclaredMethod("expireRequest", String.class); expire.setAccessible(true); expire.invoke(hub, id);
+        ObjectNode late = context("HOST_REPLY", peer).put("requestId", id).put("ok", true);
+        late.set("state", request("SNAPSHOT").put("seq", 1)); send(hub, host, late);
+        assertFalse(peer.replies.getLast().path("ok").asBoolean());
+        ObjectNode refresh = context("HOST_STATE", peer); refresh.set("state", request("SNAPSHOT").put("seq", 2));
+        send(hub, host, refresh); assertTrue(peer.replies.getLast().path("ok").asBoolean());
+        assertEquals(2, peer.last("STATE").path("state").path("seq").asLong());
+        send(hub, host, refresh); assertFalse(peer.replies.getLast().path("ok").asBoolean());
+        hub.disconnect(host);
+    }
+    @Test void oversizedStartDoesNotChangeRoomOrBroadcastState() {
+        RoomHub hub = new RoomHub(); Peer hp = new Peer(), gp = new Peer();
+        var h = hub.register("h", hp); var g = hub.register("g", gp);
+        send(hub, h, request("CREATE").put("name", "大小限制"));
+        send(hub, g, request("JOIN").put("roomId", hp.last("ROOM").path("roomId").asLong()));
+        ObjectNode start = context("START", hp); start.set("state", request("SNAPSHOT").put("seq", 0).put("padding", "x".repeat(48000)));
+        send(hub, h, start); assertFalse(hp.replies.getLast().path("ok").asBoolean());
+        assertFalse(hp.last("ROOM").path("playing").asBoolean());
+        assertTrue(gp.events.stream().noneMatch(event -> "STATE".equals(event.path("type").asText())));
+        hub.disconnect(h); hub.disconnect(g);
+    }
     static class Peer implements RoomHub.Peer {
         final List<ObjectNode> events = new CopyOnWriteArrayList<>(), replies = new CopyOnWriteArrayList<>();
         boolean closed;

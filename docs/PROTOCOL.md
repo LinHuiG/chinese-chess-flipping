@@ -168,7 +168,7 @@ Nonce = 方向对应的4字节前缀 || 8字节大端序号
 
 公开 state 包含 seq、seconds、ready；棋局中另含 board（32 个整数）、colors（按成员顺序的两种颜色）、turn、remaining（毫秒，-1 为无限）、move、captured、lastFrom、lastTo、winner（-1 为未结束）。正数为红棋、负数为黑棋，绝对值 1～7 对应将士象车马炮兵，0 为空格，99 为暗棋。暗棋真实身份不发送给其他成员；captured 按真实颜色和种类记录，包括误吃己方暗棋。
 
-每个房间版本的 seq 从 0 开始，HOST_STATE/HOST_REPLY 必须逐次加 1；服务端只保留序号，不保留棋盘或准备详情。状态体上限 48 KiB。ACTION 的 action.type 包含 READY（ready 布尔值）、TIME（seconds=0/30/60/90）、SYNC 和 MOVE（from、to、move）。from=-1 表示翻棋，move 是行动版本，过期走棋不重复执行。SYNC 不重置计时；改变时间取消准备。
+每个房间版本的 seq 从 0 开始，房主每次生成快照加 1；服务端接受严格大于已接受序号的完整快照，拒绝重复或倒退。允许跳号是为了在转发请求过期、迟到回复被拒绝后，由后续 SYNC 快照恢复，不改变房间版本或 gameId 校验。此规则仅适用于业务快照 seq；加密 Nonce 仍必须严格连续。服务端只保留序号，不保留棋盘或准备详情；开局和后续状态体都必须小于 48000 字节（UTF-8 JSON）。ACTION 的 action.type 包含 READY（ready 布尔值）、TIME（seconds=0/30/60/90）、SYNC 和 MOVE（from、to、move）。from=-1 表示翻棋，move 是行动版本，过期走棋不重复执行。SYNC 不重置计时；改变时间取消准备。
 
 房主以单调时钟统一裁决操作和超时，收到开局 ROOM 后启动计时；动作以房主处理时刻判定是否超时。客户端使用快照剩余时间及本地单调时钟显示倒计时，不每秒广播；显示值受传输延迟影响，最终以房主为准。正常结束原因 TIMEOUT、NO_PIECES、NO_MOVES；服务端强制结束原因 LEFT、DISCONNECTED、HOST_DISSOLVED。
 

@@ -13,21 +13,35 @@ import org.json.*;
 import java.util.ArrayList;
 
 public final class MainActivity extends Activity implements GameService.Observer {
-    private static final int INK = Color.rgb(29, 40, 41), GREEN = Color.rgb(20, 112, 90);
+    private static final int INK = Color.rgb(28, 28, 30), BLUE = Color.rgb(0, 112, 235), MUTED = Color.rgb(110, 110, 119);
+    private static final int BACKGROUND = Color.rgb(242, 242, 247), LINE = Color.rgb(225, 226, 232);
+    private static final android.graphics.Typeface MEDIUM = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL);
     private final Handler handler = new Handler(Looper.getMainLooper());
     private GameService service;
     private LinearLayout root, content;
-    private TextView connection, clock;
+    private TextView connection, clock, turnLabel, colorLabel, resultLabel, lobbyCount, lobbyEmpty;
+    private final TextView[] memberLabels = new TextView[2], memberStatus = new TextView[2];
+    private LinearLayout lobbyList;
+    private Button readyButton;
+    private RadioGroup timeChoices;
+    private boolean updatingChoices;
+    private long renderedRooms = -1;
+    private GameFeedback feedback;
+    private GameService.Outcome pendingOutcome;
+    private Dialog resultDialog;
     private ChessBoardView board;
     private boolean bound, visible, settings, autoConnect = true;
     private String renderedKey = "";
-    private final Runnable clockTick = new Runnable() {
-        public void run() { updateClock(); handler.postDelayed(this, 250); }
+    private final Runnable clockTick = this::updateClock;
+    private final Runnable presentOutcome = () -> {
+        GameService.Outcome value = pendingOutcome; pendingOutcome = null;
+        if (!visible || value == null) return;
+        renderedKey = ""; changed(); showOutcome(value);
     };
     private final ServiceConnection binding = new ServiceConnection() {
         public void onServiceConnected(ComponentName name, IBinder binder) {
             service = ((GameService.LocalBinder)binder).service();
-            service.foreground(visible); service.observe(MainActivity.this);
+            service.foreground(visible); service.observe(visible ? MainActivity.this : null);
             if (autoConnect && !service.connected) { autoConnect = false; connect(); }
         }
         public void onServiceDisconnected(ComponentName name) { service = null; renderedKey = ""; }
@@ -35,8 +49,9 @@ public final class MainActivity extends Activity implements GameService.Observer
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
+        feedback = new GameFeedback(this);
         if (saved != null) autoConnect = saved.getBoolean("autoConnect", false);
-        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(Color.rgb(245, 248, 247));
+        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(BACKGROUND);
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             if (Build.VERSION.SDK_INT >= 30) {
                 android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
@@ -54,16 +69,19 @@ public final class MainActivity extends Activity implements GameService.Observer
         else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         LinearLayout toolbar = row(root);
         toolbar.setPadding(dp(12), dp(6), dp(4), dp(6)); toolbar.setBackgroundColor(Color.WHITE);
-        TextView title = text("翻棋", 24); title.setTypeface(null, android.graphics.Typeface.BOLD);
+        ImageView mark = new ImageView(this); mark.setImageResource(R.drawable.ic_launcher_foreground);
+        toolbar.addView(mark, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        TextView title = text("翻棋", 22); title.setTypeface(MEDIUM);
         toolbar.addView(title, new LinearLayout.LayoutParams(0, dp(48), 1));
         title.setGravity(Gravity.CENTER_VERTICAL);
-        icon(toolbar, android.R.drawable.ic_menu_rotate, "刷新状态", () -> {
+        icon(toolbar, R.drawable.ic_refresh, "刷新状态", () -> {
             if (service != null) { if (service.room == null) service.listRooms(); else service.sync(); }
         });
-        icon(toolbar, android.R.drawable.ic_menu_preferences, "服务器设置", () -> { settings = true; showSettings(); });
+        icon(toolbar, R.drawable.ic_settings, "服务器设置", () -> { settings = true; showSettings(); });
         Button rules = button(toolbar, "规则", this::showRules); rules.setMinWidth(0); rules.setMinimumWidth(0);
         connection = text("正在初始化", 13); connection.setPadding(dp(16), dp(8), dp(16), dp(8)); root.addView(connection);
         connection.setLines(landscape() ? 1 : 2); connection.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        connection.setBackgroundColor(Color.WHITE); divider(root);
         content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
         root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
         bound = bindService(new Intent(this, GameService.class), binding, BIND_AUTO_CREATE);
@@ -72,14 +90,19 @@ public final class MainActivity extends Activity implements GameService.Observer
     }
     @Override protected void onStart() {
         super.onStart(); visible = true;
+        feedback.start();
         if (service != null) {
             service.foreground(true); service.observe(this);
             if (service.connected && service.room != null) service.sync();
         }
-        handler.post(clockTick);
+        updateClock();
     }
     @Override protected void onStop() {
         visible = false; handler.removeCallbacks(clockTick);
+        handler.removeCallbacks(presentOutcome); pendingOutcome = null;
+        if (board != null) board.pause();
+        if (resultDialog != null) { resultDialog.dismiss(); resultDialog = null; }
+        feedback.stop();
         if (service != null) { service.foreground(false); service.observe(null); }
         super.onStop();
     }
@@ -119,21 +142,38 @@ public final class MainActivity extends Activity implements GameService.Observer
         }
     }
     @Override public void changed() {
-        if (service == null) return;
-        connection.setText(service.status + "  ·  " + service.host() + ":" + service.port());
-        connection.setTextColor(service.connected ? GREEN : Color.DKGRAY);
+        if (service == null || !visible) return;
+        setText(connection, service.status + "  ·  " + service.host() + ":" + service.port());
+        connection.setTextColor(service.connected ? Color.rgb(36, 129, 70) : MUTED);
+        GameService.Outcome outcome = service.takeOutcome();
+        if (outcome != null) {
+            pendingOutcome = outcome;
+            if (board != null) board.setEnabled(false);
+            handler.removeCallbacks(presentOutcome);
+            handler.postDelayed(presentOutcome, board != null && board.animating() ? 280 : 0);
+        }
+        if (pendingOutcome != null) return;
         if (settings) return;
-        String key = !service.connected ? "offline" : service.room == null ? "lobby:" + service.listingRooms + ":" + service.rooms.toString()
-                : "room:" + service.room.toString() + ":" + (service.playing() ? "playing" : String.valueOf(service.state));
+        String key = !service.connected ? "offline" : service.room == null ? "lobby"
+                : "room:" + service.room.optLong("roomId") + ":" + service.room.optLong("version");
         if (!key.equals(renderedKey)) {
-            renderedKey = key; content.removeAllViews(); content.setOrientation(LinearLayout.VERTICAL); clock = null; board = null;
+            renderedKey = key; clearContent();
             if (!service.connected) showOffline();
             else if (service.room == null) showLobby();
             else if (service.playing()) showGame();
             else showWaiting();
         }
+        if (lobbyList != null) updateLobby();
+        if (readyButton != null) updateWaiting();
         if (board != null) board.setState(service.state, service.myIndex());
         updateClock();
+    }
+    private void clearContent() {
+        handler.removeCallbacks(clockTick);
+        if (board != null) board.pause();
+        content.removeAllViews(); content.setOrientation(LinearLayout.VERTICAL);
+        clock = turnLabel = colorLabel = resultLabel = null; board = null; readyButton = null;
+        timeChoices = null; lobbyList = null; renderedRooms = -1;
     }
     @Override public void notice(String text) { Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
     private LinearLayout scrollContent() {
@@ -144,27 +184,36 @@ public final class MainActivity extends Activity implements GameService.Observer
     }
     private void showOffline() {
         LinearLayout inner = scrollContent();
-        heading(inner, "联机翻棋");
+        heading(inner, "联机翻棋"); mark(inner);
         button(inner, "连接服务器", this::connect);
         button(inner, "服务器设置", () -> { settings = true; showSettings(); });
     }
     private void showLobby() {
         LinearLayout inner = scrollContent();
         heading(inner, "房间大厅");
+        lobbyCount = text("", 13); lobbyCount.setTextColor(MUTED); inner.addView(lobbyCount);
         button(inner, "创建房间", this::createDialog);
-        if (service.listingRooms) addText(inner, "正在获取房间…", 15);
-        else if (service.rooms.isEmpty()) addText(inner, "暂无房间", 16);
+        lobbyList = new LinearLayout(this); lobbyList.setOrientation(LinearLayout.VERTICAL); inner.addView(lobbyList);
+        lobbyEmpty = text("暂无房间", 17); lobbyEmpty.setGravity(Gravity.CENTER); lobbyEmpty.setTextColor(MUTED);
+        inner.addView(lobbyEmpty, new LinearLayout.LayoutParams(-1, dp(160)));
+        button(inner, "断开连接", () -> service.disconnect());
+    }
+    private void updateLobby() {
+        setText(lobbyCount, service.listingRooms ? "正在刷新" : service.rooms.size() + " 个房间");
+        lobbyEmpty.setVisibility(service.rooms.isEmpty() ? View.VISIBLE : View.GONE);
+        setText(lobbyEmpty, service.listingRooms ? "正在获取房间…" : "暂无房间");
+        if (renderedRooms == service.roomsRevision) return;
+        renderedRooms = service.roomsRevision; lobbyList.removeAllViews();
         for (JSONObject entry : service.rooms) {
-            LinearLayout item = row(inner); item.setPadding(0, dp(12), 0, dp(12));
+            LinearLayout item = row(lobbyList); item.setPadding(dp(14), dp(10), dp(6), dp(10)); item.setBackgroundColor(Color.WHITE);
             LinearLayout labels = new LinearLayout(this); labels.setOrientation(LinearLayout.VERTICAL);
             item.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
-            addText(labels, "#" + entry.optLong("id") + " " + entry.optString("name"), 18);
+            addText(labels, "#" + entry.optLong("id") + " " + entry.optString("name"), 17);
             addText(labels, entry.optInt("count") + "/2  ·  " + (entry.optBoolean("playing") ? "游戏中" : "等待中"), 13);
             Button join = button(item, "加入", () -> service.join(entry.optLong("id")));
-            join.setEnabled(!entry.optBoolean("playing") && entry.optInt("count") < 2 && !service.listingRooms);
-            divider(inner);
+            join.setEnabled(!entry.optBoolean("playing") && entry.optInt("count") < 2);
+            divider(lobbyList);
         }
-        button(inner, "断开连接", () -> service.disconnect());
     }
     private void createDialog() {
         EditText name = new EditText(this); name.setHint("房间名称"); name.setSingleLine(true);
@@ -182,32 +231,50 @@ public final class MainActivity extends Activity implements GameService.Observer
     }
     private void showWaiting() {
         LinearLayout inner = scrollContent(); JSONObject room = service.room;
-        heading(inner, "#" + room.optLong("roomId") + " " + room.optString("name"));
-        if (!service.lastResult.isEmpty()) addText(inner, service.lastResult, 17);
+        addText(inner, "房间 #" + room.optLong("roomId"), 13);
+        heading(inner, room.optString("name"));
+        resultLabel = text("", 15); resultLabel.setTextColor(BLUE); resultLabel.setPadding(0, dp(8), 0, dp(12)); inner.addView(resultLabel);
         JSONArray members = room.optJSONArray("members");
-        for (int i = 0; i < members.length(); i++) {
-            String id = members.optString(i);
-            addText(inner, (id.equals(service.selfId) ? "你" : "对方") + (i == 0 ? " · 房主" : "")
-                    + "    " + (service.isReady(id) ? "已准备" : "未准备"), 20);
+        for (int i = 0; i < 2; i++) {
+            LinearLayout player = row(inner); player.setPadding(dp(14), dp(16), dp(14), dp(16)); player.setBackgroundColor(Color.WHITE);
+            TextView avatar = text(i < members.length() && members.optString(i).equals(service.selfId) ? "我" : "客", 16);
+            avatar.setGravity(Gravity.CENTER); avatar.setTextColor(i == 0 ? BLUE : MUTED); avatar.setBackground(surface(Color.rgb(236, 240, 248), 22));
+            player.addView(avatar, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            memberLabels[i] = text("", 17); memberLabels[i].setPadding(dp(12), 0, dp(8), 0);
+            player.addView(memberLabels[i], new LinearLayout.LayoutParams(0, -2, 1));
+            memberStatus[i] = text("", 13); player.addView(memberStatus[i]); divider(inner);
         }
-        if (members.length() < 2) addText(inner, "等待另一位玩家加入", 16);
-        divider(inner); addText(inner, "每步时间", 16);
-        int selected = service.state == null ? 60 : service.state.optInt("seconds", 60);
+        addText(inner, "每步时间", 14);
         RadioGroup choices = new RadioGroup(this); choices.setOrientation(LinearLayout.HORIZONTAL);
+        timeChoices = choices; choices.setPadding(dp(3), dp(3), dp(3), dp(3)); choices.setBackground(surface(Color.rgb(227, 228, 235), 8));
         int[] values = {30, 60, 90, 0}; String[] labels = {"30秒", "60秒", "90秒", "无限"};
         for (int i = 0; i < values.length; i++) {
-            RadioButton choice = new RadioButton(this); choice.setText(labels[i]); choice.setTextSize(13); choice.setId(100 + i);
-            choice.setMinWidth(0); choice.setPadding(0, dp(8), 0, dp(8));
-            choices.addView(choice, new RadioGroup.LayoutParams(0, -2, 1));
-            choice.setEnabled(service.isHost() && service.state != null);
-            if (values[i] == selected) choices.check(choice.getId());
+            RadioButton choice = new RadioButton(this); choice.setText(labels[i]); choice.setTextSize(14); choice.setId(100 + i);
+            choice.setButtonDrawable(null); choice.setGravity(Gravity.CENTER); choice.setMinWidth(0); choice.setPadding(0, 0, 0, 0);
+            android.graphics.drawable.GradientDrawable background = surface(Color.TRANSPARENT, 6);
+            background.setColor(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_checked},new int[0]}, new int[]{Color.WHITE,Color.TRANSPARENT}));
+            choice.setBackground(background); choices.addView(choice, new RadioGroup.LayoutParams(0, dp(40), 1));
         }
-        choices.setOnCheckedChangeListener((group, id) -> { if (id >= 100 && id < 104) service.timeLimit(values[id - 100]); });
+        choices.setOnCheckedChangeListener((group, id) -> { if (!updatingChoices && id >= 100 && id < 104) service.timeLimit(values[id - 100]); });
         inner.addView(choices);
-        Button ready = button(inner, service.isReady(service.selfId) ? "取消准备" : "准备", () -> service.ready(!service.isReady(service.selfId)));
-        ready.setEnabled(service.state != null);
+        readyButton = button(inner, "准备", () -> service.ready(!service.isReady(service.selfId)));
         button(inner, "退出房间", this::confirmLeave);
         if (service.isHost()) button(inner, "解散房间", this::confirmDissolve);
+    }
+    private void updateWaiting() {
+        JSONArray members = service.room.optJSONArray("members");
+        for (int i = 0; i < 2; i++) {
+            boolean present = i < members.length(); String id = members.optString(i);
+            setText(memberLabels[i], present ? (id.equals(service.selfId) ? "你" : "对方") + (i == 0 ? " · 房主" : "") : "等待加入");
+            boolean ready = service.isReady(id);
+            setText(memberStatus[i], present ? (ready ? "已准备" : "未准备") : "空位");
+            memberStatus[i].setTextColor(ready ? Color.rgb(36, 129, 70) : MUTED);
+        }
+        resultLabel.setVisibility(service.lastResult.isEmpty() ? View.GONE : View.VISIBLE); setText(resultLabel, service.lastResult);
+        readyButton.setEnabled(service.state != null); setText(readyButton, service.isReady(service.selfId) ? "取消准备" : "准备");
+        int seconds = service.state == null ? 60 : service.state.optInt("seconds", 60);
+        updatingChoices = true; timeChoices.check(seconds == 30 ? 100 : seconds == 60 ? 101 : seconds == 90 ? 102 : 103); updatingChoices = false;
+        for (int i = 0; i < 4; i++) timeChoices.getChildAt(i).setEnabled(service.isHost() && service.state != null);
     }
     private void showGame() {
         LinearLayout details = content;
@@ -217,13 +284,19 @@ public final class MainActivity extends Activity implements GameService.Observer
             details = new LinearLayout(this); details.setOrientation(LinearLayout.VERTICAL);
             details.setPadding(dp(12), dp(8), dp(12), dp(8));
             scroll.addView(details);
-            content.addView(scroll, new LinearLayout.LayoutParams(dp(220), -1));
+            content.addView(scroll, new LinearLayout.LayoutParams(dp(190), -1));
         }
         TextView roomTitle = text("#" + service.room.optLong("roomId") + " " + service.room.optString("name"), 16);
         roomTitle.setPadding(dp(16), 0, dp(16), dp(4)); details.addView(roomTitle);
-        clock = text("正在同步棋局", 16); clock.setGravity(Gravity.CENTER);
-        clock.setPadding(dp(8), dp(6), dp(8), dp(6)); details.addView(clock);
-        board = new ChessBoardView(this, (from, to) -> service.move(from, to));
+        LinearLayout turnRow = row(details); turnRow.setPadding(dp(16), dp(4), dp(16), dp(4));
+        if (landscape()) turnRow.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout player = new LinearLayout(this); player.setOrientation(LinearLayout.VERTICAL);
+        turnRow.addView(player, new LinearLayout.LayoutParams(landscape() ? -1 : 0, -2, landscape() ? 0 : 1));
+        turnLabel = text("正在同步", 18); player.addView(turnLabel);
+        colorLabel = text("尚未定色", 13); colorLabel.setTextColor(MUTED); player.addView(colorLabel);
+        clock = text("--:--", 28); clock.setGravity(Gravity.CENTER); clock.setTypeface(MEDIUM);
+        clock.setFontFeatureSettings("tnum"); turnRow.addView(clock, new LinearLayout.LayoutParams(dp(96), dp(52)));
+        board = new ChessBoardView(this, (from, to) -> service.move(from, to), feedback);
         content.addView(board, landscape() ? new LinearLayout.LayoutParams(0, -1, 1) : new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout actions = row(details); actions.setGravity(Gravity.CENTER);
         if (landscape()) actions.setOrientation(LinearLayout.VERTICAL);
@@ -231,15 +304,18 @@ public final class MainActivity extends Activity implements GameService.Observer
         if (service.isHost()) button(actions, "解散房间", this::confirmDissolve);
     }
     private void updateClock() {
-        if (clock == null || service == null || service.state == null) return;
+        handler.removeCallbacks(clockTick);
+        if (!visible || clock == null || service == null || service.state == null) return;
         JSONObject state = service.state;
         int mine = service.myIndex(), turn = state.optInt("turn", -1);
         JSONArray colors = state.optJSONArray("colors"); int color = colors == null ? 0 : colors.optInt(mine);
         long remaining = service.displayedRemaining();
-        String separator = landscape() ? "\n" : "  ·  ";
-        clock.setText((color == 0 ? "尚未定色" : color > 0 ? "你执红棋" : "你执黑棋") + separator
-                + (turn == mine ? "你的回合" : "对方回合") + separator + (remaining < 0 ? "无限" : ((remaining + 999) / 1000) + " 秒"));
-        clock.setTextColor(turn == mine ? GREEN : INK);
+        setText(colorLabel, color == 0 ? "尚未定色" : color > 0 ? "你执红棋" : "你执黑棋");
+        setText(turnLabel, turn == mine ? "你的回合" : "对方回合"); turnLabel.setTextColor(turn == mine ? BLUE : INK);
+        long seconds = (remaining + 999) / 1000;
+        setText(clock, remaining < 0 ? "不限时" : String.format(java.util.Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60));
+        clock.setTextColor(remaining >= 0 && remaining <= 10000 ? Color.rgb(205, 50, 63) : INK);
+        if (remaining > 0 && state.optInt("winner", -1) < 0) handler.postDelayed(clockTick, (remaining % 1000 == 0 ? 1000 : remaining % 1000) + 8);
     }
     private void confirmLeave() {
         if (service.playing()) new AlertDialog.Builder(this).setTitle("退出本局？").setMessage("退出将判负，随后返回大厅。")
@@ -251,15 +327,18 @@ public final class MainActivity extends Activity implements GameService.Observer
                 .setNegativeButton("取消", null).setPositiveButton("解散", (d, w) -> service.dissolve()).show();
     }
     private void showSettings() {
-        renderedKey = ""; content.removeAllViews(); content.setOrientation(LinearLayout.VERTICAL); board = null; clock = null;
-        LinearLayout inner = scrollContent(); heading(inner, "服务器设置");
+        renderedKey = ""; clearContent();
+        LinearLayout inner = scrollContent(); heading(inner, "设置");
+        addText(inner, "游戏反馈", 14);
+        toggle(inner, "音效", "sound"); toggle(inner, "动画", "motion");
+        addText(inner, "服务器", 14);
         addText(inner, "服务器地址", 15);
         EditText host = new EditText(this); host.setSingleLine(true);
         host.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        host.setText(service == null ? GameService.DEFAULT_HOST : service.host()); inner.addView(host);
+        host.setText(service == null ? GameService.DEFAULT_HOST : service.host()); inputStyle(host); inner.addView(host);
         addText(inner, "TCP 端口", 15);
         EditText port = new EditText(this); port.setSingleLine(true); port.setInputType(InputType.TYPE_CLASS_NUMBER);
-        port.setText(Integer.toString(service == null ? GameService.DEFAULT_PORT : service.port())); inner.addView(port);
+        port.setText(Integer.toString(service == null ? GameService.DEFAULT_PORT : service.port())); inputStyle(port); inner.addView(port);
         button(inner, "保存并连接", () -> {
             if (service == null) return;
             String address = host.getText().toString().trim();
@@ -277,6 +356,14 @@ public final class MainActivity extends Activity implements GameService.Observer
         });
         button(inner, "恢复默认值", () -> { host.setText(GameService.DEFAULT_HOST); port.setText(Integer.toString(GameService.DEFAULT_PORT)); });
         button(inner, "返回", () -> { settings = false; changed(); });
+        button(inner, "开源许可", () -> {
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(getResources().openRawResource(R.raw.third_party_notices), java.nio.charset.StandardCharsets.UTF_8))) {
+                String text = reader.lines().collect(java.util.stream.Collectors.joining("\n"));
+                TextView notice = text(text, 13); notice.setPadding(dp(20), dp(12), dp(20), dp(12));
+                ScrollView scroll = new ScrollView(this); scroll.addView(notice);
+                new AlertDialog.Builder(this).setTitle("开源许可").setView(scroll).setPositiveButton("关闭", null).show();
+            } catch (java.io.IOException ex) { notice("无法读取许可信息"); }
+        });
     }
     private void showRules() {
         TextView rules = text(getString(R.string.game_rules), 16);
@@ -293,12 +380,15 @@ public final class MainActivity extends Activity implements GameService.Observer
                 .setPositiveButton("退出", (d, w) -> { if (service != null) service.disconnect(); finish(); }).show();
     }
     private TextView text(String value, int size) {
-        TextView view = new TextView(this); view.setText(value); view.setTextSize(size); view.setTextColor(INK); return view;
+        TextView view = new TextView(this); view.setText(value); view.setTextSize(size); view.setTextColor(INK); view.setLetterSpacing(0); return view;
     }
     private void addText(LinearLayout parent, String value, int size) {
         TextView view = text(value, size); view.setPadding(0, dp(8), 0, dp(8)); parent.addView(view);
     }
-    private void heading(LinearLayout parent, String value) { addText(parent, value, 22); }
+    private void heading(LinearLayout parent, String value) {
+        TextView title = text(value, 27); title.setTypeface(MEDIUM);
+        title.setPadding(0, dp(8), 0, dp(16)); parent.addView(title);
+    }
     private LinearLayout row(LinearLayout parent) {
         LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL); parent.addView(row, new LinearLayout.LayoutParams(-1, -2)); return row;
@@ -306,14 +396,14 @@ public final class MainActivity extends Activity implements GameService.Observer
     private Button button(LinearLayout parent, String label, Runnable action) {
         Button button = new Button(this); button.setText(label); button.setAllCaps(false); button.setTextSize(15);
         button.setLetterSpacing(0); button.setElevation(0); button.setStateListAnimator(null);
-        boolean primary = switch (label) { case "创建房间", "准备", "连接服务器", "保存并连接", "加入" -> true; default -> false; };
-        int ink = label.contains("退出") || label.contains("解散") || label.contains("断开") ? Color.rgb(159, 56, 62) : GREEN;
+        boolean primary = switch (label) { case "创建房间", "准备", "连接服务器", "保存并连接", "加入", "继续" -> true; default -> false; };
+        int ink = label.contains("退出") || label.contains("解散") || label.contains("断开") ? Color.rgb(205, 50, 63) : BLUE;
         int[][] states = {new int[]{-android.R.attr.state_enabled}, new int[0]};
         button.setTextColor(new android.content.res.ColorStateList(states, new int[]{Color.GRAY, primary ? Color.WHITE : ink}));
         android.graphics.drawable.GradientDrawable surface = new android.graphics.drawable.GradientDrawable();
-        surface.setColor(new android.content.res.ColorStateList(states, new int[]{primary ? Color.rgb(222, 229, 225) : Color.TRANSPARENT, primary ? GREEN : Color.TRANSPARENT}));
-        surface.setCornerRadius(dp(6));
-        button.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.rgb(195, 220, 207)), surface, null));
+        surface.setColor(new android.content.res.ColorStateList(states, new int[]{primary ? LINE : Color.TRANSPARENT, primary ? BLUE : Color.TRANSPARENT}));
+        surface.setCornerRadius(dp(8));
+        button.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(Color.rgb(195, 216, 249)), surface, null));
         button.setPadding(dp(14), 0, dp(14), 0); button.setMinHeight(dp(46)); button.setMinimumHeight(dp(46));
         button.setOnClickListener(v -> action.run());
         LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(parent.getOrientation() == LinearLayout.VERTICAL ? -1 : -2, dp(48));
@@ -323,15 +413,49 @@ public final class MainActivity extends Activity implements GameService.Observer
     private void icon(LinearLayout parent, int resource, String label, Runnable action) {
         ImageButton button = new ImageButton(this); button.setImageResource(resource);
         button.setContentDescription(label); button.setTooltipText(label);
-        button.setImageTintList(android.content.res.ColorStateList.valueOf(GREEN));
+        button.setImageTintList(android.content.res.ColorStateList.valueOf(BLUE));
         button.setScaleType(ImageView.ScaleType.CENTER_INSIDE); button.setPadding(dp(10), dp(10), dp(10), dp(10));
         button.setBackgroundColor(Color.TRANSPARENT); button.setOnClickListener(v -> action.run());
         parent.addView(button, new LinearLayout.LayoutParams(dp(44), dp(48)));
     }
     private void divider(LinearLayout parent) {
-        View line = new View(this); line.setBackgroundColor(Color.rgb(217, 225, 222));
+        View line = new View(this); line.setBackgroundColor(LINE);
         parent.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
     }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+    private static void setText(TextView view, String value) { if (view != null && !value.contentEquals(view.getText())) view.setText(value); }
+    private android.graphics.drawable.GradientDrawable surface(int color, int radius) {
+        android.graphics.drawable.GradientDrawable value = new android.graphics.drawable.GradientDrawable(); value.setColor(color); value.setCornerRadius(dp(radius)); return value;
+    }
+    private void inputStyle(EditText input) { input.setTextSize(17); input.setPadding(dp(14), dp(10), dp(14), dp(10)); input.setBackground(surface(Color.WHITE, 6)); }
+    private void mark(LinearLayout parent) {
+        ImageView art = new ImageView(this); art.setImageResource(R.drawable.ic_launcher_foreground);
+        LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(dp(132), dp(132)); layout.gravity = Gravity.CENTER; parent.addView(art, layout);
+    }
+    private void toggle(LinearLayout parent, String title, String key) {
+        Switch toggle = new Switch(this); toggle.setText(title); toggle.setTextSize(17); toggle.setTextColor(INK);
+        toggle.setPadding(dp(14), dp(12), dp(14), dp(12)); toggle.setBackgroundColor(Color.WHITE);
+        toggle.setChecked(getSharedPreferences("connection", MODE_PRIVATE).getBoolean(key, true));
+        toggle.setOnCheckedChangeListener((v, checked) -> getSharedPreferences("connection", MODE_PRIVATE).edit().putBoolean(key, checked).apply());
+        parent.addView(toggle, new LinearLayout.LayoutParams(-1, dp(54))); divider(parent);
+    }
+    private void showOutcome(GameService.Outcome outcome) {
+        if (resultDialog != null) resultDialog.dismiss();
+        Dialog dialog = new Dialog(this); resultDialog = dialog; dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout body = new LinearLayout(this); body.setOrientation(LinearLayout.VERTICAL); body.setGravity(Gravity.CENTER_HORIZONTAL);
+        body.setPadding(dp(24), dp(24), dp(24), dp(18)); body.setBackground(surface(Color.WHITE, 8));
+        TextView symbol = text(outcome.won ? "胜" : "负", 36); symbol.setGravity(Gravity.CENTER);
+        symbol.setTextColor(outcome.won ? BLUE : MUTED); symbol.setBackground(surface(outcome.won ? Color.rgb(233, 242, 255) : BACKGROUND, 40));
+        body.addView(symbol, new LinearLayout.LayoutParams(dp(80), dp(80)));
+        TextView title = text(outcome.won ? "你赢了" : "本局落败", 25); title.setGravity(Gravity.CENTER); title.setPadding(0, dp(18), 0, dp(8)); body.addView(title);
+        TextView reason = text(outcome.reason, 15); reason.setTextColor(MUTED); reason.setGravity(Gravity.CENTER); reason.setPadding(0, 0, 0, dp(18)); body.addView(reason);
+        button(body, "继续", dialog::dismiss); dialog.setContentView(body); dialog.setOnDismissListener(d -> { body.animate().cancel(); if (resultDialog == dialog) resultDialog = null; });
+        dialog.show(); Window window = dialog.getWindow();
+        if (window != null) { window.setBackgroundDrawableResource(android.R.color.transparent); window.setWindowAnimations(0); window.setLayout(Math.min(dp(340), getResources().getDisplayMetrics().widthPixels - dp(40)), -2); }
+        if (outcome.live && SystemClock.elapsedRealtime() - outcome.at < 2000) {
+            feedback.result(outcome.won);
+            if (feedback.motion()) { body.setAlpha(0); body.setScaleX(.94f); body.setScaleY(.94f); body.animate().alpha(1).scaleX(1).scaleY(1).setDuration(260).setInterpolator(new android.view.animation.DecelerateInterpolator()).start(); }
+        }
+    }
     private boolean landscape() { return getResources().getConfiguration().orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE; }
 }

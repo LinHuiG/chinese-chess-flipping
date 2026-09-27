@@ -21,6 +21,15 @@ public final class GameService extends Service {
     public String selfId = "", status = "尚未连接", lastResult = "";
     public boolean connected, listingRooms;
     public long stateReceivedAt;
+    public long roomsRevision;
+    public static final class Outcome {
+        public final boolean won, live;
+        public final String reason;
+        public final long at = SystemClock.elapsedRealtime();
+        Outcome(boolean won, String reason, boolean live) { this.won = won; this.reason = reason; this.live = live; }
+    }
+    private Outcome outcome;
+    private String resultGameId = "";
     private Observer observer;
     private TcpClient client;
     private boolean foreground, enabled;
@@ -32,7 +41,7 @@ public final class GameService extends Service {
         @Override public void run() {
             try { referee.tick(); }
             catch (JSONException ex) { notice("棋局计时处理失败"); }
-            if (referee.needsTick()) handler.postDelayed(this, 200);
+            scheduleTick();
         }
     };
 
@@ -60,6 +69,12 @@ public final class GameService extends Service {
         startForeground(1, notification);
     }
     public SharedPreferences preferences() { return getSharedPreferences("connection", MODE_PRIVATE); }
+    public Outcome takeOutcome() { Outcome value = outcome; outcome = null; return value; }
+    private void scheduleTick() {
+        handler.removeCallbacks(tick);
+        long delay = referee.nextTickDelay();
+        if (delay >= 0) handler.postDelayed(tick, delay);
+    }
     public String host() { return preferences().getString("host", DEFAULT_HOST); }
     public int port() { return preferences().getInt("port", DEFAULT_PORT); }
     public void observe(Observer value) { observer = value; if (value != null) value.changed(); }
@@ -79,7 +94,7 @@ public final class GameService extends Service {
         }
         status = "正在连接 " + host() + ":" + port();
         changed();
-        client = new TcpClient(did, getPackageName(), "0.2.0", new TcpClient.Listener() {
+        client = new TcpClient(did, getPackageName(), "0.3.0", new TcpClient.Listener() {
             private void dispatch(Runnable action) { handler.post(() -> { if (generation == current) action.run(); }); }
             public void onStatus(String text) { dispatch(() -> { status = text; changed(); }); }
             public void onConnected() { dispatch(() -> {
@@ -90,7 +105,8 @@ public final class GameService extends Service {
             public void onMessage(String text) { dispatch(() -> receive(text)); }
             public void onEvent(String text) { dispatch(() -> receive(text)); }
             public void onClosed(String reason) { dispatch(() -> {
-                client = null; connected = false; clearRoom(); selfId = ""; rooms.clear(); listingRooms = false;
+                client = null; connected = false; clearRoom(); selfId = ""; rooms.clear(); listing.clear(); listingRooms = false;
+                outcome = null; roomsRevision++;
                 if (wakeLock.isHeld()) wakeLock.release();
                 status = reason + (foreground && enabled ? "，3 秒后重连" : "");
                 changed();
@@ -103,7 +119,8 @@ public final class GameService extends Service {
         enabled = false; generation++;
         handler.removeCallbacks(retry);
         if (client != null) client.close();
-        client = null; connected = false; clearRoom(); selfId = ""; rooms.clear(); listingRooms = false;
+        client = null; connected = false; clearRoom(); selfId = ""; rooms.clear(); listing.clear(); listingRooms = false;
+        outcome = null; roomsRevision++;
         status = "已断开连接";
         if (wakeLock.isHeld()) wakeLock.release();
         stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); changed();
@@ -168,7 +185,7 @@ public final class GameService extends Service {
                     for (int i = 0; i < page.length(); i++) listing.add(page.getJSONObject(i));
                     long next = message.optLong("next");
                     if (next > 0) send(put(json("LIST"), "after", next));
-                    else { rooms.clear(); rooms.addAll(listing); listingRooms = false; }
+                    else { rooms.clear(); rooms.addAll(listing); listing.clear(); listingRooms = false; roomsRevision++; }
                     break;
                 case "ROOM":
                     acceptRoom(message); break;
@@ -185,13 +202,17 @@ public final class GameService extends Service {
                 case "FORWARD":
                     if (matches(message) && isHost()) referee.action(message); break;
                 case "GAME_OVER":
-                    if (matches(message)) {
-                        lastResult = (selfId.equals(message.optString("winnerId")) ? "你赢了" : "本局落败") + " · " + reason(message.optString("reason"));
-                        notice(lastResult);
+                    if (matches(message) && !resultGameId.equals(message.optString("gameId"))) {
+                        resultGameId = message.optString("gameId");
+                        boolean won = selfId.equals(message.optString("winnerId"));
+                        String reason = reason(message.optString("reason"));
+                        lastResult = (won ? "你赢了" : "本局落败") + " · " + reason;
+                        outcome = new Outcome(won, reason, foreground && observer != null);
                     }
                     break;
                 case "RESULT":
                     if (!message.optBoolean("ok")) {
+                        if ("LIST".equals(message.optString("request"))) { listing.clear(); listingRooms = false; roomsRevision++; }
                         notice(message.optString("error", "请求失败"));
                         referee.failed(message.optString("request"));
                     }
@@ -199,6 +220,7 @@ public final class GameService extends Service {
                 case "PONG": wakeLock.acquire(45000); return;
                 default: break;
             }
+            scheduleTick();
             changed();
         } catch (JSONException ex) { notice(text.startsWith("{") ? "服务器状态格式异常" : text); }
     }
@@ -211,9 +233,8 @@ public final class GameService extends Service {
         if (room != null && room.optLong("roomId") == message.optLong("roomId")
                 && message.optLong("version") <= room.optLong("version")) return;
         room = message; state = null; listingRooms = false;
+        if (message.optBoolean("playing")) { lastResult = ""; outcome = null; }
         referee.room(message, selfId);
-        handler.removeCallbacks(tick);
-        if (referee.needsTick()) handler.post(tick);
     }
     private static JSONObject json(String type) { return put(new JSONObject(), "type", type); }
     private static JSONObject put(JSONObject object, String key, Object value) {
