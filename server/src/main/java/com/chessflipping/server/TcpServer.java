@@ -1,21 +1,20 @@
 package com.chessflipping.server;
 
+import com.chessflipping.protocol.KeyExchange;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.*;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.LineBasedFrameDecoder;
-import io.netty.handler.codec.string.StringDecoder;
-import io.netty.handler.codec.string.StringEncoder;
-import io.netty.handler.timeout.IdleStateHandler;
-import io.netty.util.CharsetUtil;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
+import java.security.GeneralSecurityException;
+import java.security.KeyPair;
 
 @Component
 public class TcpServer implements SmartLifecycle {
@@ -25,30 +24,42 @@ public class TcpServer implements SmartLifecycle {
     private EventLoopGroup acceptor;
     private EventLoopGroup workers;
     private volatile boolean running;
+    private RoomHub rooms;
 
     public TcpServer(TcpProperties config) { this.config = config; }
 
-    public static void configurePipeline(ChannelPipeline pipeline) {
-        pipeline.addLast(new IdleStateHandler(90, 0, 0),
-                new LineBasedFrameDecoder(8192, true, true),
-                new StringDecoder(CharsetUtil.UTF_8), new StringEncoder(CharsetUtil.UTF_8),
-                new ProtocolHandler());
+    public static void configurePipeline(ChannelPipeline pipeline, KeyPair serverKey) {
+        configurePipeline(pipeline, serverKey, new RoomHub());
+    }
+
+    public static void configurePipeline(ChannelPipeline pipeline, KeyPair serverKey, RoomHub rooms) {
+        pipeline.addLast(new BinaryFrameDecoder(), new ProtocolHandler(serverKey, rooms));
     }
 
     @Override public synchronized void start() {
         if (running) return;
+        final KeyPair serverKey;
+        try { serverKey = KeyExchange.generateKeyPair(); }
+        catch (GeneralSecurityException ex) { throw new IllegalStateException("Unable to initialize session encryption", ex); }
         acceptor = new NioEventLoopGroup(1);
         workers = new NioEventLoopGroup(config.workerThreads());
+        rooms = new RoomHub();
+        // Small heap arenas and no per-thread caches avoid CPU-count-sized direct-memory pools.
+        PooledByteBufAllocator allocator = new PooledByteBufAllocator(false,
+                Math.min(config.workerThreads(), 2), 0, 8192, 4, 0, 0, false);
         try {
             Channel listener = new ServerBootstrap().group(acceptor, workers)
                     .channel(NioServerSocketChannel.class)
                     .option(ChannelOption.SO_BACKLOG, 128)
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childOption(ChannelOption.SO_KEEPALIVE, true)
+                    .childOption(ChannelOption.ALLOCATOR, allocator)
+                    .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(32768, 65536))
+                    .childOption(ChannelOption.RCVBUF_ALLOCATOR, new AdaptiveRecvByteBufAllocator(256, 1024, 16384))
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override protected void initChannel(SocketChannel channel) {
                             channels.add(channel);
-                            configurePipeline(channel.pipeline());
+                            configurePipeline(channel.pipeline(), serverKey, rooms);
                         }
                     }).bind("0.0.0.0", config.port()).sync().channel();
             channels.add(listener);

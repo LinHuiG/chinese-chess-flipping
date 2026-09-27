@@ -7,6 +7,7 @@ services:
     environment:
       TCP_PORT: ${TCP_PORT:-9000}
       TCP_WORKER_THREADS: ${TCP_WORKER_THREADS:-4}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--Xms16m -Xmx128m -XX:+UseSerialGC -XX:MaxDirectMemorySize=16m -Xss512k}
     restart: unless-stopped
     stop_grace_period: 20s
     security_opt:

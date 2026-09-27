@@ -1,17 +1,23 @@
 # Android 客户端
 
-**2026-09-27 文档提交说明：**下文加密通信描述的是本地工作区实现，相关源码和测试未包含在本次文档提交中；仅检出远端文档提交不代表客户端已升级。接续状态见 [项目交接记录](../PROJECT_STATUS.md)。
+Android Studio 打开本目录，使用 IDE 自带 JDK。compile/target SDK 37，最低 API 26，AGP 9.4.0、Gradle 9.6.0。
 
-Android Studio 打开本目录，使用自带 JDK，等待 Gradle 同步后运行 app。
+~~~powershell
+.\gradlew.bat assembleDebug lintDebug
+~~~
 
-要求：支持 AGP 9.4 的 Android Studio、Android SDK 37、可联网下载 Gradle/Google Maven 依赖。
+APK：app/build/outputs/apk/debug/app-debug.apk，调试签名，不包含正式发布密钥。
 
-Windows 构建：`gradlew.bat assembleDebug lintDebug`。
+## 使用
 
-调试 APK：`app/build/outputs/apk/debug/app-debug.apk`。
+默认服务器 hgame.tudoucoding.tech:8888。右上角设置可保存域名/IP 和端口，更换服务器会退出当前房间并重新连接。模拟器联调填 10.0.2.2:18888；真机填开发电脑局域网 IP。
 
-模拟器连接 `10.0.2.2:9000`；真机连接服务器实际 IP，不能用 `localhost` 代替开发电脑。连接后自动获取公钥并建立 ECDH + AES-GCM 会话，状态显示“加密连接已建立”后才能发送 ECHO 测试消息，每 20 秒自动发送加密心跳。进入后台断开连接，返回后手动重连并重新握手。当前是联调基础界面，尚无棋盘和对局业务。
+大厅创建或加入房间，房主选择每步时间，双方准备后开局。大厅、等待页、对局页右上角均可查看完整规则。棋盘左侧为红方、右侧为黑方的阵亡统计；顺序为将帅、士、象、车、马、炮、兵卒，未阵亡灰显，阵亡后点亮并显示数字角标。
 
-固定 21 字节包头明文（以 0xFC 0xFC 开始），控制头与包体整体加密；业务包体使用 JSON，握手包体使用原始字节数组。协议不兼容旧版明文服务端或无 0xFC 0xFC 前缀的二进制服务端，两端必须同步更新；公钥不缓存。详细字段与安全边界见 [协议文档](../docs/PROTOCOL.md)。
+点击暗棋翻开；点击己方明棋选中，再点目标格移动或吃子；再次点击选中棋子取消选择。规则详情见 [棋局方案](../docs/GAME_RULES.md)。
 
-完整仓库中的服务端 `mvn verify` 会在 JVM 上编译并运行这里的实际 `TcpClient` 与协议类，通过真实 TCP 与 Netty 联调。这不等同于 Android 真机测试；仍需在目标手机验证系统加密提供者、网络权限及后台行为。
+GameService 独立维护连接及房主业务，采用用户可停止的前台服务和续期有限的唤醒锁，后台不主动断开。5 秒心跳，连续 30 秒无 PONG 关闭；前台每次连接/握手失败完全结束后等待 3 秒重试。成功回大厅，不恢复旧房间。退出 App 或移除最近任务关闭连接。
+
+使用 Android 的 specialUse 前台服务类型，依据 [Android 前台服务类型说明](https://developer.android.com/develop/background-work/services/fgs/service-types)。Android 13+ 请求通知权限，Android 17 请求局域网权限；拒绝权限可在系统设置中重新授权。模拟器检查不等于厂商真机兼容验收。
+
+GameEngine 和 HostController 无 Android 依赖，在完整仓库的 Maven 检查中与实际 TcpClient 一起验证。暗棋真实身份和历史棋面仅由房主保存，公开快照用 99 表示暗棋。
