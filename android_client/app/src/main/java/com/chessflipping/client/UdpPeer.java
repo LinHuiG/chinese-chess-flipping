@@ -87,12 +87,13 @@ public final class UdpPeer implements AutoCloseable {
         }catch(Exception ex){if(!closed.get())fail();break;}}
     }
     private void accept(UdpSession.Packet packet,InetSocketAddress from){
-        if(peer!=null&&!peer.equals(from))return;
+        // Authentication and replay checks already ran in receive(). LAN and NAT paths can
+        // expose different source addresses for the same peer; do not discard that traffic.
         long time=now();byte[] body=packet.body;
         if(packet.type==PING&&body.length==8){probeReceived=true;sendPacket(PONG,body,from);}
         else if(packet.type==PONG&&body.length==8){
             Long sent = pings.remove(ByteBuffer.wrap(body).getLong()); if (sent == null) return;
-            peer=from;pongReceived=true;lastReceived=time;if(active)listener.latency(Math.max(0,time-sent));
+            if(peer==null)peer=from;pongReceived=true;lastReceived=time;if(active)listener.latency(Math.max(0,time-sent));
         }else if(active&&peer!=null&&packet.type==ACK&&body.length==16){pending.remove(key(body));lastReceived=time;}
         else if(active&&peer!=null&&packet.type==DATA&&body.length>16){
             byte[] id=Arrays.copyOf(body,16);String idText=key(id);sendPacket(ACK,id,from);lastReceived=time;

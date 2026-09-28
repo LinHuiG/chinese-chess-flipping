@@ -1,8 +1,15 @@
 # 服务器部署（Rust 0.5.0）
 
-实际已发布版本和 Actions 结果见 ../PROJECT_STATUS.md。本文件说明新版本配置；用户自行拉取部署，助手不远程操作服务器。
+实际已发布版本和 Actions 结果见 ../PROJECT_STATUS.md。默认由用户自行部署；本轮两台服务器的更新已获得明确授权。公开文档仅保留通用配置，不记录实际部署地址、登录账号、密码或管理入口。
 
-2026-09-28 已发布 Rust 0.5.0（服务端提交 43534f3）。[Actions 36427114170](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36427114170) 测试与发布均成功，latest / sha-43534f3 指向同一摘要：`sha256:83549f17242b6eae2f35d7ff76dc5402453716ecbbd9594db108a31281c0cb6c`。压缩层下载合计约 0.94 MiB（amd64）或 0.89 MiB（arm64），不包含 Docker 本身，也不是运行内存。客户端后续修正不改变该服务端镜像。
+Android 0.5.1 修复 UDP 多来源路径导致的直连回退，两端客户端均应升级。定向检查和构建已通过，真实双方联机仍待验收；生产服务端程序没有因此改变。
+
+## UDP 排查
+
+- TCP 与 UDP 规则相互独立，云端安全组或轻量实例防火墙需要单独放行 UDP 8888。确认规则关联正确的实例，来源覆盖实际客户端网络，且没有更高优先级的匹配拒绝规则。
+- 如果限制云端出站流量，也要检查对应 UDP 出站策略。系统防火墙、Docker 映射和服务监听均需要正确；仅在系统内放行不代表云端规则已放行。
+- 通过双方服务器互探和容器抓包区分本地网络、云端路径及容器转发问题。端口可达不等于实际 Android P2P 验收完成。
+- 参考：[轻量实例防火墙](https://cloud.tencent.com/document/product/1207/44577)、[CVM 安全组](https://cloud.tencent.com/document/product/213/112614)。
 
 ## 使用 Docker Compose
 
