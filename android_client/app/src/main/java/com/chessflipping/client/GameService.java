@@ -28,7 +28,7 @@ public final class GameService extends Service {
     private String p2pId = "";
     private int p2pGeneration;
     private boolean p2pRequested;
-    private final Set<String> directRequests = new HashSet<>();
+    private final Map<String, Boolean> directRequests = new HashMap<>();
     private final LinkedHashMap<String, JSONObject> directActions = new LinkedHashMap<>();
     private final Runnable actionDeadline = this::fallback;
     public static final class Outcome {
@@ -203,7 +203,9 @@ public final class GameService extends Service {
     private void sendServer(JSONObject request) { if (connected && client != null) client.request(request); else notice("连接尚未建立"); }
     private void send(JSONObject request) {
         String type = request.optString("type");
-        if ("HOST_REPLY".equals(type) && directRequests.remove(request.optString("requestId"))) {
+        Boolean localAction = "HOST_REPLY".equals(type) ? directRequests.remove(request.optString("requestId")) : null;
+        if (localAction != null) {
+            if (localAction && !request.optBoolean("ok")) { notice(request.optString("error", "操作无效")); return; }
             JSONObject reply = put(put(context("DIRECT_REPLY"), "operationId", request.optString("operationId")), "ok", request.optBoolean("ok"));
             if (request.optBoolean("ok")) { put(reply, "state", request.optJSONObject("state")); applyState(reply); }
             else put(reply, "error", request.optString("error"));
@@ -225,7 +227,7 @@ public final class GameService extends Service {
         String operation = message.optString("operationId");
         if (!operation.matches("[0-9a-f]{32}") || !matches(message)) return;
         JSONObject forward = put(put(put(put(context("FORWARD"), "requestId", operation), "operationId", operation), "actorId", actor), "action", message.optJSONObject("action"));
-        directRequests.add(operation);
+        directRequests.put(operation, actor.equals(selfId));
         try { referee.action(forward); scheduleTick(); }
         catch (JSONException ex) { directRequests.remove(operation); fallback(); }
         changed();

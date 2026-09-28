@@ -73,7 +73,7 @@ public final class UdpPeer implements AutoCloseable {
     /** Serialization belongs to the caller and happens once; retransmissions reuse these plaintext bytes. */
     public boolean send(byte[] message){
         if(closed.get()||message.length+16>UdpSession.MAX_PAYLOAD)return false;
-        byte[] id=new byte[16];ByteBuffer.wrap(id).putLong(UUID.randomUUID().getMostSignificantBits()).putLong(UUID.randomUUID().getLeastSignificantBits());
+        UUID messageId=UUID.randomUUID();byte[] id=new byte[16];ByteBuffer.wrap(id).putLong(messageId.getMostSignificantBits()).putLong(messageId.getLeastSignificantBits());
         byte[] body=new byte[16+message.length];System.arraycopy(id,0,body,0,16);System.arraycopy(message,0,body,16,message.length);
         dispatch(()->{if(!active||peer==null||pending.size()>=16){fail();return;}Pending p=new Pending(body,now());pending.put(key(id),p);transmit(p);schedule(250);});return true;
     }
