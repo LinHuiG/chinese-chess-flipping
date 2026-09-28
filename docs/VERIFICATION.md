@@ -1,6 +1,30 @@
 # 验证记录
 
-日期：2026-09-27。功能完成后集中检查；发布结果以 PROJECT_STATUS.md 的最新阶段和 GitHub Actions 为准。
+日期：2026-09-28。功能完成后集中检查；发布结果以 PROJECT_STATUS.md 的最新阶段和 GitHub Actions 为准。
+
+## 0.5.0 Rust 与 Android UDP
+
+- Rust release 构建通过；Windows 可执行文件 1987584 字节（约 1.90 MiB，不能当作 Linux 镜像大小）。生产镜像使用 Rust，Java 保留为对照与验证夹具。
+- 首次集中 Maven verify 执行 64 项，63 项通过。唯一失败为测试把已接收序号应直接丢弃误写成必须抛异常；改正后仅定向复查 UdpSessionTest 和 RustInteropTest，6 项通过。最新报告覆盖 64 项且无失败/错误/跳过，不是再次完整执行 64 项。
+- 新增检查包含真实 Android TcpClient/WsClient 与 Rust 双向混合房间、心跳 RTT、同 DID 替换、静态资源边界；普通 WS 分发密钥后的实际 UdpPeer 加密通信、1200 字节边界、ACK 超时回退和退出判负；UdpSession 防重放/乱序/篡改/方向与会话隔离；HostController 同操作 ID 不重复走子。
+- Android assembleDebug、最终 lintDebug 成功，0 errors、9 warnings。调试 APK 1647390 字节，versionCode 5，签名 v2 校验通过；SHA-256：3808AAE0EF0C1F46650B129DE126A1EC8F681491060C8AB1E8D79DA50CEC0A29。交付路径 android_client/build/deliverables/chinese-chess-flipping-0.5.0-debug.apk，APK 不入库。
+- 两台 API 37 模拟器连接临时 Rust 服务，经普通 HTTP/WS 成功进入 UDP 直连，显示约 1–2 ms 的直连 RTT，房主和客人各翻一子。仅在客人模拟器临时阻断该 App 的 UDP，双方自动显示中转、隐藏直连延迟；后续双方继续翻棋，房主退出、客人胜利。该规则已精确移除，原连接设置已恢复，本轮模拟器与临时服务器已关闭。此结果不代表公网 NAT 打洞成功率。
+- scripts/web-smoke.cjs 对真实 Rust 服务完成双浏览器房间、准备、无限时、四步轮流翻棋、双方棋面一致、服务器 RTT、手机横竖屏无溢出、离开判负和解散；scripts/web-review-smoke.cjs 的消息边界、发送失败和既有棋盘呈现检查通过。视觉检查后修正网页页脚版本文字为 0.5，没有为文字修改重复联机检查。
+- 截图：[Android 直连](screenshots/v0.5/android-direct.png)、[UDP 中断后中转](screenshots/v0.5/android-relay.png)、[Web 手机布局](screenshots/v0.5/web-mobile.png)。界面使用浅色分组与状态胶囊，网络数字变化仅更新文字。
+
+### 同环境资源采样
+
+脚本 scripts/measure-resources.ps1 在 Windows 同机启动 Rust release 与原 Java 参考 JAR，两者 2 个工作线程，各 102 个真实 TCP 加密心跳连接；稳定后采样 15.01 秒。Java 使用 -Xms16m -Xmx128m、SerialGC、16 MiB 直接内存上限、512 KiB 栈。原始日志位于忽略的 server/target/resource-v05/。
+
+| 指标 | Rust | Java |
+| --- | ---: | ---: |
+| 工作集 | 8.42 MiB | 125.21 MiB |
+| 私有内存 | 2.62 MiB | 116.41 MiB |
+| 单核 CPU 时间占采样窗口 | 0.000% | 0.833% |
+
+此场景工作集约减少 93.3%。Rust 的 CPU 数值低于该次计时分辨率，不能解释为不消耗 CPU，也不能用它计算吞吐提升倍数。这是轻载短采样，不是压力测试、Linux 内存、最大连接数或真机功耗结论。Linux 镜像的压缩层大小以发布后 OCI 清单为准。
+
+未验证公网不同 NAT、IPv6 直连、多厂商真机、长期后台及公网 HTTPS/WSS。首版 IPv4 打洞失败会中转；重连仍按原规则回大厅。所有远端部署由用户执行。
 
 ## 0.4.0 最终提交前复核
 

@@ -24,6 +24,8 @@ public final class TcpClient implements GameConnection {
         void onMessage(String message);
         void onClosed(String reason);
         default void onEvent(String message) { }
+        default void onJsonMessage(JSONObject message, boolean event) { if (event) onEvent(message.toString()); else onMessage(message.toString()); }
+        default void onLatency(long millis) { }
     }
 
     private final ExecutorService reader = Executors.newSingleThreadExecutor();
@@ -118,7 +120,7 @@ public final class TcpClient implements GameConnection {
         validateResponse(finished, SERVER_FINISHED, tid);
         if (!MessageDigest.isEqual(transcript, finished.body)) throw new IOException("Handshake transcript mismatch");
         byte[] metadata = new JSONObject().put("TID", tid).put("CHL", "ANDROID").put("DID", deviceId)
-                .put("APP", app).put("VER", version).toString().getBytes(StandardCharsets.UTF_8);
+                .put("APP", app).put("VER", version).put("UDP", 1).toString().getBytes(StandardCharsets.UTF_8);
         writeSecure(new WireProtocol.Packet(CLIENT_FINISHED, metadata, transcript));
         WireProtocol.Packet acknowledgement = session.decrypt(requiredFrame(input));
         validateResponse(acknowledgement, READY, tid);
@@ -148,11 +150,11 @@ public final class TcpClient implements GameConnection {
         if (!(id instanceof String) || !((String)id).matches("[0-9a-f]{32}")) throw new IOException("Invalid TID");
         if (packet.type == BUSINESS_EVENT) {
             if (!success(header)) throw new IOException("Invalid event status");
-            listener.onEvent(object(packet.body).toString());
+            listener.onJsonMessage(object(packet.body), true);
             return;
         }
         Integer expected = pending.remove((String)id);
-        sentAt.remove((String)id);
+        Long sent = sentAt.remove((String)id);
         if (expected == null || (packet.type != expected && packet.type != ERROR))
             throw new IOException("Unmatched response");
         outstanding.release();
@@ -162,8 +164,8 @@ public final class TcpClient implements GameConnection {
             listener.onMessage("服务端错误：" + header.optString("MSG", "请求失败"));
         } else {
             if (!success(header)) throw new IOException("Invalid response status");
-            if (packet.type == PONG) lastPong = System.nanoTime();
-            listener.onMessage(body.toString());
+            if (packet.type == PONG) { lastPong = System.nanoTime(); if (sent != null) listener.onLatency(TimeUnit.NANOSECONDS.toMillis(lastPong - sent)); }
+            listener.onJsonMessage(body, false);
         }
     }
 

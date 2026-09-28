@@ -20,6 +20,9 @@ public final class MainActivity extends Activity implements GameService.Observer
     private GameService service;
     private LinearLayout root, content;
     private TextView connection, clock, turnLabel, colorLabel, resultLabel, lobbyCount, lobbyEmpty;
+    private TextView serverMetric, routeMetric, directMetric;
+    private LinearLayout networkMetrics;
+    private Boolean renderedDirect;
     private final TextView[] memberLabels = new TextView[2], memberStatus = new TextView[2];
     private LinearLayout lobbyList;
     private Button readyButton;
@@ -82,6 +85,10 @@ public final class MainActivity extends Activity implements GameService.Observer
         connection = text("正在初始化", 13); connection.setPadding(dp(16), dp(8), dp(16), dp(8)); root.addView(connection);
         connection.setLines(landscape() ? 1 : 2); connection.setEllipsize(android.text.TextUtils.TruncateAt.END);
         connection.setBackgroundColor(Color.WHITE); divider(root);
+        networkMetrics = row(root); networkMetrics.setBackgroundColor(Color.WHITE);
+        networkMetrics.setPadding(dp(16), dp(2), dp(16), dp(7));
+        serverMetric = networkChip(networkMetrics); routeMetric = networkChip(networkMetrics); directMetric = networkChip(networkMetrics);
+        networkMetrics.setVisibility(View.GONE); directMetric.setVisibility(View.GONE);
         content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
         root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
         bound = bindService(new Intent(this, GameService.class), binding, BIND_AUTO_CREATE);
@@ -143,6 +150,7 @@ public final class MainActivity extends Activity implements GameService.Observer
     }
     @Override public void changed() {
         if (service == null || !visible) return;
+        networkChanged();
         setText(connection, service.status + "  ·  " + service.endpoint());
         connection.setTextColor(service.connected ? Color.rgb(36, 129, 70) : MUTED);
         GameService.Outcome outcome = service.takeOutcome();
@@ -167,6 +175,25 @@ public final class MainActivity extends Activity implements GameService.Observer
         if (readyButton != null) updateWaiting();
         if (board != null) board.setState(service.state, service.myIndex());
         updateClock();
+    }
+    private TextView networkChip(LinearLayout parent) {
+        TextView value = text("", 11); value.setSingleLine(); value.setTypeface(MEDIUM);
+        value.setTextColor(MUTED); value.setPadding(dp(8), dp(3), dp(8), dp(3)); value.setBackground(surface(BACKGROUND, 12));
+        LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(-2, -2); layout.setMarginEnd(dp(6)); parent.addView(value, layout); return value;
+    }
+    @Override public void networkChanged() {
+        if (!visible || service == null || networkMetrics == null) return;
+        networkMetrics.setVisibility(service.connected ? View.VISIBLE : View.GONE);
+        if (!service.connected) return;
+        setText(serverMetric, "服务器 " + (service.serverLatency < 0 ? "—" : service.serverLatency + " ms"));
+        setText(routeMetric, service.direct ? "直连" : "中转");
+        if (renderedDirect == null || renderedDirect != service.direct) {
+            renderedDirect = service.direct;
+            routeMetric.setTextColor(service.direct ? Color.rgb(36,129,70) : MUTED);
+            routeMetric.setBackground(surface(service.direct ? Color.rgb(232,247,237) : BACKGROUND, 12));
+        }
+        directMetric.setVisibility(service.direct && service.directLatency >= 0 ? View.VISIBLE : View.GONE);
+        if (service.direct && service.directLatency >= 0) setText(directMetric, "直连 " + service.directLatency + " ms");
     }
     private void clearContent() {
         handler.removeCallbacks(clockTick);

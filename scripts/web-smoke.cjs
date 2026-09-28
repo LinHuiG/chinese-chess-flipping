@@ -22,6 +22,8 @@ const fs = require('node:fs');
     await Promise.all([host.goto(url), guest.goto(url)]);
     await host.locator('#lobby').waitFor({ state: 'visible' });
     await guest.locator('#lobby').waitFor({ state: 'visible' });
+    await host.waitForFunction(() => /服务器 \d+ ms/.test(document.querySelector('#server-latency').textContent));
+    assert.equal(await host.locator('#network-metrics').isVisible(), true);
     await host.screenshot({ path: path.join(out, 'desktop-lobby.png'), fullPage: true });
     await host.click('#create-open'); await host.fill('#room-name', '网页跨端联调'); await host.click('#create-form button[type=submit]');
     await host.locator('#waiting').waitFor({ state: 'visible' });

@@ -2,8 +2,8 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId><version>3.5.16</version><relativePath/></parent>
-  <groupId>com.chessflipping</groupId><artifactId>chess-server</artifactId><version>0.4.0</version>
-  <name>chess-server</name>
+  <groupId>com.chessflipping</groupId><artifactId>chess-server-verification</artifactId><version>0.5.0</version>
+  <name>Java migration reference and Android verification (production server is Rust)</name>
   <properties><java.version>21</java.version></properties>
   <dependencies>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter</artifactId></dependency>
@@ -25,8 +25,15 @@
       <build><plugins><plugin>
         <groupId>org.codehaus.mojo</groupId><artifactId>build-helper-maven-plugin</artifactId><version>3.6.1</version>
         <executions><execution><id>client-rules</id><phase>generate-test-sources</phase><goals><goal>add-test-source</goal></goals>
-          <configuration><sources><source>../android_client/app/src/main/java/com/chessflipping/game</source><source>src/client-test/java</source></sources></configuration>
+          <configuration><sources><source>../android_client/app/src/main/java</source><source>src/client-test/java</source></sources></configuration>
         </execution></executions>
+      </plugin><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId>
+        <configuration><testIncludes>
+          <testInclude>**/*Test.java</testInclude><testInclude>**/ResourceProbe.java</testInclude>
+          <testInclude>**/GameEngine.java</testInclude><testInclude>**/HostController.java</testInclude><testInclude>**/BoardTransition.java</testInclude>
+          <testInclude>**/TcpClient.java</testInclude><testInclude>**/WsClient.java</testInclude><testInclude>**/GameConnection.java</testInclude>
+          <testInclude>**/UdpSession.java</testInclude><testInclude>**/UdpPeer.java</testInclude>
+        </testIncludes></configuration>
       </plugin></plugins></build>
     </profile>
   </profiles>

@@ -90,11 +90,13 @@ $('confirm-ok').onclick = () => { $('confirm-dialog').close(); const action = co
 
 const connection = new GameSocket({
   status: text => { $('status').textContent = text; },
-  connected: () => { model.online = true; $('status').textContent = '已连接'; $('status').classList.add('online'); render(); },
+  connected: () => { model.online = true; $('status').textContent = '已连接'; $('status').classList.add('online'); $('network-metrics').hidden = false; $('server-latency').textContent = '服务器 —'; render(); },
+  latency: millis => { const text = millis == null ? '服务器 —' : `服务器 ${millis} ms`; if ($('server-latency').textContent !== text) $('server-latency').textContent = text; },
   message: receive,
   closed: reason => {
     model.online = false; model.self = ''; model.rooms = []; model.pages = []; model.listing = false;
     clearRoom(); clearTimeout(outcomeTimer); $('status').textContent = reason; $('status').classList.remove('online');
+    $('network-metrics').hidden = true; $('server-latency').textContent = '服务器 —';
     $('offline-message').textContent = reason; renderRooms(); render();
   }
 });

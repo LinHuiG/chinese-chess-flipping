@@ -11,7 +11,7 @@ import java.util.*;
 public final class GameService extends Service {
     public static final String DEFAULT_HOST = "hgame.tudoucoding.tech";
     public static final int DEFAULT_PORT = 80;
-    public interface Observer { void changed(); void notice(String text); }
+    public interface Observer { void changed(); void notice(String text); default void networkChanged() { } }
     public final class LocalBinder extends Binder { public GameService service() { return GameService.this; } }
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final IBinder binder = new LocalBinder();
@@ -22,6 +22,15 @@ public final class GameService extends Service {
     public boolean connected, listingRooms;
     public long stateReceivedAt;
     public long roomsRevision;
+    public long serverLatency = -1, directLatency = -1;
+    public boolean direct;
+    private UdpPeer udp;
+    private String p2pId = "";
+    private int p2pGeneration;
+    private boolean p2pRequested;
+    private final Set<String> directRequests = new HashSet<>();
+    private final LinkedHashMap<String, JSONObject> directActions = new LinkedHashMap<>();
+    private final Runnable actionDeadline = this::fallback;
     public static final class Outcome {
         public final boolean won, live;
         public final String reason;
@@ -106,8 +115,10 @@ public final class GameService extends Service {
             }); }
             public void onMessage(String text) { dispatch(() -> receive(text)); }
             public void onEvent(String text) { dispatch(() -> receive(text)); }
+            public void onJsonMessage(JSONObject value, boolean event) { dispatch(() -> receive(value)); }
+            public void onLatency(long millis) { dispatch(() -> { serverLatency = millis; networkChanged(); }); }
             public void onClosed(String reason) { dispatch(() -> {
-                client = null; connected = false; clearRoom(); selfId = ""; rooms.clear(); listing.clear(); listingRooms = false;
+                client = null; connected = false; serverLatency = -1; clearRoom(); selfId = ""; rooms.clear(); listing.clear(); listingRooms = false;
                 outcome = null; roomsRevision++;
                 if (wakeLock.isHeld()) wakeLock.release();
                 status = reason + (foreground && enabled ? "，3 秒后重连" : "");
@@ -115,15 +126,15 @@ public final class GameService extends Service {
                 if (foreground && enabled) handler.postDelayed(retry, 3000);
             }); }
         };
-        client = transport().equals("TCP") ? new TcpClient(did, getPackageName(), "0.4.0", listener)
-                : new WsClient(did, getPackageName(), "0.4.0", transport().equals("HTTPS"), listener);
+        client = transport().equals("TCP") ? new TcpClient(did, getPackageName(), "0.5.0", listener)
+                : new WsClient(did, getPackageName(), "0.5.0", transport().equals("HTTPS"), listener);
         client.connect(host(), port());
     }
     public void disconnect() {
         enabled = false; generation++;
         handler.removeCallbacks(retry);
         if (client != null) client.close();
-        client = null; connected = false; clearRoom(); selfId = ""; rooms.clear(); listing.clear(); listingRooms = false;
+        client = null; connected = false; serverLatency = -1; clearRoom(); selfId = ""; rooms.clear(); listing.clear(); listingRooms = false;
         outcome = null; roomsRevision++;
         status = "已断开连接";
         if (wakeLock.isHeld()) wakeLock.release();
@@ -137,6 +148,7 @@ public final class GameService extends Service {
         preferences().edit().putString("host", host).putInt("port", port).putString("transport", transport).apply();
     }
     private void clearRoom() {
+        closeDirect(); p2pId = ""; p2pRequested = false; directActions.clear(); directRequests.clear();
         room = state = null; lastResult = ""; referee.clear(); handler.removeCallbacks(tick);
     }
     public boolean isHost() { return room != null && selfId.equals(room.optString("hostId")); }
@@ -169,7 +181,17 @@ public final class GameService extends Service {
         put(action, "move", state == null ? -1 : state.optLong("move"));
         action(action);
     }
-    private void action(JSONObject action) { send(put(context("ACTION"), "action", action)); }
+    private void action(JSONObject action) {
+        JSONObject request = put(put(context("ACTION"), "action", action), "operationId", UUID.randomUUID().toString().replace("-", ""));
+        if (direct && playing()) {
+            if (isHost()) { directAction(request, selfId); return; }
+            if (!directActions.isEmpty()) { notice("上一步正在确认，请稍候"); return; }
+            directActions.put(request.optString("operationId"), request);
+            if (sendDirect(request)) { handler.postDelayed(actionDeadline, 3500); return; }
+            fallback(); return;
+        }
+        sendServer(request);
+    }
     private JSONObject context(String type) {
         JSONObject request = json(type);
         if (room != null) {
@@ -178,11 +200,116 @@ public final class GameService extends Service {
         }
         return request;
     }
-    private void send(JSONObject request) { if (connected && client != null) client.request(request); else notice("连接尚未建立"); }
+    private void sendServer(JSONObject request) { if (connected && client != null) client.request(request); else notice("连接尚未建立"); }
+    private void send(JSONObject request) {
+        String type = request.optString("type");
+        if ("HOST_REPLY".equals(type) && directRequests.remove(request.optString("requestId"))) {
+            JSONObject reply = put(put(context("DIRECT_REPLY"), "operationId", request.optString("operationId")), "ok", request.optBoolean("ok"));
+            if (request.optBoolean("ok")) { put(reply, "state", request.optJSONObject("state")); applyState(reply); }
+            else put(reply, "error", request.optString("error"));
+            if (!sendDirect(reply)) { fallback(); if (request.optBoolean("ok")) sendServer(put(context("HOST_STATE"), "state", request.optJSONObject("state"))); }
+            return;
+        }
+        if ("HOST_STATE".equals(type) && direct && !request.optBoolean("finalState")) {
+            JSONObject update = put(context("DIRECT_STATE"), "state", request.optJSONObject("state")); applyState(update);
+            if (!sendDirect(update)) fallback();
+            return;
+        }
+        sendServer(request);
+    }
+
+    private boolean sendDirect(JSONObject value) {
+        return direct && udp != null && udp.send(value.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+    private void directAction(JSONObject message, String actor) {
+        String operation = message.optString("operationId");
+        if (!operation.matches("[0-9a-f]{32}") || !matches(message)) return;
+        JSONObject forward = put(put(put(put(context("FORWARD"), "requestId", operation), "operationId", operation), "actorId", actor), "action", message.optJSONObject("action"));
+        directRequests.add(operation);
+        try { referee.action(forward); scheduleTick(); }
+        catch (JSONException ex) { directRequests.remove(operation); fallback(); }
+        changed();
+    }
+    private void applyState(JSONObject message) {
+        if (!matches(message)) return;
+        JSONObject update = message.optJSONObject("state");
+        if (update != null && (state == null || update.optLong("seq") > state.optLong("seq"))) {
+            state = update; stateReceivedAt = SystemClock.elapsedRealtime();
+        }
+    }
+    private void peerMessage(JSONObject message) {
+        if (!direct || !matches(message)) return;
+        String type = message.optString("type");
+        if (isHost()) {
+            if ("ACTION".equals(type)) directAction(message, room.optJSONArray("members").optString(1));
+            return;
+        }
+        if ("DIRECT_STATE".equals(type)) applyState(message);
+        else if ("DIRECT_REPLY".equals(type)) {
+            directActions.remove(message.optString("operationId"));
+            if (directActions.isEmpty()) handler.removeCallbacks(actionDeadline);
+            if (message.optBoolean("ok")) applyState(message); else notice(message.optString("error", "操作无效"));
+        } else return;
+        changed();
+    }
+    private void closeDirect() {
+        p2pGeneration++; if (udp != null) udp.close(); udp = null; direct = false; directLatency = -1;
+        handler.removeCallbacks(actionDeadline); networkChanged();
+    }
+    private void fallback() { fallback(true); }
+    private void fallback(boolean signal) {
+        String previous = p2pId; boolean existed = udp != null || direct;
+        closeDirect(); p2pId = "";
+        if (connected && room != null && !previous.isEmpty() && signal) sendServer(put(context("P2P_STOP"), "p2pId", previous));
+        if (connected && room != null) {
+            for (JSONObject request : directActions.values()) sendServer(request);
+            if (existed && isHost()) try { referee.syncState(); } catch (JSONException ignored) { }
+        }
+        directActions.clear();
+    }
+    private void p2pMessage(JSONObject message) throws JSONException {
+        if (!matches(message)) return;
+        String type = message.optString("type"), sid = message.optString("p2pId");
+        if (!sid.matches("[0-9a-f]{32}")) return;
+        if ("P2P_OFFER".equals(type) && isHost()) {
+            p2pId = sid; byte[] master = new byte[32]; new java.security.SecureRandom().nextBytes(master);
+            sendServer(put(put(context("P2P_KEY"), "p2pId", sid), "key", Base64.getEncoder().encodeToString(master)));
+            Arrays.fill(master, (byte) 0); return;
+        }
+        if ("P2P_CONFIG".equals(type)) {
+            if (udp != null && sid.equals(p2pId)) return;
+            closeDirect(); p2pId = sid; final int epoch = p2pGeneration;
+            byte[] master = Base64.getDecoder().decode(message.getString("key"));
+            String binding = sid + "|" + room.optLong("roomId") + "|" + room.optLong("version") + "|" + room.optString("gameId")
+                    + "|" + room.optJSONArray("members").optString(0) + "|" + room.optJSONArray("members").optString(1);
+            try {
+                udp = new UdpPeer(host(), message.getInt("udpPort"), sid, message.getString("token"), master, binding, isHost(), new UdpPeer.Listener() {
+                    private void dispatch(Runnable task) { handler.post(() -> { if (epoch == p2pGeneration && sid.equals(p2pId)) task.run(); }); }
+                    public void local(JSONArray values) { dispatch(() -> sendServer(put(put(context("P2P_LOCAL"), "p2pId", sid), "candidates", values))); }
+                    public void ready() { dispatch(() -> sendServer(put(context("P2P_READY"), "p2pId", sid))); }
+                    public void message(JSONObject value) { dispatch(() -> peerMessage(value)); }
+                    public void latency(long value) { dispatch(() -> { directLatency = value; networkChanged(); }); }
+                    public void failed() { dispatch(GameService.this::fallback); }
+                });
+            } catch (Exception ex) { fallback(); }
+            finally { Arrays.fill(master, (byte) 0); message.remove("key"); }
+            return;
+        }
+        if (!sid.equals(p2pId)) return;
+        if ("P2P_PEER".equals(type) && udp != null) udp.candidates(message.getJSONArray("candidates"));
+        else if ("P2P_ACTIVE".equals(type) && udp != null) {
+            direct = true; udp.activate(); networkChanged();
+            if (isHost()) referee.syncState(); else sync();
+        } else if ("P2P_RELAY".equals(type)) fallback(false);
+    }
 
     private void receive(String text) {
+        try { receive(new JSONObject(text)); }
+        catch (JSONException ex) { notice(text.startsWith("{") ? "服务器状态格式异常" : text); }
+    }
+    private void receive(JSONObject message) {
         try {
-            JSONObject message = new JSONObject(text);
+            if (message.optString("type").startsWith("P2P_")) { p2pMessage(message); return; }
             switch (message.optString("type")) {
                 case "SESSION":
                     selfId = message.getString("selfId"); clearRoom(); listingRooms = false; listRooms(); break;
@@ -199,12 +326,7 @@ public final class GameService extends Service {
                 case "ROOM_CLOSED":
                     clearRoom(); listingRooms = false; listRooms(); break;
                 case "STATE":
-                    if (matches(message)) {
-                        JSONObject update = message.getJSONObject("state");
-                        if (state == null || update.optLong("seq") > state.optLong("seq")) {
-                            state = update; stateReceivedAt = SystemClock.elapsedRealtime();
-                        }
-                    }
+                    applyState(message);
                     break;
                 case "FORWARD":
                     if (matches(message) && isHost()) referee.action(message); break;
@@ -218,6 +340,7 @@ public final class GameService extends Service {
                     }
                     break;
                 case "RESULT":
+                    if (message.optString("request").startsWith("P2P_")) { if (!message.optBoolean("ok")) fallback(); return; }
                     if (!message.optBoolean("ok")) {
                         if ("LIST".equals(message.optString("request"))) { listing.clear(); listingRooms = false; roomsRevision++; }
                         notice(message.optString("error", "请求失败"));
@@ -229,7 +352,7 @@ public final class GameService extends Service {
             }
             scheduleTick();
             changed();
-        } catch (JSONException ex) { notice(text.startsWith("{") ? "服务器状态格式异常" : text); }
+        } catch (JSONException | IllegalArgumentException ex) { notice("服务器状态格式异常"); }
     }
     private boolean matches(JSONObject message) {
         return room != null && room.optLong("roomId") == message.optLong("roomId")
@@ -239,9 +362,13 @@ public final class GameService extends Service {
     private void acceptRoom(JSONObject message) throws JSONException {
         if (room != null && room.optLong("roomId") == message.optLong("roomId")
                 && message.optLong("version") <= room.optLong("version")) return;
+        closeDirect(); p2pId = ""; p2pRequested = false; directActions.clear(); directRequests.clear();
         room = message; state = null; listingRooms = false;
         if (message.optBoolean("playing")) { lastResult = ""; outcome = null; }
         referee.room(message, selfId);
+        if (playing() && !isHost() && room.optBoolean("p2pAvailable") && !p2pRequested) {
+            p2pRequested = true; sendServer(context("P2P_REQUEST"));
+        }
     }
     private static JSONObject json(String type) { return put(new JSONObject(), "type", type); }
     private static JSONObject put(JSONObject object, String key, Object value) {
@@ -249,6 +376,7 @@ public final class GameService extends Service {
         catch (JSONException ex) { throw new IllegalArgumentException(ex); }
     }
     private void changed() { if (observer != null) observer.changed(); }
+    private void networkChanged() { if (observer != null) observer.networkChanged(); }
     private void notice(String text) { if (observer != null) observer.notice(text); }
     public static String reason(String value) {
         return switch (value) {

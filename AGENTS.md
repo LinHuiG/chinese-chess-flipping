@@ -3,7 +3,7 @@
 - 新线程先阅读根目录 `PROJECT_STATUS.md` 和 `README.md`，再检查 `git status`。前者是历史执行记录，当前文件、测试和远端状态优先。
 - 房间、会话清理或自动重连相关工作，先阅读 [已归档房间方案](docs/ROOM_MANAGEMENT_PLAN.md)。棋盘、走子、吃子、胜负、禁止重复棋面和每步计时相关工作，先阅读 [已确认棋局规则](docs/GAME_RULES.md)。两份文档区分已确认规则与实现建议；方案归档不代表业务已经实现，不再把棋局规则列为尚未定义。
 - `server/` 和 `android_client/` 属于同一个仓库中的独立工程。GitHub Actions 配置放根目录 `.github/workflows/`，Docker 构建上下文只使用 `server/`。
-- 用户要求服务端 Java 21、Spring、TCP，并可配置监听端口和工作线程数。未经需求确认，不自行改为 HTTP 或其他语言。
+- 2026-09-28 用户已确认将服务端从 Java 21 / Spring / Netty 等价重写为 Rust，保留 TCP 和 HTTP/WS、可配置端口及工作线程。旧 Java 代码仅用于迁移对照和测试，不是生产运行入口。
 - 用户希望支持主流 Android 新系统；区分编译通过和真机兼容性验证，不宣称未经验证的机型兼容结果。
 - 用中文说明进度和使用方式，考虑用户不熟悉 Docker。
 - 不提交本机 SDK 路径、IDE 状态、构建缓存、密钥或签名文件；保留来源不明或用户新增的改动。
@@ -22,3 +22,4 @@
 - 本机 launcher：`C:\Users\linhui\AppData\Local\Programs\DeepSeekHarness\bin\dsh.cmd`。使用显式工作目录和安全引用的数据提示词，不泄露秘密，不并发编辑同一文件，不开展未获授权的外部消息或破坏性操作。
 
 - 2026-09-27 新增 WEB 与 IOS 平台标识，服务端同时提供 TCP 8888 和 HTTP/WS 80；网页版随 server/ 打包。Android 工程目录现为 android_client/。HTTPS/WSS 由用户反向代理终止 TLS；不要远程部署。
+- 2026-09-28 已授权 Rust 重写、安卓 UDP P2P 及安卓/Web 心跳延迟显示，见 docs/RUST_P2P_PLAN.md。P2P 密钥由房主生成，经服务器转发；用户明确不限制 HTTP/WS 模式。涉及 Web 或直连失败继续中转，直连失败不显示 UDP 延迟。保持 iOS 风格，控制重复编解码、复制、定时器及 UI 刷新开销。

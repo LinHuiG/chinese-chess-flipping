@@ -87,6 +87,7 @@ class ClientInteropTest {
             referee = refereeType.getConstructor(java.util.function.Consumer.class, java.util.function.LongSupplier.class)
                     .newInstance((java.util.function.Consumer<Object>)this::requestObject, (java.util.function.LongSupplier)now::get);
             Object listener = Proxy.newProxyInstance(loader, new Class<?>[]{listenerType}, (proxy, method, args) -> {
+                if (method.getName().equals("onJsonMessage")) return java.lang.reflect.InvocationHandler.invokeDefault(proxy, method, args);
                 switch (method.getName()) {
                     case "onConnected" -> { connections.incrementAndGet(); connected.countDown(); }
                     case "onMessage" -> messages.add((String)args[0]);

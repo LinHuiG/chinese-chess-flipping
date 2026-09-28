@@ -1,29 +1,13 @@
-# 服务端
+# Rust 服务端
 
-Java 21、Spring Boot、Netty，同时启动原始 TCP 和 HTTP/WebSocket 服务。IDEA 打开 pom.xml，运行 ServerApplication。
+运行入口：src/main.rs。TCP 加密协议见 ../docs/PROTOCOL.md；网络入口、房间和严格 JSON 解析分别位于 src/net.rs、src/hub.rs、src/json.rs。
 
-~~~sh
-mvn verify
-java -jar target/chess-server.jar
-~~~
+- `cargo run --release`：本地启动。
+- TCP_PORT=8888、HTTP_PORT=80、UDP_PORT=8888，均可设置为 1–65535。
+- TCP_WORKER_THREADS=4：共用 Tokio I/O 运行时的工作线程数，范围 1–256。
+- 网页位于 src/main/resources/web/，通过 include_bytes 嵌入程序，不在请求时读磁盘。
+- server/ 是唯一 Docker 构建上下文。Dockerfile 使用 musl 静态编译与 scratch 运行镜像，数值 UID 10001，无 JVM。
 
-配置：TCP_PORT 默认 8888；HTTP_PORT 默认 80，范围 1–65535；TCP_WORKER_THREADS 默认 4，范围 1–256。小型服务器可从 2 个 I/O 工作线程开始。部署示例使用 TCP_PORT=8888，与 App 默认地址端口一致。
+src/main/java、pom.xml 和 Java 测试用于迁移对照及 Android 规则/协议验证；它们不参与生产镜像运行。先构建 Rust，再运行 `mvn verify`；CHESS_RUST_BINARY 可指定需要验证的可执行文件。
 
-服务端管理加密会话、DID 在线去重、房间成员和版本、开始/结束/解散、房主请求转发、有效心跳超时和统一清理。不保存暗棋、历史棋面、准备详情或离线战绩，房主断线直接结束本局。
-
-## 资源控制
-
-- 会话注册、房间状态变更和事件入队在 RoomHub 内串行化，网络写入及加密在各自 EventLoop 顺序执行。
-- 心跳只安排下一次到期检查，不每秒遍历所有会话；普通业务不刷新有效心跳时间。
-- 每用户最多 8 个房主转发请求，8 秒到期；请求、用户及房间维护索引，清理不扫描全部房间。
-- 列表每页最多 64 个房间，通过有序 ID 游标继续查询。
-- Netty 使用至多 2 个小型堆缓冲池，无线程本地缓存；读缓冲自适应，写水位 32/64 KiB；每连接最多 32 个排队业务输出，慢连接关闭。
-- Docker JVM 默认 -Xms16m -Xmx128m -XX:+UseSerialGC -XX:MaxDirectMemorySize=16m -Xss512k；可通过 JAVA_TOOL_OPTIONS 替换。进程总内存还包含元空间、代码缓存、线程栈等。
-
-完整仓库运行实际 Android 代码联调和棋局规则测试；独立 server/ Docker 上下文自动跳过需要 android_client/ 的检查。ResourceProbe 是手动有界心跳连接测量工具，不在常规测试中运行。
-
-Docker 构建上下文只用 server/。完整部署文件及拉取命令见 [部署文档](../docs/DEPLOYMENT.md)，线协议见 [PROTOCOL.md](../docs/PROTOCOL.md)。
-
-网页入口 /，WebSocket 入口 /ws。两种传输共用 RoomHub 和 I/O 线程，不为网页额外启动 Spring MVC。CHL 允许 ANDROID、IOS、WEB。HTTP 静态文件白名单加载一次，不在网络线程逐次读盘。WS 大小、心跳、排队输出和房间操作与 TCP 使用一致边界。
-
-服务端不管理证书。HTTPS 反向代理必须保留原 Host，并转发 WebSocket Upgrade。配置见部署文档。
+会话、房间、请求队列、UDP 登记信息均只存内存。服务器不持久化棋面、战绩或密钥，不记录密钥日志。Web 与旧版安卓仍经服务器中转。P2P 信令允许 HTTP/WS，密钥安全继承该通道的实际安全边界。

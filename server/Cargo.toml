@@ -1,0 +1,27 @@
+[package]
+name = "chess-server"
+version = "0.5.0"
+edition = "2021"
+rust-version = "1.85"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "signal", "macros"] }
+axum = { version = "0.8", features = ["ws", "http1", "tokio"], default-features = false }
+futures-util = { version = "0.3", features = ["sink"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+bytes = "1"
+uuid = { version = "1", features = ["v4"] }
+aes-gcm = "0.10"
+p256 = { version = "0.13", features = ["ecdh", "pkcs8"] }
+hkdf = "0.12"
+sha2 = "0.10"
+crc32fast = "1"
+rand_core = { version = "0.6", features = ["getrandom"] }
+base64 = "0.22"
+zeroize = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,4 +1,6 @@
 export function id() { return [...crypto.getRandomValues(new Uint8Array(16))].map(n => n.toString(16).padStart(2, '0')).join(''); }
+const encoder = new TextEncoder();
+function tooLarge(text, limit) { return text.length > limit || (text.length * 3 > limit && encoder.encode(text).length > limit); }
 
 export class GameSocket {
   constructor(callbacks) {
@@ -17,12 +19,12 @@ export class GameSocket {
     this.startedAt = performance.now(); this.hello = id();
     socket.onopen = () => {
       if (generation !== this.generation) return;
-      this.send({ type: 'HELLO', TID: this.hello, CHL: 'WEB', DID: this.did, APP: 'chess-flipping.web', VER: '0.4.0' });
+      this.send({ type: 'HELLO', TID: this.hello, CHL: 'WEB', DID: this.did, APP: 'chess-flipping.web', VER: '0.5.0' });
     };
     socket.onmessage = event => {
       if (generation !== this.generation) return;
       try {
-        if (typeof event.data !== 'string' || new TextEncoder().encode(event.data).length > 69632) throw Error();
+        if (typeof event.data !== 'string' || tooLarge(event.data, 69632)) throw Error();
         const message = JSON.parse(event.data);
         if (!message || typeof message !== 'object' || typeof message.TID !== 'string' || !/^[0-9a-f]{32}$/.test(message.TID)
             || message.CODE !== 0 || !message.body || typeof message.body !== 'object' || Array.isArray(message.body)) throw Error();
@@ -34,7 +36,7 @@ export class GameSocket {
           const expected = this.pending.get(message.TID);
           if (!expected || expected.type !== message.type) throw Error();
           this.pending.delete(message.TID);
-          if (message.type === 'PONG') { this.pongAt = performance.now(); return; }
+          if (message.type === 'PONG') { this.pongAt = performance.now(); this.callbacks.latency?.(Math.max(0, Math.round(this.pongAt - expected.at))); return; }
         }
         this.callbacks.message(message.body);
       } catch { this.finish(generation, '连接中断，请重新连接'); }
@@ -47,17 +49,19 @@ export class GameSocket {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 262144) {
       this.finish(this.generation, '发送失败，请重新连接'); return;
     }
-    this.socket.send(JSON.stringify(value));
+    try { this.socket.send(typeof value === 'string' ? value : JSON.stringify(value)); }
+    catch { this.finish(this.generation, '发送失败，请重新连接'); }
   }
   request(body) {
     if (!this.ready) return false;
-    if (new TextEncoder().encode(JSON.stringify(body)).length > 65536) return false;
-    this.queue('REQUEST', 'RESPONSE', body); return this.ready;
+    const encoded = JSON.stringify(body);
+    if (tooLarge(encoded, 65536)) return false;
+    this.queue('REQUEST', 'RESPONSE', encoded); return this.ready;
   }
-  queue(type, expected, body = {}) {
+  queue(type, expected, body = '{}') {
     if (this.pending.size >= 128) { this.finish(this.generation, '服务器响应过慢'); return; }
     const tid = id(); this.pending.set(tid, { type: expected, at: performance.now() });
-    this.send({ type, TID: tid, body });
+    this.send(`{"type":"${type}","TID":"${tid}","body":${body}}`);
   }
   tick(generation) {
     if (generation !== this.generation) return;
@@ -74,6 +78,7 @@ export class GameSocket {
     if (generation !== this.generation) return;
     ++this.generation; clearInterval(this.timer); clearTimeout(this.retry);
     const socket = this.socket; this.socket = null; this.ready = false; this.pending.clear();
+    this.callbacks.latency?.(null);
     if (socket) { socket.onclose = socket.onerror = socket.onmessage = socket.onopen = null; socket.close(); }
     this.callbacks.closed(reason);
     if (this.enabled && !document.hidden) {

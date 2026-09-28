@@ -41,7 +41,15 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - run: mvn --batch-mode --no-transfer-progress -f server/pom.xml verify
+      - name: Build Rust server
+        run: |
+          rustup toolchain install stable --profile minimal
+          cargo +stable test --locked --manifest-path server/Cargo.toml
+          cargo +stable build --locked --release --manifest-path server/Cargo.toml
+      - name: Android rules and real Rust interoperability
+        env:
+          CHESS_RUST_BINARY: ${{ github.workspace }}/server/target/release/chess-server
+        run: mvn --batch-mode --no-transfer-progress -f server/pom.xml verify
   publish:
     if: needs.test.outputs.publish_image == 'true'
     needs: test

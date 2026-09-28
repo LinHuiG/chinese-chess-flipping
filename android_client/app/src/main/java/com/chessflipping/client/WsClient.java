@@ -40,13 +40,13 @@ public final class WsClient extends WebSocketListener implements GameConnection 
         try {
             hello = id();
             send(new JSONObject().put("type", "HELLO").put("TID", hello).put("CHL", "ANDROID")
-                    .put("DID", did).put("APP", app).put("VER", version));
+                    .put("DID", did).put("APP", app).put("VER", version).put("UDP", 1));
         } catch (JSONException ex) { stop("握手编码失败"); }
     }
     @Override public synchronized void onMessage(WebSocket ws, String text) {
         if (closed) return;
         try {
-            if (text.getBytes(StandardCharsets.UTF_8).length > 69632) throw new IllegalArgumentException();
+            if (tooLarge(text, 69632)) throw new IllegalArgumentException();
             JSONTokener parser = new JSONTokener(text);
             Object value = parser.nextValue();
             if (!(value instanceof JSONObject envelope) || parser.nextClean() != 0) throw new IllegalArgumentException();
@@ -59,11 +59,11 @@ public final class WsClient extends WebSocketListener implements GameConnection 
                 if (!type.equals("READY") || !tid.equals(hello)) throw new IllegalArgumentException();
                 ready = true; pongAt = pingAt = System.nanoTime(); listener.onConnected(); return;
             }
-            if (type.equals("EVENT")) { listener.onEvent(body.toString()); return; }
+            if (type.equals("EVENT")) { listener.onJsonMessage(body, true); return; }
             Pending expected = pending.remove(tid);
             if (expected == null || !expected.type().equals(type)) throw new IllegalArgumentException();
-            if (type.equals("PONG")) pongAt = System.nanoTime();
-            listener.onMessage(body.toString());
+            if (type.equals("PONG")) { pongAt = System.nanoTime(); listener.onLatency(TimeUnit.NANOSECONDS.toMillis(pongAt - expected.sent())); }
+            listener.onJsonMessage(body, false);
         } catch (Exception ex) { stop("服务器消息格式异常，请重新连接"); }
     }
     @Override public void onMessage(WebSocket ws, okio.ByteString bytes) { stop("服务器协议不匹配"); }
@@ -74,20 +74,24 @@ public final class WsClient extends WebSocketListener implements GameConnection 
     }
     @Override public synchronized void request(JSONObject request) {
         if (!ready || closed) { listener.onMessage("请等待连接建立"); return; }
-        if (request.toString().getBytes(StandardCharsets.UTF_8).length > 65536) { listener.onMessage("消息太长"); return; }
-        queue("REQUEST", "RESPONSE", request);
+        String body = request.toString();
+        if (tooLarge(body, 65536)) { listener.onMessage("消息太长"); return; }
+        queue("REQUEST", "RESPONSE", body);
     }
-    private void queue(String type, String expected, JSONObject body) {
+    private void queue(String type, String expected, String body) {
         if (pending.size() >= 128) { stop("等待中的请求过多，请重新连接"); return; }
-        try {
-            String tid = id();
-            pending.put(tid, new Pending(expected, System.nanoTime()));
-            send(new JSONObject().put("type", type).put("TID", tid).put("body", body));
-        } catch (JSONException ex) { stop("消息编码失败"); }
+        String tid = id();
+        pending.put(tid, new Pending(expected, System.nanoTime()));
+        send("{\"type\":\"" + type + "\",\"TID\":\"" + tid + "\",\"body\":" + body + "}");
     }
     private void send(JSONObject value) {
+        send(value.toString());
+    }
+    private static boolean tooLarge(String value, int max) { return value.length() > max || (value.length() > max / 3 && value.getBytes(StandardCharsets.UTF_8).length > max); }
+    private void send(String text) {
         if (closed) return;
-        if (socket == null || socket.queueSize() > 262144 || !socket.send(value.toString())) stop("消息发送失败");
+        if (tooLarge(text, 69632)) { stop("消息太长"); return; }
+        if (socket == null || socket.queueSize() > 262144 || !socket.send(text)) stop("消息发送失败");
     }
     private synchronized void tick() {
         if (closed) return;
@@ -97,7 +101,7 @@ public final class WsClient extends WebSocketListener implements GameConnection 
                 || pending.values().stream().anyMatch(p -> now - p.sent() >= TimeUnit.SECONDS.toNanos(15))) {
             stop("服务器响应超时"); return;
         }
-        if (now - pingAt >= TimeUnit.SECONDS.toNanos(5)) { pingAt = now; queue("PING", "PONG", new JSONObject()); }
+        if (now - pingAt >= TimeUnit.SECONDS.toNanos(5)) { pingAt = now; queue("PING", "PONG", "{}"); }
     }
     private synchronized void stop(String reason) {
         if (closed) return;

@@ -1,6 +1,19 @@
 # 项目执行记录与交接
 
-更新时间：2026-09-27（Asia/Shanghai）。新线程先阅读本文和 README.md，再检查 git status；当前代码、测试和远端状态优先于历史记录。
+更新时间：2026-09-28（Asia/Shanghai）。新线程先阅读本文和 README.md，再检查 git status；当前代码、测试和远端状态优先于历史记录。
+
+## 0.5.0 Rust / Android UDP P2P / 心跳延迟（2026-09-28，本地完成，待发布）
+
+- 用户已授权实施，方案见 docs/RUST_P2P_PLAN.md。Rust 生产服务包含 TCP、HTTP/WS 和 UDP 登记协助，兼容现有 TCP；Java 保留作迁移参考和验证夹具，不进入镜像。
+- 安卓双方开局后尝试 UDP 直连，房主分发随机主密钥，方向独立 AES-GCM、64 包防重放窗口、操作去重和有限重试；普通 HTTP/WS 也允许密钥分发。失败中转，服务器心跳和断线判负继续保留。
+- 安卓与 Web 增加服务器 RTT；安卓直连成功才显示 UDP RTT，失败隐藏。状态胶囊沿用 iOS 风格，仅更新网络文字。网络接收复用解析对象，网页和 WS 请求避免重复序列化，Rust 广播共用已编码字节。
+- Rust release 编译通过；Android assembleDebug / lintDebug 通过（0 errors、9 warnings）。首次集中 Maven 64 项中 63 项通过，修正防重放测试对重复包丢弃行为的错误预期后，定向 UdpSessionTest / RustInteropTest 6 项全通过；最新报告合计 64 项、0 失败/错误/跳过，未为计数重复全量执行。
+- Rust 与实际 Android TCP/WS 混合房间、心跳、同 DID 替换、普通 WS 下 UDP 密钥分发和加密直连、确认超时回退及退房判负的 4 项黑盒检查首次均通过。桌面 JVM 联调不等同真机验证。
+- 两台 API 37 模拟器在普通 HTTP 连接下建立直连，双方翻棋；仅阻断客人 App 的 UDP 后均回退中转、隐藏 UDP RTT，继续走子和退出判负成功。临时规则已移除，原服务器设置已恢复，两个本轮模拟器和临时 Rust 服务已停止；原本机 80/8888 服务未动。
+- 实际 Rust + 双浏览器的建房/准备/四步翻棋/同步/离开/解散及桌面、手机横竖屏检查通过，服务器 RTT 可见；既有 web-review-smoke 呈现与消息边界检查通过。截图见 docs/VERIFICATION.md。
+- Windows 同机、2 工作线程、102 个 TCP 心跳连接、15.01 秒轻载采样：Rust 工作集 8.42 MiB，Java 125.21 MiB，约减少 93.3%；私有内存 2.62 / 116.41 MiB。CPU 太低，无法据此给出吞吐提升倍数；并非 Linux 或容量结果。Linux 镜像体积待真实发布后核对。
+- APK：android_client/build/deliverables/chinese-chess-flipping-0.5.0-debug.apk，1647390 字节，versionCode 5，v2 调试签名校验通过；SHA-256：3808AAE0EF0C1F46650B129DE126A1EC8F681491060C8AB1E8D79DA50CEC0A29。
+- 当前待提交、推送和 Actions 发布归档；未远程部署。公网 NAT、实际 Android 厂商设备、HTTPS/WSS 和长期后台不在本次验证结果内。保留原未跟踪 android_client/gradle/gradle-daemon-jvm.properties。
 
 ## 0.4.0 提交与镜像发布（2026-09-27，成功）
 

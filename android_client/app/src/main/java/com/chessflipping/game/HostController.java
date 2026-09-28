@@ -17,11 +17,14 @@ public final class HostController {
     private int seconds = 60;
     private long sequence, move;
     private boolean starting, finishing;
+    // Results are tiny and scoped to one room generation; snapshots are produced only when needed.
+    private final LinkedHashMap<String, String> completed = new LinkedHashMap<>();
 
     public HostController(Consumer<JSONObject> send, LongSupplier clock) { this.send = send; this.clock = clock; }
-    public void clear() { room = null; game = null; ready.clear(); starting = finishing = false; sequence = move = 0; }
+    public void clear() { room = null; game = null; ready.clear(); completed.clear(); starting = finishing = false; sequence = move = 0; }
     public void room(JSONObject room, String self) throws JSONException {
         this.room = room; this.self = self; sequence = 0; finishing = false;
+        completed.clear();
         if (!room.optBoolean("playing")) {
             game = null; starting = false; ready.clear(); move = 0;
             if (host()) publish();
@@ -41,6 +44,13 @@ public final class HostController {
         if (!host()) return;
         JSONObject action = message.getJSONObject("action");
         String actor = message.getString("actorId"), kind = action.optString("type"), error = null;
+        String operation = message.optString("operationId"), identity = actor + ":" + operation;
+        if (!operation.isEmpty() && completed.containsKey(identity)) {
+            String previous = completed.get(identity);
+            JSONObject reply = context("HOST_REPLY").put("requestId", message.getString("requestId")).put("operationId", operation).put("ok", previous.isEmpty());
+            if (previous.isEmpty()) reply.put("state", snapshot(++sequence)); else reply.put("error", previous);
+            send.accept(reply); return;
+        }
         JSONArray members = room.getJSONArray("members");
         int player = -1;
         for (int i = 0; i < members.length(); i++) if (members.getString(i).equals(actor)) player = i;
@@ -63,6 +73,10 @@ public final class HostController {
             else { seconds = choice; ready.clear(); }
         } else error = "未知操作";
         JSONObject reply = context("HOST_REPLY").put("requestId", message.getString("requestId")).put("ok", error == null);
+        if (!operation.isEmpty()) {
+            reply.put("operationId", operation); completed.put(identity, error == null ? "" : error);
+            if (completed.size() > 128) completed.remove(completed.keySet().iterator().next());
+        }
         if (error == null) reply.put("state", snapshot(++sequence)); else reply.put("error", error);
         send.accept(reply);
         if (room.optBoolean("playing") && game != null && game.winner >= 0) finish();
@@ -90,9 +104,12 @@ public final class HostController {
                 .put("version", room.getLong("version")).put("gameId", room.optString("gameId"));
     }
     private void publish() throws JSONException { send.accept(context("HOST_STATE").put("state", snapshot(++sequence))); }
+    public void syncState() throws JSONException { if (host()) publish(); }
     private void finish() throws JSONException {
         if (finishing || game == null || game.winner < 0 || !room.optBoolean("playing")) return;
         finishing = true;
+        // Finish travels through the server: publish the final public snapshot on that same ordered path.
+        send.accept(context("HOST_STATE").put("finalState", true).put("state", snapshot(++sequence)));
         send.accept(context("FINISH").put("winnerId", room.getJSONArray("members").getString(game.winner)).put("reason", game.reason));
     }
 }
