@@ -2,6 +2,8 @@
 
 实际已发布版本和 Actions 结果见 ../PROJECT_STATUS.md。本文件说明新版本配置；用户自行拉取部署，助手不远程操作服务器。
 
+2026-09-28 已发布 Rust 0.5.0（服务端提交 43534f3）。[Actions 36427114170](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36427114170) 测试与发布均成功，latest / sha-43534f3 指向同一摘要：`sha256:83549f17242b6eae2f35d7ff76dc5402453716ecbbd9594db108a31281c0cb6c`。压缩层下载合计约 0.94 MiB（amd64）或 0.89 MiB（arm64），不包含 Docker 本身，也不是运行内存。客户端后续修正不改变该服务端镜像。
+
 ## 使用 Docker Compose
 
 仓库的 server/compose.yaml 已包含全部端口与安全配置。在服务器保存该文件，创建同目录 .env：

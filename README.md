@@ -1,6 +1,6 @@
 # 翻棋联机
 
-Rust 服务端、原生 Java Android 客户端，以及响应式网页版。server/ 和 android_client/ 是独立工程；Docker 只构建 server/，包含网页资源。当前开发版本 0.5.0；实际发布和验证状态见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
+Rust 服务端、原生 Java Android 客户端，以及响应式网页版。server/ 和 android_client/ 是独立工程；Docker 只构建 server/，包含网页资源。当前版本 0.5.0；实际发布和验证状态见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
 
 接续阅读 [协作说明](AGENTS.md)、[本轮方案](docs/RUST_P2P_PLAN.md)、[房间规则](docs/ROOM_MANAGEMENT_PLAN.md)、[棋局规则](docs/GAME_RULES.md)、[通信协议](docs/PROTOCOL.md)。
 

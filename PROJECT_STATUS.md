@@ -2,20 +2,23 @@
 
 更新时间：2026-09-28（Asia/Shanghai）。新线程先阅读本文和 README.md，再检查 git status；当前代码、测试和远端状态优先于历史记录。
 
-## 0.5.0 Rust / Android UDP P2P / 心跳延迟（2026-09-28，已推送，发布中）
+## 0.5.0 Rust / Android UDP P2P / 心跳延迟（2026-09-28，已发布）
 
 - 用户已授权实施，方案见 docs/RUST_P2P_PLAN.md。Rust 生产服务包含 TCP、HTTP/WS 和 UDP 登记协助，兼容现有 TCP；Java 保留作迁移参考和验证夹具，不进入镜像。
 - 安卓双方开局后尝试 UDP 直连，房主分发随机主密钥，方向独立 AES-GCM、64 包防重放窗口、操作去重和有限重试；普通 HTTP/WS 也允许密钥分发。失败中转，服务器心跳和断线判负继续保留。
 - 安卓与 Web 增加服务器 RTT；安卓直连成功才显示 UDP RTT，失败隐藏。状态胶囊沿用 iOS 风格，仅更新网络文字。网络接收复用解析对象，网页和 WS 请求避免重复序列化，Rust 广播共用已编码字节。
 - Rust release 编译通过；Android assembleDebug / lintDebug 通过（0 errors、9 warnings）。首次集中 Maven 64 项中 63 项通过，修正防重放测试对重复包丢弃行为的错误预期后，定向 UdpSessionTest / RustInteropTest 6 项全通过；最新报告合计 64 项、0 失败/错误/跳过，未为计数重复全量执行。
-- Actions Linux 独立完整验证已通过：64 项，0 失败/错误/跳过，2026-09-28 21:15（北京时间）完成测试 job；Rust release 构建通过。镜像发布结果待下方更新。
+- Actions Linux 独立完整验证已通过：64 项，0 失败/错误/跳过，2026-09-28 21:15（北京时间）完成测试 job；Rust release 构建通过。镜像发布结果见下方。
 - Rust 与实际 Android TCP/WS 混合房间、心跳、同 DID 替换、普通 WS 下 UDP 密钥分发和加密直连、确认超时回退及退房判负的 4 项黑盒检查首次均通过。桌面 JVM 联调不等同真机验证。
 - 两台 API 37 模拟器在普通 HTTP 连接下建立直连，双方翻棋；仅阻断客人 App 的 UDP 后均回退中转、隐藏 UDP RTT，继续走子和退出判负成功。临时规则已移除，原服务器设置已恢复，两个本轮模拟器和临时 Rust 服务已停止；原本机 80/8888 服务未动。
 - 实际 Rust + 双浏览器的建房/准备/四步翻棋/同步/离开/解散及桌面、手机横竖屏检查通过，服务器 RTT 可见；既有 web-review-smoke 呈现与消息边界检查通过。截图见 docs/VERIFICATION.md。
-- Windows 同机、2 工作线程、102 个 TCP 心跳连接、15.01 秒轻载采样：Rust 工作集 8.42 MiB，Java 125.21 MiB，约减少 93.3%；私有内存 2.62 / 116.41 MiB。CPU 太低，无法据此给出吞吐提升倍数；并非 Linux 或容量结果。Linux 镜像体积待真实发布后核对。
+- Windows 同机、2 工作线程、102 个 TCP 心跳连接、15.01 秒轻载采样：Rust 工作集 8.42 MiB，Java 125.21 MiB，约减少 93.3%；私有内存 2.62 / 116.41 MiB。CPU 太低，无法据此给出吞吐提升倍数；并非 Linux 或容量结果。
 - 复核后补正直连时房主无效操作的提示归属：只通知房主，不把错误发给客人；UDP 消息 ID 复用一次 UUID 生成结果；重新 assembleDebug / lintDebug 通过。该项只改客户端，不影响正在发布的 Rust 镜像，也未重复整套联机检查。
+- 客户端补充提交 c2de7516c57807be9ef1044fd99938a71d4d7b48 已推送；[Actions 36428520194](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36428520194) test 成功、publish 跳过，验证仅客户端变更不重复打包镜像。
 - 最新 APK：android_client/build/deliverables/chinese-chess-flipping-0.5.0-debug.apk，1647415 字节，versionCode 5，v2 调试签名校验通过；SHA-256：E4A45964BD32B7B638AF10595BD8191AF874F724454569EF727FA479C367A098。先前 1647390 字节版本已被替换。
-- 业务提交 43534f3005719ace285156471293a58fbc4ff156 已推送 origin/main；[Actions 36427114170](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36427114170) 正在执行检查与镜像发布，完成后补记真实结果。未远程部署。公网 NAT、实际 Android 厂商设备、HTTPS/WSS 和长期后台不在本次验证结果内。保留原未跟踪 android_client/gradle/gradle-daemon-jvm.properties。
+- 服务端业务提交 43534f3005719ace285156471293a58fbc4ff156 已推送 origin/main；[Actions 36427114170](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36427114170) test / publish 均成功，2026-09-28 21:34:05（北京时间）完成发布。latest 与 sha-43534f3 均已匿名核实指向 sha256:83549f17242b6eae2f35d7ff76dc5402453716ecbbd9594db108a31281c0cb6c，包含 linux/amd64、linux/arm64。
+- 实际镜像压缩层合计：amd64 984783 字节（0.94 MiB）、arm64 937729 字节（0.89 MiB）；上一版 Java 分别 114146085 / 111189376 字节，约减少 99.1%。解压层 tar 合计分别 1991168 / 1777664 字节。已校验层摘要、ELF 架构与无动态解释器、非 root 用户及 TCP/HTTP/UDP 端口；本机没有 Docker，未在本机运行容器。不能把解压层 tar 大小当作进程内存。
+- 未远程部署；原本机服务保留旧版本。公网 NAT、实际 Android 厂商设备、HTTPS/WSS 和长期后台不在本次验证结果内。保留原未跟踪 android_client/gradle/gradle-daemon-jvm.properties；源码、协议与本阶段记录已入库，APK 和构建缓存不入库。
 
 ## 0.4.0 提交与镜像发布（2026-09-27，成功）
 
