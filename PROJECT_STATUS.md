@@ -1,11 +1,21 @@
 # 项目执行记录与交接
 
+## 两台服务器更新至 0.6.0（2026-09-29）
+
+- 用户本轮明确授权按部署文档更新两台服务器；已分别备份 Compose 配置、容器信息并为旧镜像保留回退标签，再拉取 latest、重建对应服务。
+- 两台均运行 0.6.0，镜像发布提交 ca2bb9fd166b38fef72c8d98f75e08e822365cfe，仓库摘要 sha256:75b906f98f09e1c18b243a36d9a84478629ed28a202a705c46e63c6237e55c33。
+- 原配置未修改：两台 TCP/UDP 均为 8888；第一台 HTTP 80 通过原容器网络反代，第二台保留 HTTP 8086 的原有绑定与反代。第一台每日更新定时器保持 enabled/active。
+- 已验证：两台容器 running、重启计数 0、UDP 8888 容器内监听和 Docker 映射；公网 HTTPS、TCP v2 握手响应、WSS v2 READY/PONG；下载内嵌 APK 均为 0.6.0 / versionCode 7、2253138 字节，SHA-256 20318287daff4b1790bb88cbb462c60652ac5092c6e41ca67eb56795dcf619a8，与 Actions 附件一致。
+- 本轮未验证公网 UDP 端到端登记、真实对局或 Wi-Fi/5G/IPv6 P2P 成功率；监听与映射正常不代表这些场景已经通过。0.5.x 与协议 v2 不兼容，已告知用户两端 App 首次需要手动升级至 0.6.0。
+- 部署记录仅保留脱敏结果；实际地址、账户、密码、服务器备份和 SSH 辅助脚本均未加入仓库。
+
 ## amd64 独立提前发布（2026-09-29，配置调整）
 
 - 用户要求拆分发布、amd64 完成即可使用，并明确本次没有服务端代码修改，不得重新发布镜像。仅修改工作流与仓库文档，未改 server/、Android 或 APK 打包代码。
 - publish 改为原生 amd64 / arm64 矩阵，移除 QEMU；fail-fast=false，独立发布 latest-amd64 / latest-arm64 和架构专用 sha 标签。按架构隔离缓存，两个任务都成功后以本次 digest 合并通用 latest / sha-*；同分支串行发布防止旧构建覆盖新标签。
 - push 增加路径过滤，并从内部变更判定移除工作流路径；仅 server/、android_client/ 或 scripts/package-app-update.py 变化自动触发。保留 Android 发布，避免 APK 更新漏入镜像；PR 检查及手动发布保留。
 - actionlint 1.7.12 和 10 段 shell 语法检查通过；本次 4 个改动文件的发布路径匹配为 0，server/、Android 和 APK 打包脚本均无改动。提交附带 [skip ci]，配合路径过滤避免推送后重新构建；未手动触发 Actions、未改远端镜像标签。新架构标签从下次代码发布开始生成，原生 ARM 构建和实际提速尚未实跑验证。
+- 工作流提交 05b8944 已推送；推送后 GitHub API 核实该提交 Actions 运行数为 0，GHCR latest 索引仍为 `sha256:75b906f98f09e1c18b243a36d9a84478629ed28a202a705c46e63c6237e55c33`，本次未重新构建或发布镜像。
 
 ## 会话/协议 v2 与 App 更新（2026-09-29，已发布）
 
