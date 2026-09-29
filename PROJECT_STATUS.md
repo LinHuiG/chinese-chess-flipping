@@ -1,6 +1,6 @@
 # 项目执行记录与交接
 
-## 会话/协议 v2 与 App 更新（2026-09-29，本地完成，发布待核对）
+## 会话/协议 v2 与 App 更新（2026-09-29，已发布）
 
 - 用户“执行”授权后开始本轮，新增要求服务端每个功能块有中文注释；main/net/hub/wire/json/update 已补齐。没有启用 dsh 或子代理，没有远程部署。
 - 已实现：逻辑用户与连接分离、userId/token 本地保存、最后心跳 60 秒清理、10 秒可疑状态、连接代次接管；昵称本地设置和转发、默认房名、断线灰显；Android AtomicFile / Web sessionStorage 完整房主存档，恢复保留原计时与操作去重。服务器仍全内存，重启全部失效。
@@ -11,9 +11,11 @@
 - App 更新：设置提供检查更新与自动检查开关；TCP 功能号 48–51，32 KiB 有界分块；HTTP /api/app/version 和 /api/app/latest.apk，必须携带当前 versionCode，同版或更新版本不下载。校验大小、SHA-256、包名、versionCode 和当前安装签名，使用 FileProvider 调用系统安装器，游戏中推迟自动弹出安装。未承诺静默安装。
 - 按用户追问改为 Actions 构建固定签名 release APK，再生成清单并内嵌镜像；不提交 APK。Android / 服务端 / 打包脚本 / 发布工作流变化均触发镜像发布。已通过 GitHub Secrets API 加密配置 4 项 APK 签名参数，私钥未写入仓库或镜像；PR 不注入发布密钥，正式发布缺少配置直接失败。
 - 本地 release APK：0.6.0 / versionCode 7，2253138 字节，SHA-256 `6cbc74f832eee32f0b2605ea6eac4a7f2c27310f37a3262005d8f097ca6c9009`，路径 android_client/app/build/outputs/apk/release/app-release.apk；apksigner 验证通过，证书与原 0.5.1 一致。Actions 构建的 APK 哈希可能不同，以附件内清单为准。0.5.x 无更新入口，首次需手动覆盖安装。
-- 未验证：系统未知来源授权与真实安装流程、真实 Android 进程重启/真机系统兼容、真实 Wi-Fi/5G/IPv6 连通性与公网 NAT 改善、Linux 镜像/性能变化。不得将本机编译/桌面检查当成这些结论。Actions 实际结果待发布后记录。
-- 主改造提交 314dd52 已推送。首轮 Actions 36557834285 在 setup-android v3 阶段失败：默认请求 Google 已停止提供的 tools 包；未进入 APK 编译和镜像发布。已按上游说明改用 v4、明确 SDK 包并将 setup-java 升至 v5，后续结果待核对。
+- 未验证：系统未知来源授权与真实安装流程、真实 Android 进程重启/真机系统兼容、真实 Wi-Fi/5G/IPv6 连通性与公网 NAT 改善、Linux 容器实际运行及性能变化。不得将编译/桌面检查当成这些结论；没有远程部署。
+- 主改造提交 314dd52 已推送。首轮 Actions 36557834285 在 setup-android v3 阶段失败：默认请求 Google 已停止提供的 tools 包；未进入 APK 编译和镜像发布。已按上游说明改用 v4、明确 SDK 包并将 setup-java 升至 v5，修正结果见下方发布记录。
 - 第二轮 36558271796 确认 SDK 37 的仓库包名已改为 `platforms;android-37.0`，不是 `platforms;android-37`；依据 Google repository2-3.xml 修正安装参数，App 的 compileSdk/targetSdk 保持 37。
+- 第三轮 [Actions 36558536441](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36558536441) 对应 ca2bb9fd166b38fef72c8d98f75e08e822365cfe，test / publish 均成功，2026-09-29 19:15:45（北京时间）完成发布。Linux 检查包含固定签名 APK、清单核对、Rust 7 项及 release、Android 互通及 lint、Node 恢复。已下载 app-update 附件并验证 SHA-256 及旧版签名一致；实际 Actions APK 为 2253138 字节，SHA-256 `20318287daff4b1790bb88cbb462c60652ac5092c6e41ca67eb56795dcf619a8`，交付路径 android_client/build/deliverables/chinese-chess-flipping-0.6.0-actions.apk。APK 及下载缓存均未入库。
+- 已匿名核实 ghcr.io/linhuig/chinese-chess-flipping 的 latest 与 sha-ca2bb9f 指向同一索引 `sha256:75b906f98f09e1c18b243a36d9a84478629ed28a202a705c46e63c6237e55c33`，实际包含 linux/amd64 和 linux/arm64。用户可按 docs/DEPLOYMENT.md 拉取部署；原本机服务与用户模拟器未改动，本轮回环联调服务已停止。仅保留原未跟踪 gradle-daemon-jvm.properties。
 
 更新时间：2026-09-29（Asia/Shanghai）。新线程先阅读本文和 README.md，再检查 git status；当前代码、测试和远端状态优先于历史记录。
 

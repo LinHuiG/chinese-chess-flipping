@@ -1,6 +1,6 @@
 # 翻棋联机
 
-Rust 服务端、原生 Java Android 客户端，以及响应式网页版。server/ 和 android_client/ 是独立工程；Docker 只构建 server/，包含网页资源。当前开发版本 0.6.0；实际发布和验证状态见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
+Rust 服务端、原生 Java Android 客户端，以及响应式网页版。server/ 和 android_client/ 是独立工程；Docker 只构建 server/，包含网页和 APK 更新资源。当前版本 0.6.0；实际发布和验证状态见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
 
 接续阅读 [协作说明](AGENTS.md)、[本轮方案](docs/SESSION_PROTOCOL_V2_PLAN.md)、[房间规则](docs/ROOM_MANAGEMENT_PLAN.md)、[棋局规则](docs/GAME_RULES.md)、[通信协议](docs/PROTOCOL.md)。
 
@@ -38,7 +38,7 @@ gradlew.bat assembleDebug lintDebug testDebugUnitTest
 
 服务端仅保留 Rust 实现，旧 Java/Maven 已移除；棋规、UDP 和恢复检查迁入 Android 单元测试。Android 保持原生 Java，不引入 WebRTC 或原生 .so。APK 位于 android_client/app/build/outputs/apk/debug/app-debug.apk。
 
-原始 TCP/WS 互通测试需先启动本地服务器，给 Gradle 设置 CHESS_TEST_TCP_PORT / CHESS_TEST_HTTP_PORT；未设置时仅跳过该互通项。Web 恢复/去重纯逻辑检查：`node scripts/session-v2-test.mjs`；双浏览器联调：设置 CHESS_WEB_URL 后运行 `node scripts/web-smoke.cjs`（需 Playwright）。
+原始 TCP/WS 与更新下载互通测试需先启动本地服务器，给 Gradle 设置 CHESS_TEST_TCP_PORT / CHESS_TEST_HTTP_PORT；未设置时跳过相应互通项。Web 恢复/去重纯逻辑检查：`node scripts/session-v2-test.mjs`；双浏览器联调：设置 CHESS_WEB_URL 后运行 `node scripts/web-smoke.cjs`（需 Playwright）。
 
 ## Docker 与发布
 
