@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.testing.Test
+
 plugins { id("com.android.application") }
 
 android {
@@ -32,4 +34,23 @@ dependencies {
     implementation("androidx.core:core:1.15.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+}
+
+// CI 分开复用客户端检查和两端互通结果；普通本地测试仍执行全部用例。
+tasks.withType<Test>().configureEach {
+    when (providers.gradleProperty("chessTestSuite").orNull) {
+        "client" -> filter.excludeTestsMatching("com.chessflipping.client.TransportV2Test")
+        "interop" -> {
+            filter.includeTestsMatching("com.chessflipping.client.TransportV2Test")
+            // 服务端属于外部进程，Gradle 的 Java 输入缓存无法反映它的变化。
+            outputs.upToDateWhen { false }
+            outputs.cacheIf { false }
+            doFirst {
+                require(!System.getenv("CHESS_TEST_TCP_PORT").isNullOrBlank()
+                    && !System.getenv("CHESS_TEST_HTTP_PORT").isNullOrBlank()) {
+                    "Interop tests require CHESS_TEST_TCP_PORT and CHESS_TEST_HTTP_PORT"
+                }
+            }
+        }
+    }
 }

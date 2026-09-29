@@ -1,5 +1,46 @@
 # 项目执行记录与交接
 
+## CI 推送前复核与 Node.js 24（2026-09-30）
+
+- 用户授权复核后提交推送，并要求处理 GitHub Node.js 20 弃用警告。已核实最近一次远端运行 36575192599 的结果为 success，该提示不是该次发布失败的证据。
+- 逐个读取上游 action.yml，确认 checkout v6、cache（含 restore/save）v5、Gradle setup v5、setup-node v6、upload-artifact v6、download-artifact v7、Docker build-push v7/login v4/metadata v6/setup-buildx v4 均声明 node24；原有 setup-java v5 和 setup-android v4 同样为 node24，保持不变。构建逻辑、缓存边界及已确认的第 3/4 项优化范围不变。
+- 用户新增教学资料本地保留要求：已将学习大纲、docs/learning/、课程 PDF 从暂存区移除并加入忽略规则；教学记录移至 docs/learning/PROJECT_STATUS.md，README 移除远端无法访问的教学入口，AGENTS.md 记录该暂存例外。文件均保留在本地。
+- 推送前 actionlint 1.7.12 与差异检查通过；沿用本轮已完成的条件/顺序静态核对及之前记录的定向 Gradle 检查，不追加完整本地回归。真实 Node.js 24 Actions 运行与 digest 发布验证以推送后的结果为准，不把静态检查当成远端发布成功。
+
+## CI 无改动跳过与验证后发布标签（2026-09-30，本地实现）
+
+- 用户确认修复无相关改动时继续检查、镜像验证前更新架构标签两处问题；Runner/工作流缓存键及 Docker 依赖层优化暂不实施。保留原 job 结构、缓存方案、PR 检查和手动强制发布行为。
+- scope 新增 should_check 输出。push 内部 diff 没有 server/（含 Web）、android_client/ 或 APK 打包脚本变化时，后续 22 个步骤全部跳过，publish/merge 也跳过；只有检出和范围判定会执行。PR 仍执行检查且不发布。
+- 架构镜像改为按 digest 上传，启动并验证清单/Web/APK 后，才通过 imagetools create 更新原有架构 latest/sha 标签；验证失败不改正式标签。两架构互不等待，通用索引仍待双方成功后按本次 digest 合并。
+- 验证：actionlint 1.7.12、git diff --check 通过；本地静态求值确认无改动时全部 22 个后续 step 条件为 false，并核对 digest 上传、验证、更新标签与保存 digest 的顺序和默认成功条件。未执行 Bash 运行验证、完整构建或远端 Actions，真实 GHCR digest 上传/拉取/更新标签待下次发布验证。
+- 已同步 README 与部署说明并暂存本轮修改；未提交、推送、发布或部署，保留既有其他暂存文件和本机 Gradle 未跟踪文件。
+
+## CI 已验证产物复用（2026-09-30，本地实现）
+
+- 用户要求 Android 未变复用 APK 并跳过客户端检查，Rust 未变跳过编译/测试，只有 Web 变化时不重复两端工作；进一步要求修改 job ID。已将 `test` 改为 `build_apk_and_check`，同步 publish 的依赖和输出引用，保持合并任务及双架构发布、合并结构。
+- 增加 APK 成品、Rust 检查程序、两端互通组合标记三个精确缓存，只在全部必需检查及 Web 检查成功后保存。输入覆盖源码/构建和测试配置、工作流、Runner 镜像版本、Rust 实际工具链、APK 变体和 CI_CACHE_EPOCH；Web 不计入 Rust/Android 源码键。缺失、非精确命中或文件校验失败补建，坏的精确缓存需删除或更新代次，不能原地覆盖。
+- 互通按客户端或服务端任一输入变化重跑，并在任一产物补建或组合结果缺失时重跑；已向用户说明仅客户端变化也可能破坏协议。Gradle 新增 chessTestSuite=client/interop，前者排除 TransportV2Test，后者只执行该类、要求测试端口并禁用 Gradle 的测试缓存/UP-TO-DATE；普通本地命令仍跑原全部用例。
+- 仅 Web 且完整暖缓存时跳过 JDK/Android/Gradle 设置、APK 构建/客户端检查、检查用 Cargo 编译/测试及互通；保留清单哈希、HTTP 资源、Web 逻辑及架构镜像资源检查。Rust 工具链准备仍用于核对版本；Docker 的 musl/双架构编译仍依赖各自 BuildKit 缓存，不宣称永不重编。
+- 签名密钥未放缓存/缓存键；轮换签名需同步递增仓库 Actions Variable `CI_CACHE_EPOCH`（默认 1）。原触发/发布判定、PR debug 与正式签名隔离、标签及 concurrency 保留；未设置远端变量、未提交推送或触发 Actions/部署。
+- 验证：actionlint 1.7.12 通过；10 个多行 Bash 块语法检查通过；实际条件脚本在本地临时夹具跑过 9 个冷暖/单端变更/损坏/非精确命中场景；输入键 7 个失效场景及相同输入稳定性通过。Windows 夹具中 SHA-256 命令以 Python 等价实现，工具链调用为桩，不冒充 GitHub 执行结果。
+- Android 定向检查：client 模式 16 项通过（0 失败/跳过）；interop 的 Gradle test dry-run 仅选中 TransportV2Test 的 2 项（按 dry-run 跳过），确认筛选与 Kotlin 配置有效，未称为真实互通通过。未重跑 Rust、完整 lint、真机或远端 CI；缓存上传/恢复和耗时仍待 Actions 实跑。文档及配置按要求暂存，保留原有教学文件和本机 Gradle 未跟踪文件。
+
+## Actions 命名与职责说明（2026-09-29，本地配置）
+
+- 用户最终决定保留 APK 构建与检查合并，首个任务新增显示名称 `Build APK and run checks`，内部 ID 仍为 test；Rust 步骤改名 `Test and build Rust server`，修正工作目录网页检查的注释。结构仍是 test → 两架构 publish → merge，不新增 apk job 或中间附件。
+- 原有触发条件、发布判定、命令、检出深度、签名范围、检查顺序、artifact、缓存、标签、权限和 concurrency 均保留。命名变化可能需要已有按名称匹配的 required check 配置同步；本轮未修改远端分支保护。
+- 纠正此前“可直接按事件类型替代内部 diff”的建议：GitHub 对超过 1,000 个提交的推送或差异计算超时可能放行工作流，为保留无应用改动不发布的行为，保留实际 diff 和 output 交接。
+- 用户询问的缓存边界已补充部署说明：APK 仍调用 Gradle，不按 Android 变化显式下载历史包；镜像内 Rust 缓存与检查用 Cargo 分开；缓存全部命中不代表跳过镜像发布。本轮不新增缓存/历史产物复用机制。
+- actionlint 1.7.12 静态检查通过；逐行排除名称与注释后，工作流与本轮前 HEAD 完全相同，确认未改执行配置和命令。git diff --check 通过。未运行项目构建/回归，未触发远端 Actions、镜像发布或部署，未改业务代码；修改已暂存，未提交推送。
+
+## 两台服务器更新至 0.6.1 资源发布（2026-09-29）
+
+- 用户再次授权更新两台服务器；已备份配置、保留旧镜像回退标签，拉取 latest 后按镜像是否变化决定重建。本次两台均有更新，部署提交 50898fec7c3cfde248b7b743cff25dc2d38ba2b2，索引摘要 sha256:4692c5586262e54b1237ac7a934018f996385fcf692de1b6f8dd4f6c15e7ade8。
+- 保留两台 TCP/UDP 8888、各自 HTTP 80 / 8086 和现有反代配置；容器运行正常、重启计数 0、UDP 监听正常。第一台自动更新定时器 active，原脚本比较镜像 ID、相同且运行中则跳过的逻辑仍在。
+- 两台公网版本接口均返回 App 0.6.1 / versionCode 8；公网 TCP v2 握手和 WSS READY/PONG 通过。第一台公网完整 APK 下载校验通过，第二台经服务上游完整下载校验通过，均匹配 Actions SHA-256 a1ef4a8b258a62b3960cbe9915e43ffcddc5149c26a59d8c8f7d6a6002b4bb0c；第二台本地公网完整下载较慢，未将其写成已完成。
+- Rust 日志仍显示引擎 0.6.0，协议仍为 v2，这是本次发布的预期版本关系。用户两端 App 应升级至 0.6.1，网页刷新获取兵卒互吃规则。本轮未进行真实对局或公网 UDP/P2P 验收。
+- 记录已脱敏，服务器地址和凭据不入库；未改动其他开发文件。
+
 ## 资源分层与兵卒互吃 0.6.1（2026-09-29，已发布）
 
 - 用户授权实施、提交推送并实跑 Actions 测时；未启用 dsh 或子代理，未远程部署。打包改造提交 587f238，客户端/网页规则提交 50898fe。

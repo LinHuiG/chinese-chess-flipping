@@ -15,20 +15,23 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  test:
+  build_apk_and_check:
+    name: Build APK and run checks
     runs-on: ubuntu-latest
     outputs:
       publish_image: ${{ steps.scope.outputs.publish_image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      # GitHub 的 paths 在大批量推送或差异计算超时时可能放行，保留实际改动检查。
       - name: Check application changes
         id: scope
         shell: bash
         env:
           BEFORE_SHA: ${{ github.event.before }}
         run: |
+          set -euo pipefail
           publish_image=false
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             publish_image=true
@@ -42,28 +45,99 @@ jobs:
             changed_files=$(git diff --name-only "$base" "$GITHUB_SHA" -- server/ android_client/ scripts/package-app-update.py)
             if [[ -n "$changed_files" ]]; then publish_image=true; fi
           fi
+          # PR 保留检查，手动运行保留强制发布；无应用改动的 push 跳过全部后续步骤。
+          should_check=$publish_image
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then should_check=true; fi
+          echo "should_check=$should_check" >> "$GITHUB_OUTPUT"
           echo "publish_image=$publish_image" >> "$GITHUB_OUTPUT"
-          echo "Publish image: $publish_image" >> "$GITHUB_STEP_SUMMARY"
+          echo "Run checks: $should_check; publish image: $publish_image" >> "$GITHUB_STEP_SUMMARY"
+      # 成品缓存只在所有检查成功后保存；精确匹配输入，不用前缀命中跳过测试。
+      - name: Identify build and validation inputs
+        if: steps.scope.outputs.should_check == 'true'
+        id: inputs
+        env:
+          ANDROID_INPUTS: ${{ hashFiles('android_client/**', 'scripts/package-app-update.py') }}
+          RUST_INPUTS: ${{ hashFiles('server/Cargo.*', 'server/src/**/*.rs', 'server/.cargo/**', 'server/build.rs', 'server/rust-toolchain*', '.cargo/**', 'rust-toolchain*') }}
+          WORKFLOW_INPUTS: ${{ hashFiles('.github/workflows/publish.yml') }}
+          APK_VARIANT: ${{ steps.scope.outputs.publish_image == 'true' && 'release' || 'debug' }}
+          CACHE_EPOCH: ${{ vars.CI_CACHE_EPOCH || '1' }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          toolchain=$(rustc +stable -vV; cargo +stable -V)
+          platform="${ImageOS}-${ImageVersion}-${RUNNER_ARCH}"
+          apk=$(printf '%s\n' "$platform" "$CACHE_EPOCH" "$WORKFLOW_INPUTS" "$ANDROID_INPUTS" "$APK_VARIANT" | sha256sum | cut -d ' ' -f 1)
+          rust=$(printf '%s\n' "$platform" "$CACHE_EPOCH" "$WORKFLOW_INPUTS" "$RUST_INPUTS" "$toolchain" | sha256sum | cut -d ' ' -f 1)
+          interop=$(printf '%s\n' "$apk" "$rust" | sha256sum | cut -d ' ' -f 1)
+          echo "apk=checked-apk-v1-$apk" >> "$GITHUB_OUTPUT"
+          echo "rust=checked-rust-v1-$rust" >> "$GITHUB_OUTPUT"
+          echo "interop=checked-interop-v1-$interop" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v5
+        if: steps.scope.outputs.should_check == 'true'
+        id: apk_cache
+        with:
+          key: ${{ steps.inputs.outputs.apk }}
+          path: |
+            server/app-update/latest.apk
+            server/app-update/latest.json
+      - uses: actions/cache/restore@v5
+        if: steps.scope.outputs.should_check == 'true'
+        id: rust_cache
+        with:
+          key: ${{ steps.inputs.outputs.rust }}
+          path: |
+            server/target/release/chess-server
+            .ci-cache/rust.sha256
+      - uses: actions/cache/restore@v5
+        if: steps.scope.outputs.should_check == 'true'
+        id: interop_cache
+        with:
+          key: ${{ steps.inputs.outputs.interop }}
+          path: .ci-cache/interop.ok
+      - name: Decide required builds and checks
+        if: steps.scope.outputs.should_check == 'true'
+        id: required
+        env:
+          APK_HIT: ${{ steps.apk_cache.outputs.cache-hit }}
+          RUST_HIT: ${{ steps.rust_cache.outputs.cache-hit }}
+          INTEROP_HIT: ${{ steps.interop_cache.outputs.cache-hit }}
+          INTEROP_KEY: ${{ steps.inputs.outputs.interop }}
+        run: |
+          set -euo pipefail
+          apk=true
+          rust=true
+          interop=true
+          if [[ "$APK_HIT" == true ]] && python3 scripts/package-app-update.py --check; then apk=false; fi
+          if [[ "$RUST_HIT" == true ]] && [[ -x server/target/release/chess-server ]] && sha256sum --check .ci-cache/rust.sha256; then rust=false; fi
+          if [[ "$apk" == false && "$rust" == false && "$INTEROP_HIT" == true ]] && [[ -f .ci-cache/interop.ok ]] && [[ "$(cat .ci-cache/interop.ok)" == "$INTEROP_KEY" ]]; then interop=false; fi
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "interop=$interop" >> "$GITHUB_OUTPUT"
+          echo "Required: APK/client checks=$apk; Rust build/tests=$rust; interoperability=$interop" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-java@v5
+        if: steps.required.outputs.apk == 'true' || steps.required.outputs.interop == 'true'
         with:
           distribution: temurin
           java-version: '25'
       - uses: android-actions/setup-android@v4
+        if: steps.required.outputs.apk == 'true' || steps.required.outputs.interop == 'true'
         with:
           packages: 'platform-tools platforms;android-37.0 build-tools;36.0.0'
           log-accepted-android-sdk-licenses: false
-      - uses: gradle/actions/setup-gradle@v4
-      - uses: actions/cache@v4
+      - uses: gradle/actions/setup-gradle@v5
+        if: steps.required.outputs.apk == 'true' || steps.required.outputs.interop == 'true'
+      - uses: actions/cache@v5
+        if: steps.required.outputs.rust == 'true'
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             server/target
-          key: rust-check-${{ runner.os }}-${{ hashFiles('server/Cargo.lock', 'server/Cargo.toml', 'server/src/*.rs') }}
+          key: rust-check-${{ runner.os }}-${{ steps.inputs.outputs.rust }}
           restore-keys: rust-check-${{ runner.os }}-
       # Only a main push or manual publish receives the fixed signing key. PRs use disposable debug signing.
       - name: Build signed update APK
-        if: steps.scope.outputs.publish_image == 'true'
+        if: steps.required.outputs.apk == 'true' && steps.scope.outputs.publish_image == 'true'
         env:
           APK_KEYSTORE_B64: ${{ secrets.APK_KEYSTORE_B64 }}
           APK_KEYSTORE: ${{ runner.temp }}/app-signing.keystore
@@ -83,24 +157,30 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify android_client/app/build/outputs/apk/release/app-release.apk
           python3 scripts/package-app-update.py --release
       - name: Build debug APK for checks
-        if: steps.scope.outputs.publish_image != 'true'
+        if: steps.required.outputs.apk == 'true' && steps.scope.outputs.publish_image != 'true'
         run: |
           android_client/gradlew -p android_client --no-daemon --build-cache assembleDebug
           python3 scripts/package-app-update.py
       - name: Verify update manifest
+        if: steps.scope.outputs.should_check == 'true'
         run: python3 scripts/package-app-update.py --check
-      - name: Build Rust server
+      - name: Check Android client logic and lint
+        if: steps.required.outputs.apk == 'true'
+        run: android_client/gradlew -p android_client --no-daemon --build-cache -PchessTestSuite=client testDebugUnitTest lintDebug
+      - name: Test and build Rust server
+        if: steps.required.outputs.rust == 'true'
         run: |
-          rustup toolchain install stable --profile minimal
           cargo +stable test --locked --manifest-path server/Cargo.toml
           cargo +stable build --locked --release --manifest-path server/Cargo.toml
-      - name: Check Android recovery and TCP / WS / update interoperability
+      - name: Check runtime resources and required interoperability
+        if: steps.scope.outputs.should_check == 'true'
         env:
           TCP_PORT: '18888'
           HTTP_PORT: '18880'
           UDP_PORT: '18888'
           CHESS_TEST_TCP_PORT: '18888'
           CHESS_TEST_HTTP_PORT: '18880'
+          RUN_INTEROP: ${{ steps.required.outputs.interop }}
         run: |
           set -euo pipefail
           server/target/release/chess-server &
@@ -110,17 +190,48 @@ jobs:
             if curl --fail --silent 'http://127.0.0.1:18880/api/app/version?versionCode=0' > /dev/null; then break; fi
             sleep 1
           done
-          # 验证网页来自镜像资源目录，保留 HEAD 与未知路径行为。
+          # 验证工作目录中的网页资源，保留 HEAD 与未知路径行为。
           curl --fail --silent http://127.0.0.1:18880/game.js | cmp - server/src/main/resources/web/game.js
           curl --fail --silent --head http://127.0.0.1:18880/rules.txt
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18880/missing)" = 404
-          android_client/gradlew -p android_client --no-daemon --build-cache testDebugUnitTest lintDebug
-      - uses: actions/setup-node@v4
+          if [[ "$RUN_INTEROP" == true ]]; then
+            android_client/gradlew -p android_client --no-daemon --build-cache -PchessTestSuite=interop testDebugUnitTest
+          fi
+      - uses: actions/setup-node@v6
+        if: steps.scope.outputs.should_check == 'true'
         with:
           node-version: '24'
       - name: Check browser game recovery and protocol
+        if: steps.scope.outputs.should_check == 'true'
         run: node scripts/session-v2-test.mjs
-      - uses: actions/upload-artifact@v4
+      - name: Record successful validation
+        if: steps.scope.outputs.should_check == 'true'
+        env:
+          INTEROP_KEY: ${{ steps.inputs.outputs.interop }}
+        run: |
+          mkdir -p .ci-cache
+          sha256sum server/target/release/chess-server > .ci-cache/rust.sha256
+          printf '%s' "$INTEROP_KEY" > .ci-cache/interop.ok
+      - uses: actions/cache/save@v5
+        if: steps.required.outputs.apk == 'true' && steps.apk_cache.outputs.cache-hit != 'true'
+        with:
+          key: ${{ steps.inputs.outputs.apk }}
+          path: |
+            server/app-update/latest.apk
+            server/app-update/latest.json
+      - uses: actions/cache/save@v5
+        if: steps.required.outputs.rust == 'true' && steps.rust_cache.outputs.cache-hit != 'true'
+        with:
+          key: ${{ steps.inputs.outputs.rust }}
+          path: |
+            server/target/release/chess-server
+            .ci-cache/rust.sha256
+      - uses: actions/cache/save@v5
+        if: steps.required.outputs.interop == 'true' && steps.interop_cache.outputs.cache-hit != 'true'
+        with:
+          key: ${{ steps.inputs.outputs.interop }}
+          path: .ci-cache/interop.ok
+      - uses: actions/upload-artifact@v6
         if: steps.scope.outputs.publish_image == 'true'
         with:
           name: app-update
@@ -130,8 +241,8 @@ jobs:
           if-no-files-found: error
   publish:
     name: Publish ${{ matrix.arch }}
-    if: needs.test.outputs.publish_image == 'true'
-    needs: test
+    if: needs.build_apk_and_check.outputs.publish_image == 'true'
+    needs: build_apk_and_check
     strategy:
       fail-fast: false
       matrix:
@@ -145,8 +256,8 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
         with:
           name: app-update
           path: server/app-update
@@ -155,26 +266,26 @@ jobs:
         env:
           REPOSITORY: ${{ github.repository }}
         run: echo "IMAGE=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_ENV"
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@v6
         id: meta
         with:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest-${{ matrix.arch }},enable={{is_default_branch}}
             type=sha,suffix=-${{ matrix.arch }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         id: build
         with:
           context: ./server
-          push: true
           platforms: linux/${{ matrix.arch }}
-          tags: ${{ steps.meta.outputs.tags }}
+          # 先按 digest 上传，验证成功前不更新任何正式标签。
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=server-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=server-${{ matrix.arch }}
@@ -193,13 +304,25 @@ jobs:
           python3 -c 'import json,sys; actual=json.load(open(sys.argv[1])); expected=json.load(open("server/app-update/latest.json")); assert all(actual[k]==v for k,v in expected.items())' "$RUNNER_TEMP/version.json"
           curl --fail --silent http://127.0.0.1:18880/game.js | cmp - server/src/main/resources/web/game.js
           curl --fail --silent 'http://127.0.0.1:18880/api/app/latest.apk?versionCode=0' | cmp - server/app-update/latest.apk
-      # 各架构直接发布可用标签；最终合并使用本次构建的 digest，不能读可变 latest 标签。
+      - name: Publish verified architecture tags
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          tags=()
+          while IFS= read -r tag; do
+            if [[ -n "$tag" ]]; then tags+=(-t "$tag"); fi
+          done <<< "$TAGS"
+          test "${#tags[@]}" -gt 0
+          docker buildx imagetools create --prefer-index=false "${tags[@]}" "$IMAGE@$DIGEST"
+      # 各架构验证通过即发布标签；最终合并使用本次构建的 digest，不能读可变 latest 标签。
       - name: Save image digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           ARCH: ${{ matrix.arch }}
         run: printf '%s' "$DIGEST" > "$RUNNER_TEMP/$ARCH"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: image-digest-${{ matrix.arch }}
           path: ${{ runner.temp }}/${{ matrix.arch }}
@@ -212,13 +335,13 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: image-digest-*
           path: ${{ runner.temp }}/digests
           merge-multiple: true
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

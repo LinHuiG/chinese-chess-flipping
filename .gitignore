@@ -8,5 +8,10 @@
 *.log
 *.jks
 *.keystore
+.ci-cache/
+# 教学资料仅保存在本地，不进入版本库。
+/docs/learning/
+/docs/LEARNING_PLAN.md
+/output/pdf/lesson-*.pdf
 /server/app-update/latest.apk
 /server/app-update/latest.json

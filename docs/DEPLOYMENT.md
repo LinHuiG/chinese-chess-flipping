@@ -6,11 +6,39 @@
 
 ## Actions 构建 App 和镜像
 
-发布流程：固定签名的 `assembleRelease` → 生成 APK 版本清单 → Rust 检查与编译 → APK 作为 Actions 的 app-update 附件传给两个独立镜像任务。amd64 使用 ubuntu-24.04，arm64 使用原生 ubuntu-24.04-arm，移除 QEMU；构建完成即可各自发布 latest-amd64 / latest-arm64，互不等待，某一架构失败不取消另一架构。两者均成功后按本次 digest 合并通用 latest / sha-*，不重复构建。网页、APK 和清单作为独立资源层放入镜像，不再编译进 Rust 程序，不需另配下载目录，也不把二进制包提交到仓库。启动时从 CHESS_RESOURCE_DIR（镜像固定 /app，本地默认 server/）读取一次并校验 APK，随后共享内存快照；缺少资源或 APK 校验失败时启动失败。更新继续使用原来的拉镜像、重建容器流程。原生机器见 [GitHub runner 列表](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
+工作流保留三类任务：`build_apk_and_check（Build APK and run checks）→ publish（amd64 / arm64 矩阵）→ merge`，完整发布共四个执行实例。首个任务先判断是否发布，再按已验证缓存决定 APK/Rust 构建与检查，成功后交接 `app-update`。APK 是服务端启动及真实更新下载检查的输入，因此构建与检查共用一个 Runner，避免额外环境准备与附件往返。PR 使用 debug APK，不获取发布签名、不发布镜像。原内部 ID `test` 已改名，依赖与输出引用同步；若已有按旧显示名称匹配的分支保护，需同步检查名。
+
+Actions 已改用原生声明 Node.js 24 的版本（包括 checkout、cache、Gradle、Node、artifact 与 Docker 系列）。这是 Action 自身运行时的升级，与 setup-node 为网页检查安装 Node.js 24 是两回事；不使用恢复旧 Node.js 的环境变量。背景见 [GitHub Node.js 20 弃用公告](https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/)。
+
+仍保留内部 `git diff`：GitHub 在超过 1,000 个提交的推送或差异计算超时等情况下可能直接运行带路径过滤的工作流，因此不能把“工作流被 push 触发”等同于“确有发布范围改动”。参考 [路径差异计算说明](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#git-diff-comparisons)。缓存优化不改变检出深度、发布判定或架构标签策略。
+
+### 已验证产物复用（2026-09-30）
+
+以下假设所需精确缓存存在且完整，工具环境未变化；首次运行、缓存丢失或校验失败会补建和补测。使用当前输入哈希，而非简单比较上一次提交，避免回退代码、切分支或恢复一个失败提交时错误复用。
+
+| 当前输入变化 | APK 与客户端单元测试/lint | 检查用 Rust 编译/单元测试 | TCP/WS/更新下载互通 |
+| --- | --- | --- | --- |
+| 仅 Web 资源 | 复用并跳过 | 复用并跳过 | 已验证相同两端组合时跳过 |
+| 仅 Android | 构建并检查 | 复用并跳过 | 运行 |
+| 仅 Rust | 复用并跳过 | 构建并检查 | 运行 |
+| Android 与 Rust 都变 | 构建并检查 | 构建并检查 | 运行 |
+
+网页逻辑检查、APK 清单/哈希校验、启动当前服务并核对 HTTP 资源、发布镜像中的资源核对仍保留。只改 Web 不需要启动 JDK/Android/Gradle 设置步骤（互通缓存也有效时），但仍准备 Rust 工具链以核对其真实版本；若 stable 更新则 Rust 与互通缓存失效。镜像内 Rust 仍靠现有分架构 BuildKit 缓存复用，Docker 缓存丢失时需重编；检查用二进制不能替代 musl/arm64 镜像二进制。
+
+- `checked-apk-v1-*`：保存成品 latest.apk 与 latest.json。输入包含整个 android_client、APK 打包脚本、工作流、Runner 镜像版本/架构、debug 或 release 变体、缓存代次。构建配置和客户端测试改动也失效；复用前再次校验版本、大小、包名清单及 SHA-256。
+- `checked-rust-v1-*`：保存检查用 chess-server 与 SHA-256 校验文件。输入包含 Rust 源码、Cargo 配置/锁文件、build.rs、Cargo/工具链配置、工作流、Runner 镜像版本/架构、实际 rustc/Cargo 版本和缓存代次；Web/APK 资源不计入 Rust 源码输入。
+- `checked-interop-v1-*`：保存上面两组输入组合的通过标记。任一端或其构建/测试输入改变、任一成品需要重建、组合标记缺失/不匹配，都执行互通。Gradle 的 interop 任务禁用自身的 UP-TO-DATE 与构建缓存，防止外部服务端变化却复用 Java 测试结果。
+- 三种缓存只在本次所有必需检查与 Web 检查成功后保存。仅 `cache-hit == 'true'` 且内容校验成功才可跳过，前缀命中不能当成已验证。Gradle/Cargo 依赖与中间编译缓存继续作为冷构建加速；[restore/save 分离](https://github.com/actions/cache) 用于控制保存时机。
+- 仓库 Actions **Variables** 可设置 `CI_CACHE_EPOCH`（默认 `1`）。更换 APK 签名或需要强制重新验证时递增它；签名私钥/密码不进缓存，也不写入缓存键。签名 Secrets 本身不参与输入哈希，所以轮换签名必须同时更新该代次。依赖获取策略等未体现在输入文件中的环境调整也应更新代次。
+- GitHub 缓存不可原地覆盖；精确条目若损坏，本次会补建，但不覆盖原坏条目。删除对应 Actions 缓存或递增代次，后续才能重新保存。缓存可能被清理，不承诺永远不编译。
+
+普通 main 推送在路径过滤正常执行时，无 server/（含 Web）、android_client/ 或 APK 打包脚本变化不启动本流程；即使路径过滤放行，内部 diff 确认无相关改动后也会令 should_check=false，跳过后续环境准备、缓存读写、构建、检查及发布，仅完成检出和范围判定。PR 仍检查，手动触发仍强制发布。编译缓存全部命中不等于跳过镜像发布：Web 内容变化仍需复制到新镜像，按原方式推送、校验并合并。
+
+发布流程：固定签名的 `assembleRelease` → 生成 APK 版本清单 → Rust 检查与编译 → APK 作为 Actions 的 app-update 附件传给两个独立镜像任务。amd64 使用 ubuntu-24.04，arm64 使用原生 ubuntu-24.04-arm，移除 QEMU；各自先按 digest 上传镜像、启动并校验资源，通过后才发布 latest-amd64 / latest-arm64 和架构 sha 标签，互不等待。某一架构验证失败时，其正式标签保持不变，也不取消另一架构。两者均成功后按本次 digest 合并通用 latest / sha-*，不重复构建。按 digest 上传使用 [Docker image exporter](https://docs.docker.com/build/exporters/image-registry/)，验证后通过 [imagetools create](https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/) 更新标签。网页、APK 和清单作为独立资源层放入镜像，不再编译进 Rust 程序，不需另配下载目录，也不把二进制包提交到仓库。启动时从 CHESS_RESOURCE_DIR（镜像固定 /app，本地默认 server/）读取一次并校验 APK，随后共享内存快照；缺少资源或 APK 校验失败时启动失败。更新继续使用原来的拉镜像、重建容器流程。原生机器见 [GitHub runner 列表](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
 
 amd64 服务器希望提前更新时，在 .env 中设置 `SERVER_IMAGE=ghcr.io/linhuig/chinese-chess-flipping:latest-amd64`；通用 latest 保持兼容，仍等待两个架构。latest-amd64 / latest-arm64 已实际发布；本次资源更新总耗时 4 分 15 秒，详见 PROJECT_STATUS.md。
 
-Docker 编译阶段只复制 Cargo.toml、Cargo.lock 和 src/*.rs；网页、APK 在最终镜像阶段复制。Actions 按架构保存 BuildKit 缓存，仅改资源且缓存命中时跳过 Rust 编译；首次发布、缓存被清理或 Rust 基础镜像变化仍需编译。检查任务另保存 Cargo 和 Gradle 构建缓存，减少重复编译。没有跳过现有发布检查；具体耗时以实际 Actions 记录为准。
+Docker 编译阶段只复制 Cargo.toml、Cargo.lock 和 src/*.rs；网页、APK 在最终镜像阶段复制。Actions 按架构保存 BuildKit 缓存，仅改资源且缓存命中时跳过 Rust 编译；首次发布、缓存被清理或 Rust 基础镜像变化仍需编译。检查任务另保存 Cargo 和 Gradle 构建缓存，减少冷构建开销；已验证的输入组合可以复用检查结果，具体边界见上表，耗时以实际 Actions 记录为准。
 
 仓库 Actions Secrets 使用以下四项：
 

@@ -42,7 +42,9 @@ gradlew.bat assembleDebug lintDebug testDebugUnitTest
 
 ## Docker 与发布
 
-镜像地址：ghcr.io/linhuig/chinese-chess-flipping:latest，另有 sha-* 标签。Actions 自动构建固定签名的 release APK，生成版本清单，再由原生 amd64、arm64 机器独立构建镜像；各自完成即发布 latest-amd64 / latest-arm64，两者都成功后合并通用 latest；同时提供 app-update 下载附件。main 推送包含 Android、服务端或 APK 打包脚本变化时发布，也可手动触发；仅改工作流或仓库文档不触发推送构建。新架构标签从下一次代码发布开始提供。
+Actions 首个任务为 `build_apk_and_check`，显示 `Build APK and run checks`，合并处理构建与检查。push 经内部检查确认无应用改动时，跳过后续全部构建、检查与发布；PR 保留检查，手动触发保留强制发布。APK、检查用 Rust 程序及两端互通结果按输入精确复用；只改 Web 且缓存有效时跳过两端编译/单元测试及互通，保留 Web/资源检查。任一端变化需验证两端互通，缺失缓存自动补建。之后两个架构并行构建、按 digest 上传与校验，校验成功才更新架构标签，再合并通用索引。签名轮换需同步递增缓存代次，详细边界见 [部署说明](docs/DEPLOYMENT.md#已验证产物复用2026-09-30)。
+
+镜像地址：ghcr.io/linhuig/chinese-chess-flipping:latest，另有 sha-* 标签。Actions 自动构建固定签名的 release APK，生成版本清单，再由原生 amd64、arm64 机器独立构建镜像；各自验证通过即发布 latest-amd64 / latest-arm64，两者都成功后合并通用 latest；同时提供 app-update 下载附件。main 推送包含 Android、服务端或 APK 打包脚本变化时发布，也可手动触发；仅改工作流或仓库文档不触发推送构建。新架构标签从下一次代码发布开始提供。
 
 容器运行时包含静态 Rust 程序及独立的网页、APK 资源层，没有 JVM。资源在启动时读取并共享，Docker 编译层仅依赖 Rust 源码和 Cargo 配置；仅改网页或 APK 时可复用缓存中的服务端程序，缓存缺失或基础镜像变化时仍会重新编译。保留 TCP_PORT、HTTP_PORT、TCP_WORKER_THREADS，新增 UDP_PORT。直连协助端口需独立开放 UDP；现有 HTTP 反向代理不会自动转发它。签名配置和部署见 [部署说明](docs/DEPLOYMENT.md)，由用户自行部署，不远程操作服务器。
 
