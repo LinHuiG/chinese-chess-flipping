@@ -12,7 +12,7 @@
 <body>
   <header class="topbar"><div class="topbar-inner">
     <a class="brand" href="/" aria-label="翻棋首页"><img src="/icon.svg" alt="" width="40" height="40"><span>翻棋</span></a>
-    <nav aria-label="工具"><button id="refresh" class="icon-button" aria-label="刷新状态" title="刷新状态">↻</button><button id="settings-open" class="quiet">设置</button><button id="rules-open" class="quiet">规则</button></nav>
+    <nav aria-label="工具"><a class="quiet apk-download" href="/api/app/latest.apk?versionCode=0" download="chess-flipping.apk" aria-label="下载 Android APK">下载 APK</a><button id="refresh" class="icon-button" aria-label="刷新状态" title="刷新状态">↻</button><button id="settings-open" class="quiet">设置</button><button id="rules-open" class="quiet">规则</button></nav>
   </div></header>
   <main>
     <div class="connection-line"><span id="status" role="status">正在连接…</span><div id="network-metrics" class="network-metrics" hidden><span id="server-latency" class="network-chip">服务器 —</span><span class="network-chip">中转</span></div><span class="edition">翻棋联机</span></div>

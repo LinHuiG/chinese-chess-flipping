@@ -19,7 +19,7 @@
 
 ### Android
 
-1. 打开 [GitHub Actions](https://github.com/LinHuiG/chinese-chess-flipping/actions/workflows/publish.yml)，选择最近一次成功发布的运行，下载 `app-update` 附件，解压并安装其中的 `latest.apk`。下载 Actions 附件需要登录 GitHub。
+1. 打开服务器网页，点击顶部的“下载 APK”获取 Android 安装包。也可从 [GitHub Actions](https://github.com/LinHuiG/chinese-chess-flipping/actions/workflows/publish.yml) 最近一次成功发布的运行中下载 `app-update` 附件，解压并安装其中的 `latest.apk`（下载 Actions 附件需要登录 GitHub）。
 2. 打开 App，在设置中选择服务器。默认配置为 **TCP / fqgame.tdcode.tech / 8888**，也可以改为自己部署的服务器。
 3. 一人创建房间，另一人从大厅加入，双方点击“准备”开始对局。
 

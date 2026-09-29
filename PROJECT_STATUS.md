@@ -1,5 +1,12 @@
 # 项目执行记录与交接
 
+## 网页 APK 下载入口（2026-09-30）
+
+- 用户要求网页提供 APK 下载按钮。顶部工具栏新增“下载 APK”，直接使用已有同源接口 /api/app/latest.apk?versionCode=0 和浏览器下载行为；没有新增重复服务端接口、JavaScript 或安装包副本。保留原有版本检查和 APK 响应头，下载文件名为 chess-flipping.apk。
+- 工具栏在窄屏可换行，新增链接沿用原有蓝色与键盘焦点样式；根 README 和部署说明补充网页下载入口与接口用法。
+- 本地使用现有 Rust release 程序加载当前网页与新打包的 0.6.2 调试 APK，Playwright/Edge 检查 1440、390、320px 下入口可见、工具栏不越界且页面无横向溢出，并查看 390px 截图。HEAD 返回正确 APK 类型和附件文件名；真实点击下载得到 3056913 字节文件，SHA-256 与本地清单一致。git diff --cached --check 通过；未运行完整对局回归或部署服务器，截图与构建产物不入库。
+- 默认服务器改动 1b85fcf 已推送；[Actions 36602866065](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36602866065) 全部成功，正式 APK 与双架构镜像已发布。网页入口将在本轮推送后的镜像中提供，远端 Actions 结果待确认。
+
 ## Android 默认服务器改为 fqgame.tdcode.tech（2026-09-30）
 
 - 用户要求 APK 默认配置与文档统一为 TCP / fqgame.tdcode.tech / 8888，并授权提交。已同步 GameService 的默认域名、端口和协议，以及设置页尚未绑定服务时的 TCP 选中状态和“恢复默认值”；保留已经保存的服务器设置，用户可通过“恢复默认值”后“保存并连接”切换。
