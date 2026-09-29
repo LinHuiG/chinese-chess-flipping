@@ -1,11 +1,13 @@
 # 项目执行记录与交接
 
-## CI 推送前复核与 Node.js 24（2026-09-30）
+## CI 优化与 Node.js 24（2026-09-30，已发布）
 
 - 用户授权复核后提交推送，并要求处理 GitHub Node.js 20 弃用警告。已核实最近一次远端运行 36575192599 的结果为 success，该提示不是该次发布失败的证据。
 - 逐个读取上游 action.yml，确认 checkout v6、cache（含 restore/save）v5、Gradle setup v5、setup-node v6、upload-artifact v6、download-artifact v7、Docker build-push v7/login v4/metadata v6/setup-buildx v4 均声明 node24；原有 setup-java v5 和 setup-android v4 同样为 node24，保持不变。构建逻辑、缓存边界及已确认的第 3/4 项优化范围不变。
 - 用户新增教学资料本地保留要求：已将学习大纲、docs/learning/、课程 PDF 从暂存区移除并加入忽略规则；教学记录移至 docs/learning/PROJECT_STATUS.md，README 移除远端无法访问的教学入口，AGENTS.md 记录该暂存例外。文件均保留在本地。
-- 推送前 actionlint 1.7.12 与差异检查通过；沿用本轮已完成的条件/顺序静态核对及之前记录的定向 Gradle 检查，不追加完整本地回归。真实 Node.js 24 Actions 运行与 digest 发布验证以推送后的结果为准，不把静态检查当成远端发布成功。
+- 主改动提交 88e99215a1ffee6178eed2246d7e3c6bf48f5ffe 已推送 main。推送前 actionlint 1.7.12 与差异检查通过；沿用本轮已完成的条件/顺序静态核对及之前记录的定向 Gradle 检查，不追加完整本地回归。
+- [Actions 36599997835](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36599997835) 全部成功：Build APK and run checks、Publish amd64、Publish arm64、Publish multi-platform manifest 四项均 success。两架构均实际完成按 digest 上传、启动资源检查、验证后更新架构标签，随后成功合并通用索引；步骤时间戳确认标签更新晚于验证成功。
+- 本次四项检查的 annotations 中无 Node.js 20 弃用警告；仅检查任务有 ubuntu-latest 将迁移到 Ubuntu 26 的 notice，非失败。没有远程部署，没有追加缓存暖启动或无改动分支的远端运行；这些场景不冒充已实跑验收。教学文件仍在本地且未被跟踪，原有本机 Gradle 未跟踪文件保留。
 
 ## CI 无改动跳过与验证后发布标签（2026-09-30，本地实现）
 
