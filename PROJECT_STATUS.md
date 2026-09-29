@@ -1,25 +1,35 @@
 # 项目执行记录与交接
 
-## 镜像资源与 Rust 编译分层（2026-09-29，发布验证中）
+## 资源分层与兵卒互吃 0.6.1（2026-09-29，已发布）
 
-- 用户授权执行并重新运行 Actions 测量耗时；先发布打包改造，再单独发布兵卒互吃与 Android 版本更新，验证资源变更能否复用编译层。没有远端部署授权。
-- 网页、APK/清单不再 include_bytes!/include_str! 编译进程序；启动时从资源目录读取一次，APK 校验保持，HTTP/TCP 共用 Bytes 快照。固定网页白名单、HEAD、安全头不变；缺失资源会启动失败。
-- Docker Rust 阶段只包含 Cargo 配置和 Rust 源码，最终层复制资源；保留原生 amd64/arm64 独立发布与合并。检查任务增加 Cargo/Gradle 缓存，缓存丢失或基础镜像变动仍可能重编译。
-- 本地 Rust 7 项测试与 release 编译、运行时网页/HEAD/APK/404 检查、actionlint 通过。改造提交 587f238 已推送，首次 Actions 36574372330 检查任务通过，双架构镜像发布进行中；第二轮增加实际镜像启动及网页/APK 内容核对。缓存复用及最终耗时待补录。上次 36558536441 共约 20 分 30 秒，Docker build/push 16 分 24 秒。已通过本机 Git 凭据只读获取详细日志：amd64 Rust 编译 154.2 秒，QEMU arm64 编译 928.1 秒，镜像导出/推送 7.7 秒，缓存导出约 40 秒；瓶颈是 ARM 模拟编译。凭据未打印或落盘。
+- 用户授权实施、提交推送并实跑 Actions 测时；未启用 dsh 或子代理，未远程部署。打包改造提交 587f238，客户端/网页规则提交 50898fe。
+- 网页和 APK/清单不再通过 include_bytes!/include_str! 编译进 Rust；启动时读取一次，校验 APK 后共享 Bytes 快照。保留固定网页白名单、HEAD、安全头、TCP/HTTP 版本检查和分块下载；缺少资源或 APK 校验失败会启动失败。镜像设 CHESS_RESOURCE_DIR=/app，本地默认 server/，用户仍按原方式拉镜像更新。
+- Docker 编译层只复制 Cargo 配置和 src/*.rs，网页/APK 在最终镜像中单独复制；保留原生 amd64/arm64 独立发布及合并。Actions 增加 Cargo、Gradle 缓存。资源变更且缓存命中时不重编镜像中的 Rust；缓存失效或基础镜像变化仍需编译。
+- 兵卒可吃上下左右相邻的对方明兵/卒，保留吃将帅；不能吃己方明棋、暗棋或其他种类。同步 Android/Web 判定与说明、规则文档、既有吃子矩阵和无路可走夹具；Web 检查覆盖双方颜色和非法目标边界。
+- Android 发布为 0.6.1 / versionCode 8，Rust 引擎及协议仍为 0.6.0 / v2。双方 App 应更新至 0.6.1，网页版需在服务更新后刷新。
 
-## 每日更新跳过相同镜像（2026-09-29）
+### 实测耗时
 
-- 用户授权调整服务器自动更新：第一台原脚本每天拉取后强制重建，现改为比较运行容器的镜像 ID 与拉取后 latest 的本地镜像 ID；相同且容器正在运行时成功退出，不重建、不重启。镜像变化才执行 Compose 更新；容器停止或缺失时仍尝试恢复。保留拉取失败不动原服务、互斥锁、重试及更新后健康检查。
-- 修改前已在服务器备份脚本，未改变每日北京时间 05:00 的调度。bash 语法检查通过，实际执行拉取后输出 Image unchanged；执行前后容器 ID 与启动时间完全一致，确认无更新时不会中断当前服务。
-- 第二台在已检查的系统定时器、root cron、系统 cron 和对应 Compose 目录中未发现该服务的每日自动更新任务，本轮未新增调度。没有把服务器地址或凭据写入仓库。
+以下总耗时统一从 Actions 创建时间到最后一个 job 完成时间计算；并行 job 耗时不能直接相加。
 
-## 兵卒互吃规则调整（2026-09-29，发布验证中）
+| 发布 | 总耗时 | 检查任务 | amd64 镜像任务 | arm64 镜像任务 |
+| --- | --- | --- | --- | --- |
+| [旧 QEMU 流程 36558536441](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36558536441) | 20 分 29 秒 | 3 分 31 秒 | 两架构合并任务共 16 分 51 秒 | 同左 |
+| [首次资源分层 36574372330](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36574372330) | 6 分 19 秒 | 3 分 48 秒 | 1 分 56 秒 | 1 分 52 秒 |
+| [兵卒互吃资源更新 36575192599](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/36575192599) | 4 分 15 秒 | 3 分 12 秒 | 33 秒 | 25 秒 |
 
-- 用户确认兵卒之间可以互吃：上下左右相邻一格，可吃对方明兵/卒，保留吃将帅；不能吃己方明棋、暗棋或其他种类。
-- 同步 Android 与 Web 棋规判定、两端规则说明及 docs/GAME_RULES.md；既有吃子矩阵增加兵卒互吃，无合法走法/超时用例改用士封堵，避免继续依赖旧规则。
-- 已通过 Android GameEngineTest 8 项及 assembleDebug、Web 红黑双方兵卒吃子边界定向检查、git diff --check；未进行真机或联机验收，未重复完整回归。
-- Rust 服务端逻辑与协议无需修改。双方手动安装修改后的 Android 可继续使用原服务端；Web 资源与在线更新 APK 内嵌镜像，发布这些资源仍需重建镜像。Android 已升为 0.6.1 / versionCode 8，准备通过 Actions 发布固定签名 release APK 与资源层；Rust 源码和 Dockerfile 不再变化，用于验证上一轮编译层复用。未远程部署。
-- 保留原未跟踪 android_client/gradle/gradle-daemon-jvm.properties。
+- 三次均成功。旧流程详细日志：amd64 Rust 编译 154.2 秒，QEMU arm64 编译 928.1 秒，导出/推送 7.7 秒，缓存导出约 40 秒；历史瓶颈是 ARM 模拟编译。首轮新流程原生 Rust 编译约 76.7 / 54.7 秒。
+- 第二轮两架构 RUN cargo build --locked --release 均明确 CACHED；Docker build/push 步骤分别仅 6 / 4 秒，镜像启动及网页/APK 内容核对分别 1 / 2 秒；最终合并任务 18 秒。GHCR 两次发布的 Rust 二进制层摘要逐架构完全相同，网页/APK 层均变化，确认真实复用。
+- 第二轮剩余开销：APK 构建签名 35 秒，检查任务 Rust 测试/编译 43 秒（仍会编译检查用程序，不是镜像程序），联调/lint 23 秒，Gradle 缓存保存 56 秒，另有环境、缓存恢复、排队及清理。因此没有宣称整条流水线完全不编译 Rust，也没有跳过原有发布检查。
+- 4 分 15 秒比旧流程约缩短 79%；同时包含原生架构、资源分层和构建缓存带来的改善，不将全部收益归于资源分层。后续网络、队列和缓存状态可能改变耗时。
+
+### 验证与交付
+
+- 本地：Rust 7 项测试、release 编译；运行时网页内容、HEAD、APK 下载及 404 检查；Android GameEngineTest 8 项及 assembleDebug；Web 规则/恢复检查；actionlint 和 git diff --check 通过。
+- 最终 Actions：Rust 7 项及 release、Android 固定签名 release/单元/互通/lint、Node 恢复与兵卒规则检查、amd64/arm64 实际镜像启动和网页/APK 字节核对均通过。未进行新一轮真机、真实公网对局或性能压测。
+- 最终镜像 sha-50898fe 与 latest 发布成功，索引摘要 sha256:4692c5586262e54b1237ac7a934018f996385fcf692de1b6f8dd4f6c15e7ade8；同时发布 latest-amd64 / latest-arm64。配置和用户部署命令不变。
+- Actions APK 已下载至 android_client/build/deliverables/chinese-chess-flipping-0.6.1-actions.apk，2253142 字节，SHA-256 a1ef4a8b258a62b3960cbe9915e43ffcddc5149c26a59d8c8f7d6a6002b4bb0c。清单/哈希/apksigner 校验通过，签名证书与已有 0.6.0 一致。APK、原始日志及本机凭据未入库。
+- 保留原未跟踪 android_client/gradle/gradle-daemon-jvm.properties。收尾文档提交标记 [skip ci]，避免仅同步说明再次发布镜像。
 
 ## 两台服务器更新至 0.6.0（2026-09-29）
 

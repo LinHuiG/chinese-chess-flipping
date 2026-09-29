@@ -5,8 +5,8 @@
 - 首次先构建 Android APK，再从仓库根目录执行 `python scripts/package-app-update.py` 生成更新资源；随后 `cargo run --release` 本地启动。Actions 自动执行这一流程。
 - TCP_PORT=8888、HTTP_PORT=80、UDP_PORT=8888，均可设置为 1–65535。
 - TCP_WORKER_THREADS=4：共用 Tokio I/O 运行时的工作线程数，范围 1–256。
-- 网页位于 src/main/resources/web/，更新包位于 app-update/；均通过 include_bytes 嵌入程序，不在请求时读磁盘。APK 与版本清单是生成文件，不入库；发布包由 Actions 用固定签名构建。
-- server/ 是唯一 Docker 构建上下文。Dockerfile 使用 musl 静态编译与 scratch 运行镜像，数值 UID 10001，无 JVM。
+- 网页位于 src/main/resources/web/，更新包位于 app-update/；作为独立层打入镜像，启动时读取一次并共享 Bytes，不在请求时读磁盘。CHESS_RESOURCE_DIR 在镜像中为 /app，本地默认工程目录；缺少资源或 APK 清单校验失败时启动失败。APK 与版本清单是生成文件，不入库；发布包由 Actions 用固定签名构建。
+- server/ 是唯一 Docker 构建上下文。Dockerfile 使用 musl 静态编译与 scratch 运行镜像，数值 UID 10001，无 JVM。资源在 Rust 编译之后复制，仅改网页/APK 时可复用编译缓存。
 
 使用 `cargo check --locked` 做编译检查，`cargo test --locked` 运行 Rust 测试。旧 Java 实现、Maven 配置及其验证夹具已移除；Android 客户端仍是独立的 Java 工程。
 

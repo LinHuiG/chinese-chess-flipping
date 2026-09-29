@@ -8,7 +8,7 @@
 
 发布流程：固定签名的 `assembleRelease` → 生成 APK 版本清单 → Rust 检查与编译 → APK 作为 Actions 的 app-update 附件传给两个独立镜像任务。amd64 使用 ubuntu-24.04，arm64 使用原生 ubuntu-24.04-arm，移除 QEMU；构建完成即可各自发布 latest-amd64 / latest-arm64，互不等待，某一架构失败不取消另一架构。两者均成功后按本次 digest 合并通用 latest / sha-*，不重复构建。网页、APK 和清单作为独立资源层放入镜像，不再编译进 Rust 程序，不需另配下载目录，也不把二进制包提交到仓库。启动时从 CHESS_RESOURCE_DIR（镜像固定 /app，本地默认 server/）读取一次并校验 APK，随后共享内存快照；缺少资源或 APK 校验失败时启动失败。更新继续使用原来的拉镜像、重建容器流程。原生机器见 [GitHub runner 列表](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
 
-amd64 服务器希望提前更新时，在 .env 中设置 `SERVER_IMAGE=ghcr.io/linhuig/chinese-chess-flipping:latest-amd64`；通用 latest 保持兼容，仍等待两个架构。架构标签的实际发布结果见 PROJECT_STATUS.md。
+amd64 服务器希望提前更新时，在 .env 中设置 `SERVER_IMAGE=ghcr.io/linhuig/chinese-chess-flipping:latest-amd64`；通用 latest 保持兼容，仍等待两个架构。latest-amd64 / latest-arm64 已实际发布；本次资源更新总耗时 4 分 15 秒，详见 PROJECT_STATUS.md。
 
 Docker 编译阶段只复制 Cargo.toml、Cargo.lock 和 src/*.rs；网页、APK 在最终镜像阶段复制。Actions 按架构保存 BuildKit 缓存，仅改资源且缓存命中时跳过 Rust 编译；首次发布、缓存被清理或 Rust 基础镜像变化仍需编译。检查任务另保存 Cargo 和 Gradle 构建缓存，减少重复编译。没有跳过现有发布检查；具体耗时以实际 Actions 记录为准。
 
