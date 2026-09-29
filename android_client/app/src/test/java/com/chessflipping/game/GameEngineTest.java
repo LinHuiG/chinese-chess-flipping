@@ -36,7 +36,7 @@ public class GameEngineTest {
     }
     @Test public void ordinaryCaptureMatrixAndHiddenTargets() throws Exception {
         Set<String> allowed = Set.of("1:1", "1:2", "1:3", "1:4", "1:5", "1:6", "2:3", "2:4", "2:5", "2:6", "2:7",
-                "3:4", "3:5", "3:6", "3:7", "4:5", "4:6", "4:7", "5:6", "5:7", "6:7", "7:1");
+                "3:4", "3:5", "3:6", "3:7", "4:5", "4:6", "4:7", "5:6", "5:7", "6:7", "7:1", "7:7");
         for (int attacker = 1; attacker <= 7; attacker++) for (int target = 1; target <= 7; target++) {
             GameEngine game = position(5, attacker, 6, -target);
             assertEquals(attacker + ":" + target, allowed.contains(attacker + ":" + target), game.legalMove(5, 6, 1, true));
@@ -83,13 +83,13 @@ public class GameEngineTest {
         assertNull(last.act(0, 0, 2, 1100)); assertEquals(0, last.winner); assertEquals("NO_PIECES", last.reason);
     }
     @Test public void noMovesAndTimeoutLoseWithoutDrawOrClockReset() throws Exception {
-        GameEngine game = position(0, PAWN, 1, -PAWN, 4, -PAWN, 31, KING);
+        GameEngine game = position(0, PAWN, 1, -ADVISOR, 4, -ADVISOR, 31, KING);
         assertFalse(game.legalMove(0, 1, 1, true));
         assertNotNull(game.act(0, 0, 1, 2000)); assertEquals(29000, game.remaining(2000));
         assertTrue(game.checkTimeout(31000)); assertEquals(1, game.winner); assertEquals("TIMEOUT", game.reason);
         GameEngine unlimited = new GameEngine(new Random(0), 0); unlimited.start(0);
         assertFalse(unlimited.checkTimeout(Long.MAX_VALUE)); assertEquals(-1, unlimited.remaining(Long.MAX_VALUE));
-        GameEngine trapped = position(0, -PAWN, 1, PAWN, 4, PAWN, 31, KING);
+        GameEngine trapped = position(0, -PAWN, 1, ADVISOR, 4, ADVISOR, 31, KING);
         assertNull(trapped.act(0, 31, 30, 1100)); assertEquals(0, trapped.winner); assertEquals("NO_MOVES", trapped.reason);
     }
     @Test public void completeRandomGamesPreservePieceCountsAndPublicHiddenIdentity() {

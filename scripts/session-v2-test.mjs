@@ -22,3 +22,18 @@ resumed.action(move);assert.equal(resumed.move,1);assert.equal(resumed.game.dead
 const bytes = packet(16, { type: 'ACTION', operationId: move.operationId }, { action: move.action });
 assert.deepEqual(decode(bytes.buffer).body, {action: move.action}); bytes[14] = 1; assert.throws(() => decode(bytes.buffer));
 console.log('PASS: private board/history, refresh deadline, operation replay, v2 framing');
+
+// 兵卒互吃覆盖双方颜色；己方、暗棋及非相邻目标仍不可吃。
+for (const color of [1, -1]) {
+  const pawn = new GameEngine(0, n => n - 1);
+  pawn.pieces.fill(0); pawn.revealed.fill(true); pawn.pieces[5] = color * 7;
+  for (let type = 1; type <= 7; type++) {
+    pawn.pieces[6] = -color * type;
+    assert.equal(pawn.legalMove(5, 6, color, true), type === 1 || type === 7);
+  }
+  pawn.pieces[6] = color * 7; assert.equal(pawn.legalMove(5, 6, color, true), false);
+  pawn.pieces[6] = -color * 7; pawn.revealed[6] = false;
+  assert.equal(pawn.legalMove(5, 6, color, true), false);
+  pawn.pieces[10] = -color * 7; assert.equal(pawn.legalMove(5, 10, color, true), false);
+}
+console.log('PASS: pawn captures for both colors and invalid target boundaries');

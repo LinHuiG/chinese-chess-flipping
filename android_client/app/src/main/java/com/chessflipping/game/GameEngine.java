@@ -137,7 +137,7 @@ public final class GameEngine {
                 valid = switch (type) {
                     case KING -> other != PAWN;
                     case ADVISOR, ELEPHANT, ROOK, HORSE -> other > type;
-                    case PAWN -> other == KING;
+                    case PAWN -> other == KING || other == PAWN;
                     default -> false;
                 };
             }

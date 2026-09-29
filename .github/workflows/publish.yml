@@ -178,6 +178,21 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=server-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=server-${{ matrix.arch }}
+      - name: Verify packaged runtime resources
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f release-check >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name release-check --publish 127.0.0.1:18880:80 "$IMAGE@$DIGEST"
+          for attempt in {1..20}; do
+            if curl --fail --silent 'http://127.0.0.1:18880/api/app/version?versionCode=0' > "$RUNNER_TEMP/version.json"; then break; fi
+            sleep 1
+          done
+          docker logs release-check
+          python3 -c 'import json,sys; actual=json.load(open(sys.argv[1])); expected=json.load(open("server/app-update/latest.json")); assert all(actual[k]==v for k,v in expected.items())' "$RUNNER_TEMP/version.json"
+          curl --fail --silent http://127.0.0.1:18880/game.js | cmp - server/src/main/resources/web/game.js
+          curl --fail --silent 'http://127.0.0.1:18880/api/app/latest.apk?versionCode=0' | cmp - server/app-update/latest.apk
       # 各架构直接发布可用标签；最终合并使用本次构建的 digest，不能读可变 latest 标签。
       - name: Save image digest
         env:

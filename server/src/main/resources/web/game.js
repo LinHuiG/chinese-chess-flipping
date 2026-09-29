@@ -94,7 +94,7 @@ export class GameEngine {
       if (!target) valid = true;
       else if (this.revealed[to]) {
         const other = Math.abs(target);
-        valid = type === 1 ? other !== 7 : type === 7 ? other === 1 : type >= 2 && type <= 5 && other > type;
+        valid = type === 1 ? other !== 7 : type === 7 ? (other === 1 || other === 7) : type >= 2 && type <= 5 && other > type;
       }
     }
     if (!valid || !checkHistory || target) return valid;
