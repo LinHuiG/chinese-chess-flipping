@@ -1,5 +1,13 @@
 # 项目执行记录与交接
 
+## AGPL 许可与 README 整理（2026-09-30）
+
+- 用户选择 AGPL-3.0，并授权将许可证与 README 一起提交推送。新增根目录 LICENSE，采用 SPDX 发布的 AGPL v3 标准全文；README 和 server/Cargo.toml 明确标识为 AGPL-3.0-only。第三方代码、资源及原有许可声明保留各自许可，本轮未进行完整依赖许可审计。
+- README 改为面向玩家、部署者和开发者的项目首页：介绍功能、Android 下载与联机、Docker Compose 启动/更新、端口、本地开发和许可证。删除 agent 接续入口、操作授权提醒、内部验证边界及流水线缓存实现细节；内部协作与执行记录仍保留在 AGENTS.md、PROJECT_STATUS.md。
+- 核对当前代码中的默认地址、最低 Android 版本、SDK/JDK 配置、Compose 端口映射及 APK 打包路径。README 的 6 个本地链接存在，2 段 PowerShell 示例语法解析通过；Cargo 离线 metadata 正确读取 AGPL-3.0-only，LICENSE 第 0–17 节及正文结束标记齐全，git diff --cached --check 通过。未运行编译、对局回归或新部署。
+- GitHub API 确认最近成功运行 36599997835 的 app-update 附件存在且未过期。当前环境访问默认站点 HTTPS 返回 502、HTTP 检查超时，未据此断言服务器故障；README 未添加承诺可用的公共试玩/直接 APK 下载入口，未修改服务器。
+- 文档及许可证已暂存；本轮提交使用 [skip ci]，避免仅许可元数据变动触发镜像构建。保留本机 Gradle 未跟踪文件与被忽略的本地教学资料。
+
 ## CI 优化与 Node.js 24（2026-09-30，已发布）
 
 - 用户授权复核后提交推送，并要求处理 GitHub Node.js 20 弃用警告。已核实最近一次远端运行 36575192599 的结果为 success，该提示不是该次发布失败的证据。
