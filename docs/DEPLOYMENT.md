@@ -6,7 +6,9 @@
 
 ## Actions 构建 App 和镜像
 
-发布流程：固定签名的 `assembleRelease` → 生成 APK 版本清单 → Rust 检查与编译 → APK 作为 Actions 的 app-update 附件传给镜像任务 → 构建 amd64/arm64 镜像。APK 和清单均内嵌于 Rust 程序，不需另外配置下载目录，也不把二进制包提交到仓库。
+发布流程：固定签名的 `assembleRelease` → 生成 APK 版本清单 → Rust 检查与编译 → APK 作为 Actions 的 app-update 附件传给两个独立镜像任务。amd64 使用 ubuntu-24.04，arm64 使用原生 ubuntu-24.04-arm，移除 QEMU；构建完成即可各自发布 latest-amd64 / latest-arm64，互不等待，某一架构失败不取消另一架构。两者均成功后按本次 digest 合并通用 latest / sha-*，不重复构建。APK 和清单均内嵌于 Rust 程序，不需另外配置下载目录，也不把二进制包提交到仓库。原生机器见 [GitHub runner 列表](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
+
+amd64 服务器希望提前更新时，在 .env 中设置 `SERVER_IMAGE=ghcr.io/linhuig/chinese-chess-flipping:latest-amd64`；通用 latest 保持兼容，仍等待两个架构。**新架构标签将在下次业务代码发布时首次生成，本次工作流调整不会重发现有镜像，暂不要切换到尚未生成的标签。**
 
 仓库 Actions Secrets 使用以下四项：
 
@@ -78,5 +80,5 @@ location / {
 - 更新会清空在线房间，客户端重新连接后回大厅。
 - 直连期间服务器连接仍必须保持；网络断开保留至最后心跳后 60 秒，倒计时继续。
 - 可使用上一版 sha-* 镜像标签回退。0.6.0 协议 v2 与 0.5.x 不兼容，回退或升级须同时处理服务端和客户端。
-- Android、server/、打包脚本或发布工作流变化都会触发镜像发布；纯文档修改只检查，也可手动触发发布。
+- main 推送中的 Android、server/ 或 APK 打包脚本变化触发镜像发布；仅改工作流或仓库文档不会触发推送构建。PR 仍执行检查，手动触发仍可发布。
 - 服务端只使用 Cargo 构建，生产启动程序为 /app/chess-server。

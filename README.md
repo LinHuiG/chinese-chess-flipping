@@ -42,7 +42,7 @@ gradlew.bat assembleDebug lintDebug testDebugUnitTest
 
 ## Docker 与发布
 
-镜像地址：ghcr.io/linhuig/chinese-chess-flipping:latest，另有 sha-* 标签。Actions 自动构建固定签名的 release APK，生成版本清单，再编译 Rust 并打进 amd64、arm64 镜像；同时提供 app-update 下载附件。main 推送包含 Android、服务端、打包脚本或发布工作流变化时发布，也可手动触发。纯文档修改只检查。
+镜像地址：ghcr.io/linhuig/chinese-chess-flipping:latest，另有 sha-* 标签。Actions 自动构建固定签名的 release APK，生成版本清单，再由原生 amd64、arm64 机器独立构建镜像；各自完成即发布 latest-amd64 / latest-arm64，两者都成功后合并通用 latest；同时提供 app-update 下载附件。main 推送包含 Android、服务端或 APK 打包脚本变化时发布，也可手动触发；仅改工作流或仓库文档不触发推送构建。新架构标签从下一次代码发布开始提供。
 
 容器运行时只包含静态 Rust 程序（内嵌网页和 APK），没有 JVM。保留 TCP_PORT、HTTP_PORT、TCP_WORKER_THREADS，新增 UDP_PORT。直连协助端口需独立开放 UDP；现有 HTTP 反向代理不会自动转发它。签名配置和部署见 [部署说明](docs/DEPLOYMENT.md)，由用户自行部署，不远程操作服务器。
 

@@ -1,5 +1,12 @@
 # 项目执行记录与交接
 
+## amd64 独立提前发布（2026-09-29，配置调整）
+
+- 用户要求拆分发布、amd64 完成即可使用，并明确本次没有服务端代码修改，不得重新发布镜像。仅修改工作流与仓库文档，未改 server/、Android 或 APK 打包代码。
+- publish 改为原生 amd64 / arm64 矩阵，移除 QEMU；fail-fast=false，独立发布 latest-amd64 / latest-arm64 和架构专用 sha 标签。按架构隔离缓存，两个任务都成功后以本次 digest 合并通用 latest / sha-*；同分支串行发布防止旧构建覆盖新标签。
+- push 增加路径过滤，并从内部变更判定移除工作流路径；仅 server/、android_client/ 或 scripts/package-app-update.py 变化自动触发。保留 Android 发布，避免 APK 更新漏入镜像；PR 检查及手动发布保留。
+- actionlint 1.7.12 和 10 段 shell 语法检查通过；本次 4 个改动文件的发布路径匹配为 0，server/、Android 和 APK 打包脚本均无改动。提交附带 [skip ci]，配合路径过滤避免推送后重新构建；未手动触发 Actions、未改远端镜像标签。新架构标签从下次代码发布开始生成，原生 ARM 构建和实际提速尚未实跑验证。
+
 ## 会话/协议 v2 与 App 更新（2026-09-29，已发布）
 
 - 用户“执行”授权后开始本轮，新增要求服务端每个功能块有中文注释；main/net/hub/wire/json/update 已补齐。没有启用 dsh 或子代理，没有远程部署。

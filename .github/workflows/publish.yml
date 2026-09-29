@@ -2,10 +2,18 @@ name: Test and publish Docker image
 on:
   push:
     branches: [main]
+    paths:
+      - 'server/**'
+      - 'android_client/**'
+      - 'scripts/package-app-update.py'
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
+# 同一分支按次发布，避免较早的构建晚结束后覆盖 latest。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -31,7 +39,7 @@ jobs:
             else
               git cat-file -e "$base^{commit}" || git fetch --no-tags origin "$base"
             fi
-            changed_files=$(git diff --name-only "$base" "$GITHUB_SHA" -- server/ android_client/ scripts/package-app-update.py .github/workflows/publish.yml)
+            changed_files=$(git diff --name-only "$base" "$GITHUB_SHA" -- server/ android_client/ scripts/package-app-update.py)
             if [[ -n "$changed_files" ]]; then publish_image=true; fi
           fi
           echo "publish_image=$publish_image" >> "$GITHUB_OUTPUT"
@@ -108,9 +116,18 @@ jobs:
             server/app-update/latest.json
           if-no-files-found: error
   publish:
+    name: Publish ${{ matrix.arch }}
     if: needs.test.outputs.publish_image == 'true'
     needs: test
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -125,7 +142,6 @@ jobs:
         env:
           REPOSITORY: ${{ github.repository }}
         run: echo "IMAGE=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_ENV"
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -137,15 +153,57 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=tag
-            type=sha
+            type=raw,value=latest-${{ matrix.arch }},enable={{is_default_branch}}
+            type=sha,suffix=-${{ matrix.arch }}
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: ./server
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=server-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=server-${{ matrix.arch }}
+      # 各架构直接发布可用标签；最终合并使用本次构建的 digest，不能读可变 latest 标签。
+      - name: Save image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: printf '%s' "$DIGEST" > "$RUNNER_TEMP/$ARCH"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/${{ matrix.arch }}
+          if-no-files-found: error
+  merge:
+    name: Publish multi-platform manifest
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # 只有两个架构都成功才到此步骤；仅合并清单，不重新编译或等待 QEMU。
+      - name: Combine the two published architectures
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${REPOSITORY,,}"
+          tags=(-t "$image:sha-${GITHUB_SHA::7}")
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then tags+=(-t "$image:latest"); fi
+          docker buildx imagetools create "${tags[@]}" \
+            "$image@$(cat "$RUNNER_TEMP/digests/amd64")" \
+            "$image@$(cat "$RUNNER_TEMP/digests/arm64")"
