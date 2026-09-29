@@ -1,11 +1,11 @@
 package com.chessflipping.game;
 
-import org.junit.jupiter.api.Test;
+import org.junit.Test;
 import java.util.*;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.Assert.*;
 import static com.chessflipping.game.GameEngine.*;
 
-class GameEngineTest {
+public class GameEngineTest {
     private GameEngine position(int... squaresAndPieces) throws Exception {
         GameEngine game = new GameEngine(new Random(1), 30);
         Arrays.fill(game.pieces, 0); Arrays.fill(game.revealed, true);
@@ -19,7 +19,7 @@ class GameEngineTest {
         var key = GameEngine.class.getDeclaredMethod("boardKey"); key.setAccessible(true);
         history.add((String)key.invoke(game));
     }
-    @Test void initialInventoryFirstFlipColorAndClock() {
+    @Test public void initialInventoryFirstFlipColorAndClock() {
         for (int seed = 0; seed < 20; seed++) {
             GameEngine game = new GameEngine(new Random(seed), 60);
             assertEquals(16, game.remainingPieces(1)); assertEquals(16, game.remainingPieces(-1));
@@ -34,17 +34,17 @@ class GameEngineTest {
             assertEquals(1 - first, game.turn); assertEquals(60000, game.remaining(2000));
         }
     }
-    @Test void ordinaryCaptureMatrixAndHiddenTargets() throws Exception {
+    @Test public void ordinaryCaptureMatrixAndHiddenTargets() throws Exception {
         Set<String> allowed = Set.of("1:1", "1:2", "1:3", "1:4", "1:5", "1:6", "2:3", "2:4", "2:5", "2:6", "2:7",
                 "3:4", "3:5", "3:6", "3:7", "4:5", "4:6", "4:7", "5:6", "5:7", "6:7", "7:1");
         for (int attacker = 1; attacker <= 7; attacker++) for (int target = 1; target <= 7; target++) {
             GameEngine game = position(5, attacker, 6, -target);
-            assertEquals(allowed.contains(attacker + ":" + target), game.legalMove(5, 6, 1, true), attacker + ":" + target);
+            assertEquals(attacker + ":" + target, allowed.contains(attacker + ":" + target), game.legalMove(5, 6, 1, true));
             game.revealed[6] = false; assertFalse(game.legalMove(5, 6, 1, true));
             game.pieces[6] = target; game.revealed[6] = true; assertFalse(game.legalMove(5, 6, 1, true));
         }
     }
-    @Test void rookLongRangeAndHorseDiagonalSpecialCaptures() throws Exception {
+    @Test public void rookLongRangeAndHorseDiagonalSpecialCaptures() throws Exception {
         GameEngine rook = position(0, ROOK, 2, ROOK, 31, -KING);
         rook.revealed[2] = false; assertTrue(rook.legalMove(0, 2, 1, true));
         rook.pieces[1] = PAWN; assertFalse(rook.legalMove(0, 2, 1, true));
@@ -53,14 +53,14 @@ class GameEngineTest {
         horse.revealed[10] = true; assertFalse(horse.legalMove(5, 10, 1, true));
         horse.pieces[10] = -HORSE; assertTrue(horse.legalMove(5, 10, 1, true));
     }
-    @Test void cannonUsesExactlyOneScreenAndCannotJumpIntoEmptySpace() throws Exception {
+    @Test public void cannonUsesExactlyOneScreenAndCannotJumpIntoEmptySpace() throws Exception {
         GameEngine game = position(0, CANNON, 8, PAWN, 20, -CANNON, 28, -KING);
         assertTrue(game.legalMove(0, 4, 1, true)); assertFalse(game.legalMove(0, 12, 1, true));
         assertTrue(game.legalMove(0, 20, 1, true)); assertFalse(game.legalMove(0, 28, 1, true));
         game.pieces[20] = KING; assertFalse(game.legalMove(0, 20, 1, true));
         game.revealed[20] = false; assertTrue(game.legalMove(0, 20, 1, true));
     }
-    @Test void repeatIgnoresTurnAndHistoryResetsAfterFlipOrCapture() throws Exception {
+    @Test public void repeatIgnoresTurnAndHistoryResetsAfterFlipOrCapture() throws Exception {
         GameEngine game = position(0, ROOK, 31, -ROOK, 16, PAWN);
         game.revealed[16] = false; recordPosition(game);
         assertNull(game.act(0, 0, 1, 1100)); assertNull(game.act(1, 31, 30, 1200));
@@ -72,7 +72,7 @@ class GameEngineTest {
         String before = (String)key.invoke(game); game.turn = 1 - game.turn;
         assertEquals(before, key.invoke(game));
     }
-    @Test void hiddenSelfCaptureCountsAndKingCaptureAloneDoesNotEndGame() throws Exception {
+    @Test public void hiddenSelfCaptureCountsAndKingCaptureAloneDoesNotEndGame() throws Exception {
         GameEngine game = position(0, ROOK, 2, KING, 31, -PAWN);
         game.revealed[2] = false;
         assertNull(game.act(0, 0, 2, 1100)); assertEquals(List.of(KING), game.captured);
@@ -82,7 +82,7 @@ class GameEngineTest {
         GameEngine last = position(0, ROOK, 2, -KING);
         assertNull(last.act(0, 0, 2, 1100)); assertEquals(0, last.winner); assertEquals("NO_PIECES", last.reason);
     }
-    @Test void noMovesAndTimeoutLoseWithoutDrawOrClockReset() throws Exception {
+    @Test public void noMovesAndTimeoutLoseWithoutDrawOrClockReset() throws Exception {
         GameEngine game = position(0, PAWN, 1, -PAWN, 4, -PAWN, 31, KING);
         assertFalse(game.legalMove(0, 1, 1, true));
         assertNotNull(game.act(0, 0, 1, 2000)); assertEquals(29000, game.remaining(2000));
@@ -92,7 +92,7 @@ class GameEngineTest {
         GameEngine trapped = position(0, -PAWN, 1, PAWN, 4, PAWN, 31, KING);
         assertNull(trapped.act(0, 31, 30, 1100)); assertEquals(0, trapped.winner); assertEquals("NO_MOVES", trapped.reason);
     }
-    @Test void completeRandomGamesPreservePieceCountsAndPublicHiddenIdentity() {
+    @Test public void completeRandomGamesPreservePieceCountsAndPublicHiddenIdentity() {
         for (int seed = 0; seed < 8; seed++) {
             Random random = new Random(seed); GameEngine game = new GameEngine(random, 0); game.start(0);
             for (int step = 1; step <= 1000 && game.winner < 0; step++) {

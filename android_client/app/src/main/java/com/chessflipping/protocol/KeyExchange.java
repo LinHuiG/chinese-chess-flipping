@@ -14,7 +14,7 @@ import java.util.Arrays;
 /** ECDH P-256 + RFC 5869 HKDF-SHA256. No provider is hard-coded (Android/JDK). */
 public final class KeyExchange {
     private static final SecureRandom RANDOM = new SecureRandom();
-    private static final byte[] LABEL = "chess-flipping/tcp/v1".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] LABEL = "chess-flipping/tcp/v2".getBytes(StandardCharsets.US_ASCII);
     private KeyExchange() {}
 
     public static KeyPair generateKeyPair() throws GeneralSecurityException {

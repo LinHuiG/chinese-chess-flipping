@@ -26,17 +26,17 @@ public final class TcpClient implements GameConnection {
         default void onEvent(String message) { }
         default void onJsonMessage(JSONObject message, boolean event) { if (event) onEvent(message.toString()); else onMessage(message.toString()); }
         default void onLatency(long millis) { }
+        default void onAppChunk(JSONObject header, byte[] bytes) { }
     }
 
     private final ExecutorService reader = Executors.newSingleThreadExecutor();
     private final ScheduledExecutorService writer = Executors.newSingleThreadScheduledExecutor();
-    private final ConcurrentMap<String, Integer> pending = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Long> sentAt = new ConcurrentHashMap<>();
     private final Semaphore outstanding = new Semaphore(128);
     private final AtomicBoolean closed = new AtomicBoolean(), started = new AtomicBoolean();
     private final Object closeLock = new Object();
     private final Listener listener;
-    private final String deviceId, app, version;
+    private final JSONObject identity;
+    private volatile long pingAt;
     private final Socket socket = new Socket();
     private volatile boolean ready;
     private volatile String closeReason = "连接已关闭";
@@ -44,11 +44,8 @@ public final class TcpClient implements GameConnection {
     private OutputStream output;
     private volatile long lastPong;
 
-    public TcpClient(String deviceId, String app, String version, Listener listener) {
-        this.deviceId = deviceId;
-        this.app = app;
-        this.version = version;
-        this.listener = listener;
+    public TcpClient(JSONObject identity, Listener listener) {
+        this.identity = identity; this.listener = listener;
     }
 
     public void connect(String host, int port) {
@@ -74,13 +71,12 @@ public final class TcpClient implements GameConnection {
             ready = true;
             lastPong = System.nanoTime();
             listener.onConnected();
-            writer.scheduleWithFixedDelay(() -> queueRequest(PING, new byte[]{'{', '}'}), 5, 5, TimeUnit.SECONDS);
             writer.scheduleWithFixedDelay(() -> {
-                long now = System.nanoTime();
-                if (now - lastPong >= TimeUnit.SECONDS.toNanos(30)
-                        || sentAt.values().stream().anyMatch(time -> now - time >= TimeUnit.SECONDS.toNanos(15)))
-                    stop("服务端响应超时");
-            }, 1, 1, TimeUnit.SECONDS);
+                if (System.nanoTime() - lastPong >= TimeUnit.SECONDS.toNanos(15)) { stop("心跳中断，正在重连"); return; }
+                try { pingAt = System.nanoTime(); writeSecure(new WireProtocol.Packet(PING,
+                        new JSONObject().put("ping", pingAt).toString().getBytes(StandardCharsets.UTF_8), new byte[]{'{','}'})); }
+                catch (Exception ex) { stop("心跳发送失败"); }
+            }, 5, 5, TimeUnit.SECONDS);
             while (!closed.get()) {
                 WireProtocol.Frame frame = WireProtocol.read(input);
                 if (frame == null) throw new EOFException("服务端关闭了连接");
@@ -95,8 +91,6 @@ public final class TcpClient implements GameConnection {
             // Also dispose a session that finished deriving concurrently with a timeout/close.
             SecureSession current = session;
             if (current != null) current.close();
-            pending.clear();
-            sentAt.clear();
             listener.onClosed(closeReason);
         }
     }
@@ -119,8 +113,8 @@ public final class TcpClient implements GameConnection {
         WireProtocol.Packet finished = session.decrypt(requiredFrame(input));
         validateResponse(finished, SERVER_FINISHED, tid);
         if (!MessageDigest.isEqual(transcript, finished.body)) throw new IOException("Handshake transcript mismatch");
-        byte[] metadata = new JSONObject().put("TID", tid).put("CHL", "ANDROID").put("DID", deviceId)
-                .put("APP", app).put("VER", version).put("UDP", 1).toString().getBytes(StandardCharsets.UTF_8);
+        JSONObject meta = new JSONObject(identity.toString()).put("TID", tid).put("CHL", "ANDROID").put("protocol", 2).put("UDP", 1);
+        byte[] metadata = meta.toString().getBytes(StandardCharsets.UTF_8);
         writeSecure(new WireProtocol.Packet(CLIENT_FINISHED, metadata, transcript));
         WireProtocol.Packet acknowledgement = session.decrypt(requiredFrame(input));
         validateResponse(acknowledgement, READY, tid);
@@ -145,58 +139,26 @@ public final class TcpClient implements GameConnection {
     }
 
     private void receive(WireProtocol.Packet packet) throws Exception {
-        JSONObject header = object(packet.control);
-        Object id = header.get("TID");
-        if (!(id instanceof String) || !((String)id).matches("[0-9a-f]{32}")) throw new IOException("Invalid TID");
-        if (packet.type == BUSINESS_EVENT) {
-            if (!success(header)) throw new IOException("Invalid event status");
-            listener.onJsonMessage(object(packet.body), true);
-            return;
-        }
-        Integer expected = pending.remove((String)id);
-        Long sent = sentAt.remove((String)id);
-        if (expected == null || (packet.type != expected && packet.type != ERROR))
-            throw new IOException("Unmatched response");
-        outstanding.release();
-        JSONObject body = object(packet.body);
-        if (packet.type == ERROR) {
-            if (success(header)) throw new IOException("Invalid error status");
-            listener.onMessage("服务端错误：" + header.optString("MSG", "请求失败"));
-        } else {
-            if (!success(header)) throw new IOException("Invalid response status");
-            if (packet.type == PONG) { lastPong = System.nanoTime(); if (sent != null) listener.onLatency(TimeUnit.NANOSECONDS.toMillis(lastPong - sent)); }
-            listener.onJsonMessage(body, false);
-        }
+        if (packet.type == PONG) {
+            JSONObject header = object(packet.control);
+            if (header.optLong("ping", -1) != pingAt) return;
+            lastPong = System.nanoTime(); listener.onLatency(TimeUnit.NANOSECONDS.toMillis(lastPong - pingAt));
+            listener.onJsonMessage(new JSONObject().put("type", "PONG"), false);
+        } else if (packet.type == 51) listener.onAppChunk(object(packet.control), packet.body);
+        else if (packet.type == BUSINESS_EVENT || packet.type == 49) listener.onJsonMessage(GameConnection.message(packet), true);
+        else throw new IOException("Unexpected packet");
     }
-
-    public void echo(String message) {
-        try { request(new JSONObject().put("type", "ECHO").put("message", message)); }
-        catch (org.json.JSONException ex) { listener.onMessage("消息编码失败"); }
-    }
-
     public void request(JSONObject request) {
-        if (!ready || closed.get()) { listener.onMessage("请等待加密连接建立"); return; }
-            byte[] body = request.toString().getBytes(StandardCharsets.UTF_8);
-            if (body.length > MAX_BODY) { listener.onMessage("消息太长，请缩短后重试"); return; }
-            if (!outstanding.tryAcquire()) { listener.onMessage("等待中的请求过多，请稍后重试"); return; }
-            try { writer.execute(() -> sendRequest(BUSINESS_REQUEST, body)); }
-            catch (RejectedExecutionException ex) { outstanding.release(); }
-    }
-
-    private void queueRequest(int type, byte[] body) {
-        if (!ready || closed.get()) return;
-        if (!outstanding.tryAcquire()) { stop("服务端未及时响应，请重新连接"); return; }
-        sendRequest(type, body);
-    }
-
-    /** Called only by the single writer executor, preserving nonce/write ordering. */
-    private void sendRequest(int type, byte[] body) {
-        if (closed.get()) { outstanding.release(); return; }
-        String tid = newTid();
-        pending.put(tid, type == PING ? PONG : BUSINESS_RESPONSE);
-        sentAt.put(tid, System.nanoTime());
-        try { writeSecure(new WireProtocol.Packet(type, control(tid), body)); }
-        catch (Exception ex) { stop("消息发送失败，请重新连接"); }
+        if (!ready || closed.get()) { listener.onMessage("连接正在恢复"); return; }
+        if (!outstanding.tryAcquire()) { stop("发送队列已满"); return; }
+        try {
+            WireProtocol.Packet packet = GameConnection.packet(request);
+            if (packet.body.length > MAX_BODY) throw new IOException("消息过大");
+            writer.execute(() -> {
+                try { writeSecure(packet); if ("LOGOUT".equals(request.optString("type"))) stop("已退出"); } catch (Exception ex) { stop("消息发送失败"); }
+                finally { outstanding.release(); }
+            });
+        } catch (Exception ex) { outstanding.release(); listener.onMessage("消息发送失败"); }
     }
 
     private synchronized void writeSecure(WireProtocol.Packet packet) throws Exception {

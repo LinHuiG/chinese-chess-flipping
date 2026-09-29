@@ -17,20 +17,43 @@ public final class HostController {
     private int seconds = 60;
     private long sequence, move;
     private boolean starting, finishing;
+    private String startId = "";
     // Results are tiny and scoped to one room generation; snapshots are produced only when needed.
     private final LinkedHashMap<String, String> completed = new LinkedHashMap<>();
 
     public HostController(Consumer<JSONObject> send, LongSupplier clock) { this.send = send; this.clock = clock; }
-    public void clear() { room = null; game = null; ready.clear(); completed.clear(); starting = finishing = false; sequence = move = 0; }
-    public void room(JSONObject room, String self) throws JSONException {
-        this.room = room; this.self = self; sequence = 0; finishing = false;
-        completed.clear();
-        if (!room.optBoolean("playing")) {
-            game = null; starting = false; ready.clear(); move = 0;
+    public void clear() { room = null; game = null; ready.clear(); completed.clear(); starting = finishing = false; startId = ""; sequence = move = 0; }
+    public void room(JSONObject next, String self) throws JSONException {
+        boolean same = room != null && room.optLong("roomId") == next.optLong("roomId") && room.optLong("version") == next.optLong("version");
+        boolean startedHere = starting && startId.equals(next.optString("startId")) && game != null;
+        this.room = next; this.self = self; finishing = false;
+        if (!same) { sequence = 0; completed.clear(); }
+        if (!next.optBoolean("playing")) {
+            game = null; starting = false; startId = "";
+            if (!same) { ready.clear(); move = 0; }
             if (host()) publish();
-        } else if (host() && game != null) {
-            starting = false; game.start(clock.getAsLong()); publish();
+        } else if (host()) {
+            if ((!same && !startedHere) || game == null) {
+                game = null;
+                send.accept(context("FINISH").put("winnerId", next.getJSONArray("members").getString(1)).put("reason", "RESTORE_FAILED"));
+                return;
+            }
+            starting = false; game.checkTimeout(clock.getAsLong());
+            if (game.winner >= 0) finish(); else publish();
         }
+    }
+    public JSONObject save() throws JSONException {
+        return new JSONObject().put("room", room).put("self", self).put("seconds", seconds).put("ready", new JSONArray(ready))
+                .put("sequence", sequence).put("move", move).put("starting", starting).put("startId", startId)
+                .put("completed", new JSONObject(completed)).put("game", game == null ? JSONObject.NULL : game.save());
+    }
+    public void restore(JSONObject saved) throws JSONException {
+        clear(); room = saved.optJSONObject("room"); self = saved.optString("self"); seconds = saved.getInt("seconds");
+        sequence = saved.getLong("sequence"); move = saved.getLong("move"); starting = saved.getBoolean("starting"); startId = saved.optString("startId");
+        JSONArray names = saved.getJSONArray("ready"); for (int i = 0; i < names.length(); i++) ready.add(names.getString(i));
+        JSONObject done = saved.getJSONObject("completed"); Iterator<String> keys = done.keys();
+        while (keys.hasNext()) { String key = keys.next(); completed.put(key, done.getString(key)); }
+        if (saved.optJSONObject("game") != null) game = new GameEngine(saved.getJSONObject("game"));
     }
     public boolean needsTick() {
         return host() && room.optBoolean("playing") && game != null && game.seconds > 0 && !finishing;
@@ -41,13 +64,13 @@ public final class HostController {
     private boolean host() { return room != null && self.equals(room.optString("hostId")); }
 
     public void action(JSONObject message) throws JSONException {
-        if (!host()) return;
+        if (!host() || !message.optString("operationId").matches("[0-9a-f]{32}")) return;
         JSONObject action = message.getJSONObject("action");
         String actor = message.getString("actorId"), kind = action.optString("type"), error = null;
         String operation = message.optString("operationId"), identity = actor + ":" + operation;
         if (!operation.isEmpty() && completed.containsKey(identity)) {
             String previous = completed.get(identity);
-            JSONObject reply = context("HOST_REPLY").put("requestId", message.getString("requestId")).put("operationId", operation).put("ok", previous.isEmpty());
+            JSONObject reply = context("HOST_REPLY").put("targetId", actor).put("operationId", operation).put("ok", previous.isEmpty());
             if (previous.isEmpty()) reply.put("state", snapshot(++sequence)); else reply.put("error", previous);
             send.accept(reply); return;
         }
@@ -72,7 +95,7 @@ public final class HostController {
             else if (choice != 0 && choice != 30 && choice != 60 && choice != 90) error = "时间选项无效";
             else { seconds = choice; ready.clear(); }
         } else error = "未知操作";
-        JSONObject reply = context("HOST_REPLY").put("requestId", message.getString("requestId")).put("ok", error == null);
+        JSONObject reply = context("HOST_REPLY").put("targetId", actor).put("ok", error == null);
         if (!operation.isEmpty()) {
             reply.put("operationId", operation); completed.put(identity, error == null ? "" : error);
             if (completed.size() > 128) completed.remove(completed.keySet().iterator().next());
@@ -82,8 +105,9 @@ public final class HostController {
         if (room.optBoolean("playing") && game != null && game.winner >= 0) finish();
         else if (!room.optBoolean("playing") && !starting && members.length() == 2
                 && ready.contains(members.getString(0)) && ready.contains(members.getString(1))) {
-            starting = true; move = 0; game = new GameEngine(new SecureRandom(), seconds);
-            send.accept(context("START").put("state", snapshot(0)));
+            starting = true; move = 0; startId = UUID.randomUUID().toString().replace("-", "");
+            game = new GameEngine(new SecureRandom(), seconds); game.start(clock.getAsLong());
+            send.accept(context("START").put("operationId", startId));
         }
     }
     private JSONObject snapshot(long seq) throws JSONException {

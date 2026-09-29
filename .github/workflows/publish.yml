@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Check server changes
+      - name: Check application changes
         id: scope
         shell: bash
         env:
@@ -31,7 +31,7 @@ jobs:
             else
               git cat-file -e "$base^{commit}" || git fetch --no-tags origin "$base"
             fi
-            changed_files=$(git diff --name-only "$base" "$GITHUB_SHA" -- server/)
+            changed_files=$(git diff --name-only "$base" "$GITHUB_SHA" -- server/ android_client/ scripts/package-app-update.py .github/workflows/publish.yml)
             if [[ -n "$changed_files" ]]; then publish_image=true; fi
           fi
           echo "publish_image=$publish_image" >> "$GITHUB_OUTPUT"
@@ -39,17 +39,73 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
-          cache: maven
+          java-version: '25'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-37' 'build-tools;36.0.0'
+      # Only a main push or manual publish receives the fixed signing key. PRs use disposable debug signing.
+      - name: Build signed update APK
+        if: steps.scope.outputs.publish_image == 'true'
+        env:
+          APK_KEYSTORE_B64: ${{ secrets.APK_KEYSTORE_B64 }}
+          APK_KEYSTORE: ${{ runner.temp }}/app-signing.keystore
+          APK_STORE_PASSWORD: ${{ secrets.APK_STORE_PASSWORD }}
+          APK_KEY_ALIAS: ${{ secrets.APK_KEY_ALIAS }}
+          APK_KEY_PASSWORD: ${{ secrets.APK_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$APK_KEYSTORE"' EXIT
+          for key in APK_KEYSTORE_B64 APK_STORE_PASSWORD APK_KEY_ALIAS APK_KEY_PASSWORD; do
+            if [[ -z "${!key}" ]]; then echo "Missing repository secret: $key" >&2; exit 1; fi
+          done
+          umask 077
+          printf '%s' "$APK_KEYSTORE_B64" | base64 --decode > "$APK_KEYSTORE"
+          unset APK_KEYSTORE_B64
+          android_client/gradlew -p android_client --no-daemon assembleRelease
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify android_client/app/build/outputs/apk/release/app-release.apk
+          python3 scripts/package-app-update.py --release
+      - name: Build debug APK for checks
+        if: steps.scope.outputs.publish_image != 'true'
+        run: |
+          android_client/gradlew -p android_client --no-daemon assembleDebug
+          python3 scripts/package-app-update.py
+      - name: Verify update manifest
+        run: python3 scripts/package-app-update.py --check
       - name: Build Rust server
         run: |
           rustup toolchain install stable --profile minimal
           cargo +stable test --locked --manifest-path server/Cargo.toml
           cargo +stable build --locked --release --manifest-path server/Cargo.toml
-      - name: Android rules and real Rust interoperability
+      - name: Check Android recovery and TCP / WS / update interoperability
         env:
-          CHESS_RUST_BINARY: ${{ github.workspace }}/server/target/release/chess-server
-        run: mvn --batch-mode --no-transfer-progress -f server/pom.xml verify
+          TCP_PORT: '18888'
+          HTTP_PORT: '18880'
+          UDP_PORT: '18888'
+          CHESS_TEST_TCP_PORT: '18888'
+          CHESS_TEST_HTTP_PORT: '18880'
+        run: |
+          set -euo pipefail
+          server/target/release/chess-server &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..20}; do
+            if curl --fail --silent 'http://127.0.0.1:18880/api/app/version?versionCode=0' > /dev/null; then break; fi
+            sleep 1
+          done
+          android_client/gradlew -p android_client --no-daemon testDebugUnitTest lintDebug
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check browser game recovery and protocol
+        run: node scripts/session-v2-test.mjs
+      - uses: actions/upload-artifact@v4
+        if: steps.scope.outputs.publish_image == 'true'
+        with:
+          name: app-update
+          path: |
+            server/app-update/latest.apk
+            server/app-update/latest.json
+          if-no-files-found: error
   publish:
     if: needs.test.outputs.publish_image == 'true'
     needs: test
@@ -59,6 +115,10 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-update
+          path: server/app-update
       - name: Lowercase image name
         shell: bash
         env:

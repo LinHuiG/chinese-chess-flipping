@@ -1,8 +1,25 @@
-# 服务器部署（Rust 0.5.0）
+# 服务器部署（Rust 0.6.0）
 
-实际已发布版本和 Actions 结果见 ../PROJECT_STATUS.md。默认由用户自行部署；本轮两台服务器的更新已获得明确授权。公开文档仅保留通用配置，不记录实际部署地址、登录账号、密码或管理入口。
+实际已发布版本和 Actions 结果见 ../PROJECT_STATUS.md。本轮由用户自行部署，不沿用历史部署操作授权。公开文档仅保留通用配置，不记录实际部署地址、登录账号、密码或管理入口。
 
-Android 0.5.1 修复 UDP 多来源路径导致的直连回退，两端客户端均应升级。定向检查和构建已通过，真实双方联机仍待验收；生产服务端程序没有因此改变。
+0.6.0 使用不兼容旧版的协议 v2，服务端和两端客户端需一起升级。增加 60 秒恢复、昵称、P2P 候选和重试、App 更新；真实 Wi-Fi/5G 直连改善仍待验收。
+
+## Actions 构建 App 和镜像
+
+发布流程：固定签名的 `assembleRelease` → 生成 APK 版本清单 → Rust 检查与编译 → APK 作为 Actions 的 app-update 附件传给镜像任务 → 构建 amd64/arm64 镜像。APK 和清单均内嵌于 Rust 程序，不需另外配置下载目录，也不把二进制包提交到仓库。
+
+仓库 Actions Secrets 使用以下四项：
+
+| 名称 | 内容 |
+| --- | --- |
+| APK_KEYSTORE_B64 | 原有签名 keystore 的 Base64 内容 |
+| APK_STORE_PASSWORD | keystore 密码 |
+| APK_KEY_ALIAS | 原签名别名 |
+| APK_KEY_PASSWORD | 原签名私钥密码 |
+
+发布时缺少任何一项即报错；PR 检查使用临时 debug 签名，不获得发布密钥。构建后临时 keystore 删除，私钥不进入仓库、附件或镜像。保留原签名才能覆盖已经安装的版本，不能每次 Actions 都生成新密钥。参考 [Android 签名说明](https://developer.android.com/studio/publish/app-signing) 与 [GitHub Secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)。
+
+每次 App 发布递增 `android_client/app/build.gradle.kts` 的 versionCode，并修改 versionName。检查更新比较 versionCode；更改服务器程序但没有 App 新版本时不会重复下载。首次从 0.5.x 升级需手动安装 app-update 附件中的 APK，此后可在 App 内更新。下载后校验包名、版本、SHA-256 和签名，安装需 Android 系统确认；在设置中可关闭自动检查。
 
 ## UDP 排查
 
@@ -35,7 +52,7 @@ docker compose logs --tail=50 server
 
 如果直接对外提供 HTTP，把 HTTP_BIND_ADDRESS 改为 0.0.0.0；如使用同机反向代理则保持回环监听。需要开放 TCP 8888、UDP 8888，以及实际对外提供网页的 HTTP/HTTPS 端口。端口值可修改，但 UDP 的容器内外端口保持一致，服务器会向安卓告知 UDP_PORT。
 
-TCP 与 UDP 可以使用相同的数字端口，它们是两种独立协议。只开放 TCP 8888 不会开放 UDP 8888。UDP 不可达时客户端自动继续中转，不影响普通联机。当前打洞协助监听 IPv4；无法取得 IPv4 可达路径时回退中转。
+TCP 与 UDP 可以使用相同的数字端口，它们是两种独立协议。只开放 TCP 8888 不会开放 UDP 8888。UDP 不可达时客户端自动继续中转，不影响普通联机。当前登记监听 IPv4；客户端可经控制连接交换全局 IPv6 候选，不要求服务器有 IPv6。两种路径均不可用时继续中转。
 
 Rust 不使用 JAVA_TOOL_OPTIONS，不需要 JVM 或配置堆大小。TCP_WORKER_THREADS 控制 TCP/HTTP/UDP 共用的工作线程数，可先用 2，根据实际负载调整。进程内存、CPU 和镜像大小以实测为准。
 
@@ -59,7 +76,7 @@ location / {
 ## 更新、回退与状态
 
 - 更新会清空在线房间，客户端重新连接后回大厅。
-- 直连期间服务器连接仍必须保持；服务器断线仍按退出判负。
-- 可使用上一版 sha-* 镜像标签回退。旧服务器没有 P2P 能力，新安卓不会主动向其发送直连申请。
-- 若只修改安卓、文档或工作流，Actions 不自动重建服务端镜像。修改 server/ 或手动运行工作流才发布。
-- server/pom.xml 仅用于迁移验证，生产启动程序为 /app/chess-server。
+- 直连期间服务器连接仍必须保持；网络断开保留至最后心跳后 60 秒，倒计时继续。
+- 可使用上一版 sha-* 镜像标签回退。0.6.0 协议 v2 与 0.5.x 不兼容，回退或升级须同时处理服务端和客户端。
+- Android、server/、打包脚本或发布工作流变化都会触发镜像发布；纯文档修改只检查，也可手动触发发布。
+- 服务端只使用 Cargo 构建，生产启动程序为 /app/chess-server。

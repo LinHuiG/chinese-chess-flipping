@@ -20,7 +20,8 @@ public final class MainActivity extends Activity implements GameService.Observer
     private GameService service;
     private LinearLayout root, content;
     private TextView connection, clock, turnLabel, colorLabel, resultLabel, lobbyCount, lobbyEmpty;
-    private TextView serverMetric, routeMetric, directMetric;
+    private TextView serverMetric, routeMetric, directMetric, peerLabel, updateLabel;
+    private Button updateButton;
     private LinearLayout networkMetrics;
     private Boolean renderedDirect;
     private final TextView[] memberLabels = new TextView[2], memberStatus = new TextView[2];
@@ -89,6 +90,7 @@ public final class MainActivity extends Activity implements GameService.Observer
         networkMetrics.setPadding(dp(16), dp(2), dp(16), dp(7));
         serverMetric = networkChip(networkMetrics); routeMetric = networkChip(networkMetrics); directMetric = networkChip(networkMetrics);
         networkMetrics.setVisibility(View.GONE); directMetric.setVisibility(View.GONE);
+        routeMetric.setOnLongClickListener(v -> { if (service != null) new AlertDialog.Builder(this).setTitle("直连诊断").setMessage(service.diagnostics()).setPositiveButton("知道了", null).show(); return true; });
         content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
         root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
         bound = bindService(new Intent(this, GameService.class), binding, BIND_AUTO_CREATE);
@@ -103,6 +105,23 @@ public final class MainActivity extends Activity implements GameService.Observer
             if (service.connected && service.room != null) service.sync();
         }
         updateClock();
+    }
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request == 20 && getPackageManager().canRequestPackageInstalls()) installUpdate();
+    }
+    private void installUpdate() {
+        if (service == null || service.updater.readyFile == null) return;
+        service.updater.installPending = false;
+        try {
+            if (!getPackageManager().canRequestPackageInstalls()) {
+                startActivityForResult(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        android.net.Uri.parse("package:" + getPackageName())), 20); return;
+            }
+            android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(this, getPackageName()+".updates", service.updater.readyFile);
+            startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+        } catch (RuntimeException ex) { notice("无法打开安装界面，请稍后重试"); }
     }
     @Override protected void onStop() {
         visible = false; handler.removeCallbacks(clockTick);
@@ -151,6 +170,9 @@ public final class MainActivity extends Activity implements GameService.Observer
     @Override public void changed() {
         if (service == null || !visible) return;
         networkChanged();
+        setText(updateLabel, service.updater.status);
+        if (updateButton != null) { updateButton.setEnabled(!service.updater.busy); setText(updateButton, service.updater.readyFile == null ? "检查更新" : "安装已下载更新"); }
+        if (service.updater.installPending && service.room == null) installUpdate();
         setText(connection, service.status + "  ·  " + service.endpoint());
         connection.setTextColor(service.connected ? Color.rgb(36, 129, 70) : MUTED);
         GameService.Outcome outcome = service.takeOutcome();
@@ -162,18 +184,18 @@ public final class MainActivity extends Activity implements GameService.Observer
         }
         if (pendingOutcome != null) return;
         if (settings) return;
-        String key = !service.connected ? "offline" : service.room == null ? "lobby"
+        String key = service.room == null ? (service.connected ? "lobby" : "offline")
                 : "room:" + service.room.optLong("roomId") + ":" + service.room.optLong("version");
         if (!key.equals(renderedKey)) {
             renderedKey = key; clearContent();
-            if (!service.connected) showOffline();
-            else if (service.room == null) showLobby();
+            if (service.room == null) { if (service.connected) showLobby(); else showOffline(); }
             else if (service.playing()) showGame();
             else showWaiting();
         }
         if (lobbyList != null) updateLobby();
         if (readyButton != null) updateWaiting();
-        if (board != null) board.setState(service.state, service.myIndex());
+        if (board != null) { board.setState(service.state, service.myIndex()); board.setEnabled(service.canAct()); }
+        if (peerLabel != null) { JSONArray members=service.room.optJSONArray("members"); String other=members.optString(service.isHost()?1:0); setText(peerLabel, service.memberName(other)+" · "+service.memberStatus(other)); peerLabel.setTextColor("在线".equals(service.memberStatus(other)) ? INK : MUTED); }
         updateClock();
     }
     private TextView networkChip(LinearLayout parent) {
@@ -199,7 +221,7 @@ public final class MainActivity extends Activity implements GameService.Observer
         handler.removeCallbacks(clockTick);
         if (board != null) board.pause();
         content.removeAllViews(); content.setOrientation(LinearLayout.VERTICAL);
-        clock = turnLabel = colorLabel = resultLabel = null; board = null; readyButton = null;
+        clock = turnLabel = colorLabel = resultLabel = peerLabel = updateLabel = null; updateButton = null; board = null; readyButton = null;
         timeChoices = null; lobbyList = null; renderedRooms = -1;
     }
     @Override public void notice(String text) { Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
@@ -243,7 +265,7 @@ public final class MainActivity extends Activity implements GameService.Observer
         }
     }
     private void createDialog() {
-        EditText name = new EditText(this); name.setHint("房间名称"); name.setSingleLine(true);
+        EditText name = new EditText(this); name.setHint("房间名称"); name.setSingleLine(true); name.setText(service.nickname()+"的房间");
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("创建房间").setView(name)
                 .setNegativeButton("取消", null).setPositiveButton("创建", null).create();
         dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
@@ -292,16 +314,17 @@ public final class MainActivity extends Activity implements GameService.Observer
         JSONArray members = service.room.optJSONArray("members");
         for (int i = 0; i < 2; i++) {
             boolean present = i < members.length(); String id = members.optString(i);
-            setText(memberLabels[i], present ? (id.equals(service.selfId) ? "你" : "对方") + (i == 0 ? " · 房主" : "") : "等待加入");
-            boolean ready = service.isReady(id);
-            setText(memberStatus[i], present ? (ready ? "已准备" : "未准备") : "空位");
-            memberStatus[i].setTextColor(ready ? Color.rgb(36, 129, 70) : MUTED);
+            setText(memberLabels[i], present ? service.memberName(id) + (i == 0 ? " · 房主" : "") : "等待加入");
+            boolean ready = service.isReady(id), online = "在线".equals(service.memberStatus(id));
+            memberLabels[i].setTextColor(online ? INK : MUTED);
+            setText(memberStatus[i], present ? (online ? (ready ? "已准备" : "未准备") : service.memberStatus(id)) : "空位");
+            memberStatus[i].setTextColor(ready && online ? Color.rgb(36, 129, 70) : MUTED);
         }
         resultLabel.setVisibility(service.lastResult.isEmpty() ? View.GONE : View.VISIBLE); setText(resultLabel, service.lastResult);
-        readyButton.setEnabled(service.state != null); setText(readyButton, service.isReady(service.selfId) ? "取消准备" : "准备");
+        readyButton.setEnabled(service.canAct() && service.state != null); setText(readyButton, service.isReady(service.selfId) ? "取消准备" : "准备");
         int seconds = service.state == null ? 60 : service.state.optInt("seconds", 60);
         updatingChoices = true; timeChoices.check(seconds == 30 ? 100 : seconds == 60 ? 101 : seconds == 90 ? 102 : 103); updatingChoices = false;
-        for (int i = 0; i < 4; i++) timeChoices.getChildAt(i).setEnabled(service.isHost() && service.state != null);
+        for (int i = 0; i < 4; i++) timeChoices.getChildAt(i).setEnabled(service.isHost() && service.canAct() && service.state != null);
     }
     private void showGame() {
         LinearLayout details = content;
@@ -315,6 +338,7 @@ public final class MainActivity extends Activity implements GameService.Observer
         }
         TextView roomTitle = text("#" + service.room.optLong("roomId") + " " + service.room.optString("name"), 16);
         roomTitle.setPadding(dp(16), 0, dp(16), dp(4)); details.addView(roomTitle);
+        peerLabel = text("", 13); peerLabel.setPadding(dp(16),0,dp(16),dp(4)); details.addView(peerLabel);
         LinearLayout turnRow = row(details); turnRow.setPadding(dp(16), dp(4), dp(16), dp(4));
         if (landscape()) turnRow.setOrientation(LinearLayout.VERTICAL);
         LinearLayout player = new LinearLayout(this); player.setOrientation(LinearLayout.VERTICAL);
@@ -356,6 +380,13 @@ public final class MainActivity extends Activity implements GameService.Observer
     private void showSettings() {
         renderedKey = ""; clearContent();
         LinearLayout inner = scrollContent(); heading(inner, "设置");
+        addText(inner, "应用更新 · " + (service == null ? "" : service.updater.installedName), 14);
+        updateLabel = text(service == null ? "" : service.updater.status, 13); updateLabel.setTextColor(MUTED); inner.addView(updateLabel);
+        updateButton = button(inner, "检查更新", () -> { if (service != null) { if (service.updater.readyFile != null) installUpdate(); else service.checkUpdate(); } });
+        toggle(inner, "连接后自动检查更新", "autoUpdate");
+        addText(inner, "用户名", 14);
+        EditText nickname = new EditText(this); nickname.setSingleLine(true); nickname.setText(service == null ? "" : service.nickname()); inputStyle(nickname); inner.addView(nickname);
+        button(inner, "保存用户名", () -> { String value=nickname.getText().toString().trim(); if(value.isEmpty() || value.codePointCount(0,value.length())>24 || value.codePoints().anyMatch(Character::isISOControl)) { nickname.setError("请输入 1 至 24 个字符，不含控制字符"); return; } if(service!=null) { service.nickname(value); notice("用户名已保存"); } });
         addText(inner, "游戏反馈", 14);
         toggle(inner, "音效", "sound"); toggle(inner, "动画", "motion");
         addText(inner, "服务器", 14);

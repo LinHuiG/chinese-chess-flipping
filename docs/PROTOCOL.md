@@ -1,265 +1,118 @@
-# TCP 二进制加密协议 v1
+# 通信协议 v2（0.6.0）
 
-状态：2026-09-27 本地已实现加密通信、房间、事件推送和房主裁判协议，已完成本地自动检查及双模拟器联调。远端代码及镜像以实际提交和 Actions 结果为准。与原有“换行分隔明文 JSON”及 19 字节二进制包头协议不兼容，两端必须一起更新。
+TCP、Android WS 和 Web WS 共用此协议，与 0.5.x 不兼容，服务端和客户端须一起升级。服务器只存运行期用户、房间、最近结算及 P2P 信令；不保存棋面、昵称资料或恢复文件。具体检查结果见 [项目状态](../PROJECT_STATUS.md)。
 
-这是应用层加密握手，不是 SSL/TLS。公钥每次连接从网络获取，没有证书或预置可信密钥，所以不提供可信服务器身份认证，不能抵御主动中间人攻击。服务端启动密钥在进程生命周期内复用；若该私钥泄露，已记录的本次进程历史会话也可能被解密（不提供前向保密）。它也不替代用户登录认证。
+## 帧布局
 
-## 1. 报文布局
+大端整数；长度按字节计算。固定头 17 字节，去掉 v1 的 CRC。
 
-所有整数使用网络字节序（大端序）。长度按字节计算，不按字符计算。
-
-| 偏移 | 长度 | 字段 | 含义 |
-| --- | --- | --- | --- |
-| 0 | 2 | MAGIC | 固定标识字节 0xFC 0xFC |
-| 2 | 4 | TOTAL | 整个线上报文长度，包含固定头、Nonce 和认证标签 |
-| 6 | 4 | X | 解密后控制头长度；明文握手时是明文控制头长度 |
-| 10 | 4 | Y | 解密后包体长度；明文握手时是明文包体长度 |
-| 14 | 1 | VERSION | 固定为 1 |
-| 15 | 1 | TYPE | 包类型，见下表 |
-| 16 | 1 | FLAGS | 0x00 明文握手；0x01 AES-256-GCM |
-| 17 | 4 | CRC32 | CRC32 原始 32 位结果，按大端写入 |
-
-固定包头始终为 21 字节，保持明文，以两个固定标识字节 0xFC 0xFC 开始。标识不匹配直接关闭连接，不扫描后续数据重新同步。TOTAL 包含这两个标识字节。FLAGS bit 0 表示加密；其余位保留为 0，首版不启用压缩，不支持的标志直接拒绝。
-
-明文握手报文：
-
-```text
-固定头(21) | 控制头(X) | 原始握手包体(Y)
-TOTAL = 21 + X + Y
-```
-
-加密报文：
-
-```text
-固定头(21) | Nonce(12) | AES-GCM(控制头 || 包体)的密文(X+Y) | Tag(16)
-TOTAL = 21 + 12 + X + Y + 16
-```
-
-- 控制头和包体合并后一次加密，不在密文内部另外插入分隔符。认证解密成功后按 X/Y 拆分。
-- GCM 的附加认证数据 AAD 为固定包头的 byte[0..16]。CRC32 字段不纳入 AAD，避免与密文/标签形成循环依赖。
-- CRC32 输入为 byte[0..16] || byte[21..TOTAL-1]；不包含 byte[17..20] 自身。先完成加密，再计算 CRC32。
-- 接收顺序：校验固定头与长度上限 → 收齐报文 → 校验 CRC32 → 校验 Nonce 序号和 GCM 标签并解密 → 解析控制头及包体。
-- X 范围为 2–4096；Y 范围为 0–65536；总包长上限为 69681 字节。无符号长度超过这些范围也会被拒绝，不按对方提供的任意长度分配内存。
-- CRC32 只用于报文差错检测。抗篡改由 GCM 认证承担，重新计算 CRC32 也不能绕过 GCM。
-
-## 2. 控制头与包体
-
-控制头为 UTF-8 JSON 对象，字段名区分大小写：
-
-| 字段 | 用途 |
-| --- | --- |
-| TID | 必填，32 位小写十六进制字符串；响应原样返回。同一握手的所有报文复用一个 TID；每个后续请求生成新 TID |
-| CODE | 服务端响应必填整数；0 成功，400 请求错误，413 响应过大 |
-| MSG | 错误描述，如 INVALID_JSON；成功时省略 |
-| CHL | 客户端加密确认时必填，允许 ANDROID、IOS、WEB |
-| DID | 客户端加密确认时必填，32 位小写十六进制安装标识 |
-| APP | 客户端加密确认时必填，非空包名，最多 256 字符 |
-| VER | 客户端加密确认时必填，非空版本名，最多 64 字符 |
-
-DID 使用随机 UUID 去除连字符后保存于客户端私有偏好，不读取手机硬件标识；清除应用数据/重装后会变化。应用备份被禁用，Android 12+ 迁移也排除偏好数据。DID 只用于在线去重，不是账号认证凭据。新连接完成验证后清理同 DID 旧连接，再登记新会话。
-
-包体的编码由 TYPE 决定：
-
-- 业务请求/响应、心跳请求/响应、错误：UTF-8 JSON 对象。
-- 获取公钥、交换公钥及握手确认：原始 byte[]，不经 JSON、Base64 或十六进制文本转换。
-
-| TYPE | 十六进制 | 方向 | 包体 |
-| --- | --- | --- | --- |
-| PUBLIC_KEY_REQUEST | 0x01 | 客户端→服务端 | 空数组 |
-| SERVER_HELLO | 0x02 | 服务端→客户端 | 服务端随机数(32) || 服务端公钥 DER |
-| CLIENT_KEY | 0x03 | 客户端→服务端 | 客户端随机数(32) || 客户端公钥 DER |
-| SERVER_FINISHED | 0x04 | 服务端→客户端 | 握手摘要(32) |
-| CLIENT_FINISHED | 0x05 | 客户端→服务端 | 握手摘要(32) |
-| READY | 0x06 | 服务端→客户端 | 握手摘要(32) |
-| BUSINESS_REQUEST | 0x10 | 客户端→服务端 | JSON 对象 |
-| BUSINESS_RESPONSE | 0x11 | 服务端→客户端 | JSON 对象 |
-| BUSINESS_EVENT | 0x12 | 服务端→客户端 | 主动事件 JSON；独立生成 TID，不消耗客户端等待请求 |
-| PING | 0x20 | 客户端→服务端 | JSON 对象，客户端发送 {} |
-| PONG | 0x21 | 服务端→客户端 | {"type":"PONG"} |
-| ERROR | 0x7f | 服务端→客户端 | {}，错误码与说明在控制头 |
-
-仅前三种初始密钥交换报文使用 FLAGS=0，其余均使用 FLAGS=1。
-
-## 3. 握手与密钥派生
-
-1. 服务端启动时通过安全随机源生成 P-256（secp256r1）ECC 密钥对，只保存在内存，重启后重新生成。
-2. TCP 建立后客户端发送 PUBLIC_KEY_REQUEST。明文控制头只有 TID，包体长度为 0。
-3. 服务端返回 SERVER_HELLO，控制头含相同 TID 和 CODE=0；包体为本连接新生成的 32 字节随机数和服务端公钥。公钥格式为 X.509 SubjectPublicKeyInfo DER。
-4. 客户端为本连接生成临时 P-256 密钥对和随机数，发送 CLIENT_KEY，控制头只有相同 TID。
-5. 双方验证公钥曲线及点，执行 ECDH，再通过 HKDF-SHA256 派生收发方向独立的 AES 密钥及 Nonce 前缀。
-6. 服务端发送加密 SERVER_FINISHED；客户端验证成功后发送加密 CLIENT_FINISHED（此时控制头包含 CHL/DID/APP/VER）；服务端验证后返回加密 READY。
-7. 客户端验证 READY 后才报告“加密连接已建立”，开放业务发送并启动心跳。
-
-每次 TCP 连接都执行完整握手，不缓存服务端公钥，不包含 MD5 或 SM2/SM4 字段。服务端尚未完成 CLIENT_FINISHED 验证时拒绝一切业务包。
-
-派生细节，所有拼接均是原始字节：
-
-```text
-transcript = SHA256(PUBLIC_KEY_REQUEST完整线上报文
-                  || SERVER_HELLO完整线上报文
-                  || CLIENT_KEY完整线上报文)
-salt = SHA256(serverRandom32 || clientRandom32)
-info = ASCII("chess-flipping/tcp/v1") || transcript
-material = HKDF-SHA256(ECDH共享秘密, salt, info, 72字节)
-
-material[0..31]  = 客户端→服务端 AES-256 密钥
-material[32..63] = 服务端→客户端 AES-256 密钥
-material[64..67] = 客户端→服务端 Nonce 前缀
-material[68..71] = 服务端→客户端 Nonce 前缀
-
-Nonce = 方向对应的4字节前缀 || 8字节大端序号
-```
-
-两个方向的序号分别从 0 开始，并包含加密握手报文。首个服务端加密包 SERVER_FINISHED 使用服务端序号 0，READY 使用序号 1；首个客户端加密包 CLIENT_FINISHED 使用客户端序号 0。接收方只接受下一个精确序号；重复、跳号、跨会话报文均拒绝。每方向最多发送 2^32−1 个包，达到限制关闭连接，需重新握手。
-
-服务端启动密钥之外，会话密钥全部按连接隔离。断开时清理会话密钥数组，不在日志中输出密钥。
-
-算法参考：[RFC 5869](https://www.rfc-editor.org/rfc/rfc5869)、[Android Cryptography](https://developer.android.com/privacy-and-security/cryptography)。实现使用平台标准 JCA/JCE，不固定安全提供者，也没有新增运行时加密库。
-
-## 4. 业务示例及错误处理
-
-以下仅展示解密后数据，在线上传输的是整体密文：
-
-```json
-控制头：{"TID":"0123456789abcdef0123456789abcdef"}
-业务包体：{"type":"ECHO","message":"你好，翻棋！"}
-
-响应控制头：{"TID":"0123456789abcdef0123456789abcdef","CODE":0}
-响应包体：{"type":"ECHO","message":"你好，翻棋！"}
-```
-
-- 业务 JSON 格式错误、未知业务、已建立连接上的不支持包类型：返回加密 ERROR，连接仍可使用。
-- 固定头不合法、CRC32/GCM 校验失败、控制头不合法、握手顺序不符、密钥无效、握手后明文包：关闭连接，不继续处理可疑会话。
-- 不再发送原有明文 WELCOME；握手完成由 READY 和客户端状态表示。
-- TCP 连接超时：客户端 8 秒。握手绝对时限：两端均 10 秒，零碎输入不能延长。
-- 客户端每 5 秒发送加密 PING；服务端握手完成后连续 30 秒未收到有效 PING 关闭。业务消息不刷新此期限。客户端连续 30 秒未收到 PONG 或任一请求超过 15 秒未响应会关闭；socket 读超时为 35 秒。
-- 客户端最多 128 个等待请求；房主转发每用户最多 8 个，8 秒超时。前台每次连接或握手失败完全结束后等待 3 秒重连，成功回大厅。后台维持已有连接但不重连。
-- ECHO 保留供通信检查；房间及棋局业务见下节。无账号和断线恢复棋局。
-
-## 5. 房间与棋局业务
-
-所有业务放在 BUSINESS_REQUEST/RESPONSE 中，服务端事件用 BUSINESS_EVENT。事件也使用有效的随机 TID 和 CODE=0，但不对应客户端请求；响应原样带回请求 TID。
-
-| 请求 type | 主要字段 | 处理 |
+| 偏移 | 长度 | 字段 |
 | --- | --- | --- |
-| LIST | after，可省略，默认 0 | 仅大厅可查；返回 ROOMS、rooms 数组及 next 游标；最多 64 条，next=0 表示结束 |
-| CREATE | name | 去首尾空白后 1～32 Unicode 码点，可重名，不允许控制字符；创建者入房 |
-| JOIN | roomId | 校验当前用户未入房、房间等待且未满 |
-| LEAVE | 无 | 直接由服务端退出当前房间，游戏中判负 |
-| DISSOLVE | 房间上下文 | 仅房主，游戏中先按房主认输再解散 |
-| ACTION | 房间上下文、action | 服务端关联原发起者和 TID，发 FORWARD 给当前房主 |
-| HOST_REPLY | 房间上下文、requestId、ok、state 或 error | 校验房主及仍有效的转发，成功后发布状态，再回复原请求 |
-| HOST_STATE | 房间上下文、state | 房主主动同步状态 |
-| START | 房间上下文、state，seq=0 | 校验房主、两人成员和等待状态，分配 gameId；发 ROOM 再发 STATE |
-| FINISH | 房间上下文、winnerId、reason | 校验房主、本局、胜方成员及正常结束原因；发 GAME_OVER 再回等待 |
+| 0 | 2 | magic：FC FC |
+| 2 | 4 | 整帧长度 TOTAL |
+| 6 | 4 | 控制区长度 X：2–4096 |
+| 10 | 4 | 正文长度 Y：0–65536 |
+| 14 | 1 | version：2 |
+| 15 | 1 | kind：见下表 |
+| 16 | 1 | flags：0 明文，1 AES-256-GCM；其他值拒绝 |
 
-房间上下文为 roomId、version、gameId。version 在成员或等待/游戏状态变化时递增；等待 gameId 为空，开始时分配 UUID。身份只能来自当前连接。旧版本、旧本局和失效转发拒绝执行。
+- 明文：`header(17) | control(X) | body(Y)`，最大 69649 字节。
+- TCP 加密：`header(17) | nonce(12) | AES-GCM(control + body) | tag(16)`，最大 69677 字节。
+- GCM AAD 为完整 17 字节固定头。认证成功后才解释控制区，序号不匹配或认证失败关闭连接。
+- WS 一条二进制消息恰好一帧，flags=0；WSS 的 TLS 在外层。拒绝多余尾部、文本业务消息和超限长度。
+- 服务器控制区与控制命令正文是严格 UTF-8 JSON 对象，拒绝重复字段、尾随值。棋局正文不进入服务端 JSON 解析器。
 
-常规结果为 RESULT，含 request、ok，失败附 error。错误业务 JSON 和线协议错误沿用上节处理；已解析的房间请求业务错误用 RESULT 返回。
-
-| 事件 type | 内容 |
+| kind | 含义 |
 | --- | --- |
-| SESSION | selfId，服务器为本连接分配的临时 UUID；在 READY 之后发送 |
-| ROOM | 房间上下文、name、hostId、playing、按加入顺序的成员 ID 数组 members |
-| FORWARD | 房间上下文、requestId、actorId、action；actorId 由服务端填写 |
-| STATE | 房间上下文及房主公开 state |
-| GAME_OVER | 房间上下文、winnerId、reason |
-| ROOM_CLOSED | LEFT 或 DISSOLVED，返回大厅 |
+| 1 / 2 / 3 / 4 | TCP 获取公钥 / 服务端 hello / 客户端 hello / 服务端握手确认 |
+| 5 / 6 | 客户端确认及身份元数据 / READY |
+| 16 | 客户端业务或控制命令 |
+| 18 | 服务端控制事件或转发的棋局报文 |
+| 32 / 33 | 应用心跳 PING / PONG |
+| 48 / 49 | App 版本检查 / APP_VERSION |
+| 50 / 51 | App 分块请求 / APP_CHUNK |
 
-公开 state 包含 seq、seconds、ready；棋局中另含 board（32 个整数）、colors（按成员顺序的两种颜色）、turn、remaining（毫秒，-1 为无限）、move、captured、lastFrom、lastTo、winner（-1 为未结束）。正数为红棋、负数为黑棋，绝对值 1～7 对应将士象车马炮兵，0 为空格，99 为暗棋。暗棋真实身份不发送给其他成员；captured 按真实颜色和种类记录，包括误吃己方暗棋。
+不再使用业务请求 TID、BUSINESS_RESPONSE 和服务端转发表；只有 TCP 握手保留 TID。控制命令返回 RESULT 或对应事件，走棋操作由房主确认。
 
-每个房间版本的 seq 从 0 开始，房主每次生成快照加 1；服务端接受严格大于已接受序号的完整快照，拒绝重复或倒退。允许跳号是为了在转发请求过期、迟到回复被拒绝后，由后续 SYNC 快照恢复，不改变房间版本或 gameId 校验。此规则仅适用于业务快照 seq；加密 Nonce 仍必须严格连续。服务端只保留序号，不保留棋盘或准备详情；开局和后续状态体都必须小于 48000 字节（UTF-8 JSON）。ACTION 的 action.type 包含 READY（ready 布尔值）、TIME（seconds=0/30/60/90）、SYNC 和 MOVE（from、to、move）。from=-1 表示翻棋，move 是行动版本，过期走棋不重复执行。SYNC 不重置计时；改变时间取消准备。
+## 接入与身份
 
-房主以单调时钟统一裁决操作和超时，收到开局 ROOM 后启动计时；动作以房主处理时刻判定是否超时。客户端使用快照剩余时间及本地单调时钟显示倒计时，不每秒广播；显示值受传输延迟影响，最终以房主为准。正常结束原因 TIMEOUT、NO_PIECES、NO_MOVES；服务端强制结束原因 LEFT、DISCONNECTED、HOST_DISSOLVED。
+TCP 保留 P-256 ECDH / HKDF-SHA256 / AES-256-GCM。hello 为 32 字节随机量 + DER 公钥；握手摘要为三条明文握手帧的 SHA-256。HKDF salt 为双方随机量拼接后的 SHA-256，info 为 `chess-flipping/tcp/v2` + 摘要；72 字节材料依次为客户端发送密钥(32)、服务端发送密钥(32)、对应 nonce 前缀(4+4)。nonce 后 8 字节是从 0 开始的方向序号；达到 0xffffffff 前重新建连。
 
-房主移交仅重建剩余成员的等待状态，不迁移进行中的棋局。关闭、退出、替换和超时共用清理流程；迟到旧连接回调不得删除新会话。所有输出加密及发送均在连接 EventLoop 顺序执行。
+TCP kind=5 控制区提交 `TID、CHL、protocol:2、userId?、token?、UDP?`，正文为握手摘要；READY 仍回摘要。WS 首帧 kind=5 用相同元数据（不要求 TID），正文为空；READY 控制区/正文均为 `{}`。CHL 允许 ANDROID / WEB / IOS；仅 ANDROID + UDP=1 声明现有 UDP 直连能力。
 
-## 6. 代码与验证
+随后 SESSION 返回：`selfId、token、bootId、resumed、inRoom、udpPort、p2p`。
 
-两端保持独立工程，Docker 构建上下文仅为 server/。三个平台无关协议类在两端各保留一份，完整仓库中的 ClientInteropTest 会检查源码完全一致，并在独立类加载器中编译/运行实际 Android TcpClient，与真实 Netty TCP 端口联调。
+- 新用户 ID 为随机 128 位十六进制值，token 为独立的两段随机 UUID 拼接；不是可猜的时间编号。客户端本地保留 ID/token。
+- 同一进程内有效 ID/token 可接管旧连接。旧代次的读取、输出和关闭回调不得改变新绑定。
+- 未知或已过期 ID 分配新用户；已存在 ID 搭配错误 token 拒绝。服务器每次启动生成新 bootId，旧棋局关联全部失效。
+- Android 存应用私有 AtomicFile；Web 使用当前标签页的 sessionStorage 支持刷新。网页没有可用存储时仍可作为新用户游玩，不承诺刷新恢复。
+- ID/token 只是匿名会话恢复凭据，不是账号系统。普通 HTTP/WS 不保密；自定义 TCP 不验证可信服务器身份，也不提供前向保密。需要可信服务器和链路保密时使用 HTTPS/WSS。
 
-- 服务端：server/src/main/java/com/chessflipping/server/。
-- 协议实现：server/src/main/java/com/chessflipping/protocol/ 和 android_client/app/src/main/java/com/chessflipping/protocol/。
-- Android 网络层：android_client/app/src/main/java/com/chessflipping/android_client/TcpClient.java。
-- 完整仓库验证：mvn -f server/pom.xml verify，包含协议测试、HKDF 官方向量和 Android 网络代码 JVM 联调。
-- 独立 server/ 或 Docker 上下文没有 android_client/ 时，跳过 ClientInteropTest，其他协议测试继续运行；GitHub Actions 在完整仓库执行互通测试。
-- Android 构建与静态检查：在 android_client/ 执行 gradlew.bat assembleDebug lintDebug。
-- JVM 联调不等同于 Android 系统加密提供者、模拟器、手机安装和厂商真机验证。
+## 在线状态和恢复
 
-## 7. HTTP / WebSocket 入口（0.4.0）
+每 5 秒发 kind=32，控制区携带 `ping`，服务端 kind=33 原样回控制区，正文 `{}`。客户端约 15 秒未收到有效回应则重连；服务端仅应用心跳刷新用户期限。
 
-TCP_PORT 默认 8888，HTTP_PORT 默认 80。HTTP GET / 提供网页版，GET /ws 通过 RFC 6455 升级为 WebSocket。浏览器自动随页面协议选择 WS/WSS；安卓设置 HTTP/HTTPS 时对应 WS/WSS。HTTPS 在用户反向代理终止，服务端不加载证书。
+- socket 关闭：解绑，状态 offline，保留房间和用户。
+- 连续 10 秒无心跳：状态 suspect；连续 60 秒无心跳：退房并删除用户。关闭 socket 不额外延长这 60 秒。
+- 重连后为 syncing；取得房主新快照后发 AVAILABLE，变为 online。PRESENCE 携带成员状态，界面灰显失联方。
+- LEAVE / DISSOLVE / LOGOUT 是主动操作，立即处理；双方都过期不按扫描顺序给其中一人判胜。
+- 正常断线期间计时继续。房主保存私有棋面、判重历史、原 deadline、操作去重结果；恢复时先判定是否已超时。存档损坏或丢失不能重新洗牌续局，按 RESTORE_FAILED 结束。
+- Android deadline 使用 elapsedRealtime，覆盖同次设备启动内的 App 重启。Web 存墙钟期限并换算回 performance 时钟；本机时间被手动修改不在可信计时保证内。
+- 服务端不存棋盘，不恢复重启前的房间；客户端只在服务器确认原会话仍有效后续局。
 
-WS 是独立文本 JSON 传输，不套用 TCP 的二进制头、CRC、ECDH 或 AES-GCM；WSS 依赖 TLS 加密，普通 WS 没有传输加密。业务房间规则及 state 字段保持第 5 节不变，共用同一个 RoomHub。
+## 控制与房间
 
-首条消息（连接建立后 10 秒内）：
+控制命令 kind=16、控制区 `{}`，正文带 type。返回事件 kind=18、控制区 `{}`。
 
-```json
-{"type":"HELLO","TID":"32位小写十六进制","CHL":"WEB","DID":"32位小写十六进制","APP":"chess-flipping.web","VER":"0.4.0"}
-```
+| 命令/事件 | 内容 |
+| --- | --- |
+| LIST / ROOMS | ID 游标 after/next，每页最多 64 间 |
+| CREATE / JOIN / LEAVE / DISSOLVE | 建房、加入、离开、解散；建房重放返回原房间 |
+| ROOM | roomId、name、members、hostId、version、gameId、playing、startId、presence、p2pAvailable、可选 lastResult |
+| START | 房主发起，带 operationId；只推进房间状态，不上传完整棋盘 |
+| FINISH / GAME_OVER | 房主提供 winnerId/reason；服务器控制退出和过期判负 |
+| PROFILE_REQUEST / PROFILE | 客户端重报 name，服务器校验 1–24 字符并转发 userId/name，不存用户名 |
+| AVAILABLE / PRESENCE | 同步完成及在线状态变化 |
+| LOGOUT / ROOM_CLOSED | 注销匿名会话 / 离房或解散通知 |
+| RESULT | request、ok、error，控制命令处理结果 |
+| ECHO | 转发无法送达时的 message/failedOperation；不代表操作已经执行 |
 
-CHL 仅接受 ANDROID、IOS、WEB。APP/VER 长度约束沿用 TCP。服务端先返回 READY，再发送 SESSION 事件。每个浏览器页面使用独立随机 DID，在该页面的重连期间保持不变，避免多个标签页互相踢出；刷新页面会重新建会话，不恢复棋局。安卓沿用本地 DID，切换传输后仍遵守旧连接替换。
+房名由客户端默认填写“用户名的房间”，最多 32 字符。version 是房间代次：成员、开局或结算变化时递增；重连不递增。gameId 使用开局时的 version 字符串，避免重复生成编号。状态 seq 和落子 move 由房主维护，用于防止迟到快照覆盖、旧棋面操作及跨路径重复执行。
 
-请求：`{"type":"REQUEST","TID":"...","body":{"type":"LIST"}}`。心跳：`{"type":"PING","TID":"..."}`。
+## 棋局转发
 
-响应统一为 `{"type":"READY|RESPONSE|EVENT|PONG","TID":"...","CODE":0,"body":{...}}`；RESPONSE/PONG 复用请求 TID，EVENT 使用新 TID。业务失败仍由 body 中 RESULT/ok/error 表达，格式错误关闭连接。
+kind=16 的控制区：`type: ACTION|HOST_REPLY|HOST_STATE、roomId、version、operationId?`。ACTION / HOST_REPLY 必须有 32 位操作编号。其余字段编码一次放正文。服务器依据绑定用户检查路由：ACTION 去房主，HOST_REPLY/STATE 只能由房主发给另一个成员；忽略客户端自报 actorId，填入可信 actorId 和当前 gameId，再用 kind=18 转发。
 
-最大完整 WS 文本消息 69632 字节，业务 body 最大 65536 字节，房间快照仍小于 48000 字节。支持分片聚合，拒绝二进制业务帧。每 5 秒有效应用层 PING，30 秒未收到则关闭；WebSocket 控制帧 Ping 不代替业务心跳。连接登记、退出判负、同 DID 替换及迟到事件清理共用原逻辑。浏览器不保证后台持续执行，前台断线后每次失败结束等待 3 秒重连。
+正文最多 48000 字节，作为 Bytes 共享切片移交，服务器不解码 action/state、不重新序列化正文。WS 入站借用已有帧；TCP 原地解密后切片，避免 drain 搬动整段正文。最终封帧、WS 掩码、链路加密与内核收发仍有复制，不能称全链路零拷贝。
 
-浏览器 Origin 必须与 Host 匹配，原生客户端可以不带 Origin。代理须保留外部 Host（包括非标准端口）。Origin 不构成账号认证。
+本次沿用 TCP/WSS 链路保护及 UDP 现有会话加密，没有增加第二层房间包体加密；TCP 中转仍有外层解密/再加密，普通 WS 正文仍为明文。不宣称服务器无法解密。
 
-## 7. 0.5.0 Android UDP P2P 扩展
+客户端每次只挂起一项操作。直连重发、回退中转和恢复存档均沿用 operationId。房主保存最近 128 项结果；MOVE 还必须匹配当前 move。回复包含 targetId、operationId、ok 和 state/error；有效快照带 seq。房主提交结果先写完整本地存档，再回包，避免对方已见新棋面而房主重启丢失该步。
 
-生产服务改为 Rust，但前述 TCP v1 线上字节协议保持不变。Java 服务源代码仅用于迁移对照。客户端 TCP 的 CLIENT_FINISHED 或 WS 的 HELLO 可增加整数 UDP=1；只有 CHL=ANDROID 且显式声明该能力的双方才进入 P2P。SESSION 增加 p2p、udpPort，ROOM 增加 p2pAvailable。旧客户端忽略扩展字段，Web 不声明 UDP。
+## UDP P2P
 
-### 7.1 控制链路与信令
+保留 CFU1 登记及现有 AES-GCM UDP 会话格式：最长 1200 字节，方向独立密钥和防重放窗口。加密 DATA 内为 `消息ID(16) | v2明文帧`，其中业务操作编号与中转一致；ACK 仅确认 UDP 送达，不能代替房主业务确认。超出 UDP 预算走中转。
 
-所有下列命令通过原 TCP/WS 业务通道发送，携带 roomId/version/gameId。服务器按实际连接校验成员和房主，密钥只能在当前两人对局中分发。不检查 HTTP/WS 是否加密作为启用条件；此模式的控制链路明文和服务器可见主密钥的边界已由用户确认。
+协商顺序：P2P_REQUEST → 房主 P2P_OFFER / P2P_KEY → 双方 P2P_CONFIG → P2P_LOCAL / UDP 登记 → P2P_PEER → 双方 P2P_READY → P2P_ACTIVE；失败 P2P_STOP / P2P_RELAY。
 
-1. 非房主发送 P2P_REQUEST；服务器为这次协商生成 32 位小写十六进制 p2pId，向房主发 P2P_OFFER。
-2. 房主用 SecureRandom 生成 32 字节主密钥，发送 P2P_KEY（p2pId、key，标准 Base64）。服务器不保存主密钥，向双方各发 P2P_CONFIG，包含 p2pId、key、udpPort、peerId，以及各自独立的 16 字节随机登记 token（十六进制）。
-3. 两端在后台建立一个 IPv4 UDP socket。P2P_LOCAL 提供最多四个本地地址候选 candidates:[{host,port}]；使用同一 socket 向服务器 UDP_PORT 发送登记报文。
-4. 服务器观察双方公网映射后，通过 P2P_PEER 下发对方的候选地址。本地地址与公网映射都仅转发给当前成员。
-5. 两端完成加密 PING/PONG 双向探测后，经控制链路发送 P2P_READY；只有双方都 ready，服务器才广播 P2P_ACTIVE。
-6. P2P_STOP 及服务端 P2P_RELAY 负责回退。房间变更、结束、退出会废弃会话和 token。首次打洞/激活等待上限 10 秒，登记有效期 15 秒；本局失败后保留中转，下一局重新尝试，避免后台持续打洞。
+- 房主生成 32 字节主密钥，服务器转发但不保存；每方独立登记 token。登记窗口 15 秒，客户端一轮探测 10 秒。
+- 每方最多 8 个本地候选，加服务器观察到的反射地址。候选有一个就交换，不等待双方登记齐全。反射源地址改变可更新。
+- Android 同一 socket 登记和探测；收集 IPv4 与全局 IPv6，排除 IPv6 link-local/ULA。单候选发送或解析失败不结束整个尝试。
+- 服务端当前 UDP 监听 IPv4。IPv6 候选经已有控制连接交换，两端都实际可达时可以 IPv6 直连，不要求服务器 IPv6；没有实现服务端 IPv6 反射登记。
+- 网络/地址变化先恢复控制连接，再新建会话重探测；相同网络每局最多两轮，间隔约 3 秒。认证后的多来源入站仍接受，保留先成功的出站路径。
+- 诊断只保存最近 20 条原因及计数，可长按 Android“中转/直连”查看；不含 IP、token、密钥或完整用户标识。IPv6/IPv4 打洞均不保证穿过所有 NAT/防火墙。
 
-服务器始终保持在线会话和 5/30 秒心跳规则。UDP 故障只回退中转，服务器连接断开仍按既定退出判负。通道切换不暂停每步计时。
+## App 更新
 
-### 7.2 UDP 登记报文
+比较递增整数 versionCode，不比较版本名称字符串。相同版本或客户端版本更高时 available=false，不下载、不降级。服务端固定 APK 与清单在编译前生成，启动时核对哈希和长度；它们是发布资源，不是业务持久化。
 
-固定 36 字节：ASCII CFU1（4）| p2pId 原始 16 字节 | token 原始 16 字节。只发送登记凭据，不发送业务主密钥。服务器只接受已登记会话的 token；不向任意 UDP 源地址发送放大响应，候选地址通过控制链路返回。
+- TCP/WS kind=48：控制区 `{type:"UPDATE_CHECK",versionCode:当前版本}`，正文空；kind=49 返回 APP_VERSION JSON 正文，含 available、versionCode、versionName、packageName、size、sha256。
+- kind=50：控制区 `{type:"APP_GET",versionCode:目标版本,currentVersion:当前版本,offset:字节偏移}`，正文空。kind=51 控制区为 APP_CHUNK，含 versionCode/offset/size/done，正文为最多 32768 字节 APK 原始切片；一次只请求一块，避免发送队列装满整个 APK。
+- 目标版本不符、当前已是最新或偏移越界时，不发 APK，返回 kind=49 的 error。客户端超时、断线或服务器换包后重新检查，不拼接不同版本。
+- HTTP `GET /api/app/version?versionCode=N` 返回同一元数据；`GET /api/app/latest.apk?versionCode=N` 返回 APK，已是最新时 204。两者必须携带版本，响应禁止缓存。HTTPS 使用已有反向代理。
+- Android 设置中可手动检查，默认首次连接后自动检查。下载只写应用缓存，验证长度、SHA-256、包名、版本和安装签名相同后交给系统安装器；游戏中推迟自动弹出安装。普通 App 不静默安装，首次需允许此 App 安装未知应用。
+- Actions 使用固定签名构建 release APK，并生成上述清单后编译镜像。0.5.x 没有此更新功能，首次升级到 0.6.0 需手动安装。
 
-### 7.3 密钥派生与 UDP 数据报
+## 源码阅读入口
 
-绑定字符串为 `p2pId|roomId|version|gameId|hostId|guestId`，UTF-8 编码。使用 HKDF-SHA256：IKM=32 字节主密钥，salt=SHA256(p2pId 原始 16 字节)，info=UTF8(`chess-flipping/udp/v1|` + 绑定字符串)，输出 72 字节。
-
-- 0..31：房主→客人 AES-256 密钥；32..63：客人→房主密钥。
-- 64..67：房主→客人 Nonce 前缀；68..71：客人→房主前缀。
-- Nonce=4 字节方向前缀 + 8 字节大端包序号；不在线上重复传输 Nonce。每方向从 0 开始，达到 2^32−1 前终止会话。
-
-| 偏移 | 字节数 | 字段 |
-| --- | --- | --- |
-| 0 | 4 | ASCII CFP1（协议版本包含在标识中） |
-| 4 | 16 | p2pId 原始字节 |
-| 20 | 8 | packetSequence，大端 |
-| 28 | 1 | 类型：PING=1、PONG=2、DATA=3、ACK=4 |
-| 29 | 2 | 解密后的包体长度，大端 |
-| 31 | N | AES-GCM 密文 |
-| 31+N | 16 | GCM 认证标签 |
-
-整个 31 字节头作为 AAD。每个 UDP 数据报只含一个完整协议包，上限 1200 字节；不使用 IP 分片作为业务机制，也不实现应用层分片。无额外 CRC，GCM 负责认证。接收端使用 64 包滑动窗口，只有认证成功才推进；重复、过期、非法包丢弃，不因外部伪造包断开游戏。
-
-- PING/PONG 包体为 8 字节探测值，PONG 原样回传。初始探测间隔 500ms，激活后 5 秒；保留有界的未完成探测，RTT 使用本机单调时钟。12 秒未收到有效返回触发回退。
-- DATA 包体为 16 字节消息 ID + UTF-8 JSON；ACK 包体为对应 16 字节消息 ID，ACK 也加密。
-- 最多 16 条待确认消息，按 300/600/1000ms 退避，3 秒未确认回退。重发复用已编码业务内容，但使用新的 packetSequence/Nonce；逻辑消息 ID 不变。
-- 接收端保存最近 128 个消息 ID，重复消息仍确认但不重复交付。DATA 尺寸超过上限时走服务器，避免 UDP 分片。
-
-### 7.4 业务一致性与性能
-
-ACTION 可携带 operationId（32 位十六进制），Rust 转发 FORWARD 时保留。房主按 actorId + operationId 缓存最近 128 个操作结果；跨 UDP/服务器重试不会重复执行棋局动作。重试返回当前完整公开快照，不重置计时。每步 move 和状态 seq 继续校验。
-
-UDP ACTION 携带原业务上下文，由房主根据已绑定的对端身份确定 actorId；对方自报身份不作为依据。房主回复 DIRECT_REPLY（operationId、ok、state 或 error），主动同步为 DIRECT_STATE。房主本人操作在本地同一个裁判队列处理，再向对端同步。客人一次只允许一个等待确认的直连操作，3.5 秒未得到业务结果回退可靠通道。
-
-最终公开状态在 FINISH 前通过控制链路 HOST_STATE 发送，避免跨通道结算丢失最后一步；暗棋身份和历史棋面始终只在房主。回退后房主重新发布最新公开状态，未确认操作保留 operationId 经服务器重试。
-
-服务器广播使用共享已编码字节，不为每个接收者重复解析/序列化。安卓网络层传递 JSONObject，避免转字符串后由 Service 再解析。UDP 重试不重复序列化。服务器和 UDP RTT 分别显示；直连失败隐藏 UDP RTT。网络指标通知只更新文本，不重绘棋盘。
+`main.rs` 配置/监听/统一过期调度 → `net.rs` 握手与 TCP/WS 收发 → `hub.rs` 用户/房间/权限/转发/P2P → `wire.rs` 边界与密码学；`json.rs` 只服务控制消息，`update.rs` 集中处理 APK 版本与下载。六个文件均按功能块补充中文注释，没有新增 Service/Repository/Factory 层。

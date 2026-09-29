@@ -1,15 +1,16 @@
 import { HostController } from './game.js';
-import { GameSocket } from './transport.js';
+import { GameSocket, id } from './transport.js';
 
 const $ = id => document.getElementById(id);
-const model = { online: false, self: '', room: null, state: null, receivedAt: 0, rooms: [], pages: [], listing: false,
+const model = { online: false, synced: false, self: '', token: '', boot: '', profiles: {}, pending: null, room: null, state: null, receivedAt: 0, rooms: [], pages: [], listing: false,
   selected: -1, pendingMove: false, lastResult: '', lastGame: '', suppressEffects: true };
 const names = { red: ['', '帅', '仕', '相', '车', '马', '炮', '兵'], black: ['', '将', '士', '象', '车', '马', '炮', '卒'] };
-const reasonText = { TIMEOUT: '每步用时已到', NO_PIECES: '一方棋子已全部被吃', NO_MOVES: '没有合法行动',
-  HOST_DISSOLVED: '房主认输并解散房间', DISCONNECTED: '对局中连接断开', LEFT: '对局中退出房间' };
+const reasonText = { RESTORE_FAILED: '房主棋局存档无法恢复', TIMEOUT: '每步用时已到', NO_PIECES: '一方棋子已全部被吃', NO_MOVES: '没有合法行动',
+  HOST_DISSOLVED: '房主认输并解散房间', DISCONNECTED: '断线超过 60 秒', LEFT: '对局中退出房间' };
 const preferences = { sound: true, motion: true };
 try { for (const key of Object.keys(preferences)) preferences[key] = localStorage.getItem(`chess.${key}`) !== 'false'; } catch { /* Private browsing may disable storage. */ }
-let hostTimer, clockTimer, toastTimer, outcomeTimer, confirmAction;
+let hostTimer, clockTimer, toastTimer, outcomeTimer, confirmAction, actionTimer, actionAttempts = 0, storageFailed = false, storageAvailable = true;
+let nickname = ''; try { nickname = localStorage.getItem('chess.nickname') || ''; } catch {}
 let boardEffect;
 let holdFinalBoard = false;
 let boardView = {};
@@ -94,16 +95,59 @@ const connection = new GameSocket({
   latency: millis => { const text = millis == null ? '服务器 —' : `服务器 ${millis} ms`; if ($('server-latency').textContent !== text) $('server-latency').textContent = text; },
   message: receive,
   closed: reason => {
-    model.online = false; model.self = ''; model.rooms = []; model.pages = []; model.listing = false;
-    clearRoom(); clearTimeout(outcomeTimer); $('status').textContent = reason; $('status').classList.remove('online');
+    model.online = model.synced = false; model.rooms = []; model.pages = []; model.listing = false;
+    clearTimeout(hostTimer); clearTimeout(actionTimer); clearTimeout(outcomeTimer); $('status').textContent = reason; $('status').classList.remove('online');
     $('network-metrics').hidden = true; $('server-latency').textContent = '服务器 —';
     $('offline-message').textContent = reason; renderRooms(); render();
   }
 });
-const referee = new HostController(send);
+const referee = new HostController(body => {
+  if (!persist()) return;
+  if (body.type === 'HOST_STATE' || body.type === 'HOST_REPLY') {
+    receive({ ...body, actorId: model.self });
+    if (model.room.members.length < 2 || (!body.ok && body.targetId === model.self && body.type === 'HOST_REPLY')) return;
+  }
+  send(body);
+});
+function persist() {
+  if (!storageAvailable) return true;
+  if (storageFailed) return false;
+  try {
+    sessionStorage.setItem('chess.session.v2', JSON.stringify({ self: model.self, token: model.token, boot: model.boot, room: model.room,
+      state: model.state, stateWall: Date.now() + model.receivedAt - performance.now(), referee: referee.save(), pending: model.pending,
+      lastGame: model.lastGame, profiles: model.profiles })); return true;
+  } catch { storageFailed = true; toast('无法保存本地棋局，已停止提交新操作'); return false; }
+}
+function restore() {
+  try { sessionStorage.setItem('chess.storage-check', '1'); sessionStorage.removeItem('chess.storage-check'); }
+  catch { storageAvailable = false; toast('浏览器未允许本地存储，刷新后会成为新用户'); return; }
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('chess.session.v2') || 'null'); if (!saved) return;
+    Object.assign(model, { self: saved.self, token: saved.token, boot: saved.boot, room: saved.room, state: saved.state,
+      pending: saved.pending, lastGame: saved.lastGame, profiles: saved.profiles || {}, receivedAt: performance.now() + saved.stateWall - Date.now() });
+    referee.restore(saved.referee); connection.identity = { userId: model.self, token: model.token };
+  } catch { clearRoom(); toast('本地棋局存档无法读取'); }
+}
+function profile() { model.profiles[model.self] = nickname || `玩家${model.self.slice(0,4)}`; send({ type: 'PROFILE', name: model.profiles[model.self] }); }
+function memberName(user) { return model.profiles[user] || `玩家${(user || '').slice(0,4)}`; }
+function memberStatus(user) {
+  if (!model.online) return user === model.self ? '重连中' : '状态待确认';
+  return { online: '在线', syncing: '同步中', offline: '重连中', suspect: '连接异常' }[model.room?.presence?.[user]] || '同步中';
+}
+function canAct() { return model.online && model.synced && !storageFailed && model.room?.members.every(user => memberStatus(user) === '在线'); }
+function deliverAction() {
+  clearTimeout(actionTimer); if (!model.online || !model.pending) return;
+  if (isHost()) referee.action({ ...model.pending, actorId: model.self }); else send(model.pending);
+  if (model.pending) actionTimer = setTimeout(() => { if (++actionAttempts <= 3) deliverAction(); else toast('操作尚未确认，请刷新同步或退出房间'); }, 5000);
+}
 function send(body) { if (!connection.request(body)) toast('连接尚未建立，请稍候'); }
 function context(type) { return { type, roomId: model.room?.roomId, version: model.room?.version, gameId: model.room?.gameId || '' }; }
-function action(value) { if (model.room) send({ ...context('ACTION'), action: value }); }
+function action(value) {
+  if (!model.online || !model.room || storageFailed || (value.type !== 'SYNC' && !canAct())) { toast('等待双方完成重连同步'); return; }
+  if (model.pending) { toast('上一步正在确认，请稍候'); return; }
+  model.pending = { ...context('ACTION'), operationId: id(), action: value }; actionAttempts = 0;
+  if (persist()) deliverAction();
+}
 function isHost() { return model.room?.hostId === model.self; }
 function myIndex() { return model.room?.members.indexOf(model.self) ?? -1; }
 function matches(message) { return model.room && message.roomId === model.room.roomId && message.version === model.room.version && message.gameId === model.room.gameId; }
@@ -111,40 +155,63 @@ function clearRoom() {
   holdFinalBoard = false;
   boardView = {};
   stopBoardEffect();
-  model.room = model.state = null; model.selected = -1; model.pendingMove = false; model.lastResult = ''; model.suppressEffects = true;
+  model.room = model.state = model.pending = null; model.synced = false; clearTimeout(actionTimer); model.selected = -1; model.pendingMove = false; model.lastResult = ''; model.suppressEffects = true;
   referee.clear(); clearTimeout(hostTimer); clearTimeout(clockTimer);
 }
 function listRooms() {
   if (!model.online || model.room || model.listing) return;
   model.pages = []; model.listing = true; renderRooms(); send({ type: 'LIST' });
 }
-function sync() { if (model.room) action({ type: 'SYNC' }); else listRooms(); }
-function scheduleHost() { clearTimeout(hostTimer); const delay = referee.nextTickDelay(); if (delay >= 0) hostTimer = setTimeout(() => { referee.tick(); scheduleHost(); }, delay); }
+function sync() { if (!model.online) return; if (!model.room) listRooms(); else if (model.pending) { actionAttempts = 0; deliverAction(); } else if (isHost()) referee.publish(); else action({ type: 'SYNC' }); }
+function scheduleHost() { clearTimeout(hostTimer); const delay = model.online && model.synced ? referee.nextTickDelay() : -1; if (delay >= 0) hostTimer = setTimeout(() => { referee.tick(); scheduleHost(); }, delay); }
 
 function receive(message) {
   switch (message.type) {
     case 'SESSION':
-      model.self = message.selfId; clearRoom(); model.listing = false; listRooms(); break;
+      if (!message.resumed || model.boot !== message.bootId) { clearRoom(); model.lastGame = ''; }
+      model.self = message.selfId; model.token = message.token; model.boot = message.bootId;
+      connection.identity = { userId: model.self, token: model.token }; model.listing = false; profile();
+      if (!message.inRoom) { clearRoom(); send({ type: 'AVAILABLE' }); listRooms(); } persist(); break;
+    case 'PROFILE_REQUEST': profile(); break;
+    case 'PROFILE': model.profiles[message.userId] = message.name; break;
+    case 'PRESENCE': if (matches(message)) model.room.presence = message.presence; break;
+    case 'ECHO': if (message.message) toast(message.message); break;
     case 'ROOMS':
       if (model.room) break;
       model.pages.push(...message.rooms);
       if (message.next > 0) send({ type: 'LIST', after: message.next });
       else { model.rooms = model.pages; model.pages = []; model.listing = false; renderRooms(); }
       break;
-    case 'ROOM':
-      if (model.room?.roomId === message.roomId && message.version <= model.room.version) break;
+    case 'ROOM': {
+      if (model.room?.roomId === message.roomId && message.version < model.room.version) break;
+      const same = matches(message);
       if (!holdFinalBoard || message.playing) stopBoardEffect();
-      model.room = message; model.state = null; model.selected = -1; model.pendingMove = false; model.listing = false;
+      if (!same) { model.state = model.pending = null; clearTimeout(actionTimer); }
+      model.room = message; model.synced = false; model.selected = -1; model.pendingMove = !!model.pending; model.listing = false;
       model.pages = []; model.suppressEffects = true;
-      if (message.playing) { holdFinalBoard = false; model.lastResult = ''; clearTimeout(outcomeTimer); }
-      referee.setRoom(message, model.self); break;
-    case 'ROOM_CLOSED': clearRoom(); model.listing = false; listRooms(); break;
-    case 'STATE':
-      if (matches(message) && (!model.state || message.state.seq > model.state.seq)) {
+      model.profiles = Object.fromEntries(Object.entries(model.profiles).filter(([user]) => message.members.includes(user)));
+      if (message.lastResult) receive(message.lastResult);
+      else if (message.playing) { holdFinalBoard = false; model.lastResult = ''; clearTimeout(outcomeTimer); }
+      referee.setRoom(message, model.self);
+      if (model.pending) { actionAttempts = 0; deliverAction(); } else if (!isHost()) action({ type: 'SYNC' });
+      persist(); break;
+    }
+    case 'ROOM_CLOSED': clearRoom(); persist(); model.listing = false; send({ type: 'AVAILABLE' }); listRooms(); break;
+    case 'HOST_REPLY':
+      if (!matches(message) || message.actorId !== model.room.hostId) break;
+      if (model.pending?.operationId === message.operationId) {
+        model.pending = null; model.pendingMove = false; clearTimeout(actionTimer);
+        if (!message.ok) toast(message.error || '操作无效');
+      }
+      if (!message.ok) { persist(); break; }
+      // Accepted replies carry the same authoritative snapshot as HOST_STATE.
+    case 'HOST_STATE':
+      if (matches(message) && message.actorId === model.room.hostId && message.state && (!model.state || message.state.seq > model.state.seq || !model.synced)) {
         const previous = model.state;
         const transition = !model.suppressEffects && !document.hidden ? boardTransition(previous, message.state) : null;
         if (!(holdFinalBoard && !model.room.playing) && (!previous || previous.move !== message.state.move)) stopBoardEffect();
         model.state = message.state; model.receivedAt = performance.now();
+        if (!model.synced) { model.synced = true; send({ type: 'AVAILABLE' }); }
         if (!previous || previous.move !== model.state.move) { model.selected = -1; model.pendingMove = false; }
         render();
         if (transition) {
@@ -153,11 +220,11 @@ function receive(message) {
         }
         model.suppressEffects = document.hidden;
       }
-      scheduleHost(); return; // The accepted snapshot already rendered before its animation.
-    case 'FORWARD': if (matches(message) && isHost()) referee.action(message); break;
+      persist(); scheduleHost(); return; // The accepted snapshot already rendered before its animation.
+    case 'ACTION': if (matches(message) && isHost() && model.synced) referee.action(message); break;
     case 'GAME_OVER':
-      if (matches(message) && message.gameId !== model.lastGame) {
-        model.lastGame = message.gameId;
+      if (model.room?.roomId === message.roomId && `${message.roomId}:${message.gameId}` !== model.lastGame) {
+        model.lastGame = `${message.roomId}:${message.gameId}`;
         const won = message.winnerId === model.self, reason = reasonText[message.reason] || '对局结束';
         model.lastResult = `${won ? '你赢了' : '本局落败'} · ${reason}`;
         model.pendingMove = true;
@@ -174,7 +241,6 @@ function receive(message) {
       }
       break;
     case 'RESULT':
-      if (message.request === 'ACTION') model.pendingMove = false;
       if (!message.ok) {
         if (message.request === 'LIST') { model.listing = false; model.pages = []; renderRooms(); }
         toast(message.error || '操作失败'); referee.failed(message.request);
@@ -202,7 +268,7 @@ for (const side of ['red', 'black']) {
 }
 function select(index) {
   const state = model.state, me = myIndex();
-  if (!model.online || !model.room?.playing || !state?.board || state.winner >= 0 || model.pendingMove) return;
+  if (!canAct() || !model.room?.playing || !state?.board || state.winner >= 0 || model.pendingMove) return;
   if (state.turn !== me) { toast('请等待对方行动'); return; }
   const value = state.board[index], color = state.colors[me];
   if (model.selected === index) model.selected = -1;
@@ -215,7 +281,7 @@ function select(index) {
 }
 function renderBoard() {
   const state = model.state, me = myIndex(), board = state?.board || Array(32).fill(0);
-  const canPlay = !!state?.board && me >= 0 && state.turn === me && state.winner < 0 && !model.pendingMove;
+  const canPlay = canAct() && !!state?.board && me >= 0 && state.turn === me && state.winner < 0 && !model.pendingMove;
   if (boardView.state === state && boardView.selected === model.selected && boardView.canPlay === canPlay) return;
   boardView = { state, selected: model.selected, canPlay };
   cells.forEach((cell, index) => {
@@ -247,7 +313,7 @@ function renderRooms() {
   }
 }
 function render() {
-  const view = !model.online ? 'offline' : !model.room ? 'lobby' : model.room.playing ? 'game' : 'waiting';
+  const view = model.room ? (model.room.playing ? 'game' : 'waiting') : model.online ? 'lobby' : 'offline';
   // Room state changes immediately; only the final visible board waits for its short animation.
   if (holdFinalBoard && view === 'waiting') return;
   document.body.classList.toggle('playing', view === 'game');
@@ -260,18 +326,20 @@ function render() {
     players.forEach((player, i) => {
       const id = model.room.members[i], me = id === model.self, ready = !!model.state?.ready?.[id];
       player.avatar.textContent = id ? me ? '我' : '客' : '＋'; player.avatar.classList.toggle('empty-avatar', !id);
-      player.name.textContent = id ? `${me ? '你' : '对方'}${i === 0 ? ' · 房主' : ''}` : '等待朋友加入';
-      player.status.textContent = id ? ready ? '已准备' : '未准备' : '空位'; player.status.classList.toggle('prepared', ready);
+      player.name.textContent = id ? `${memberName(id)}${i === 0 ? ' · 房主' : ''}` : '等待朋友加入';
+      const online = memberStatus(id) === '在线'; player.name.classList.toggle('subtle', !online);
+      player.status.textContent = id ? online ? (ready ? '已准备' : '未准备') : memberStatus(id) : '空位'; player.status.classList.toggle('prepared', ready && online);
     });
     for (const button of $('time-choices').children) {
       button.classList.toggle('active', Number(button.dataset.seconds) === (model.state?.seconds ?? 60));
-      button.disabled = !isHost() || !model.state; button.setAttribute('aria-pressed', String(button.classList.contains('active')));
+      button.disabled = !isHost() || !model.state || !canAct(); button.setAttribute('aria-pressed', String(button.classList.contains('active')));
     }
-    $('ready').disabled = !model.state; $('ready').textContent = model.state?.ready?.[model.self] ? '取消准备' : '准备';
+    $('ready').disabled = !model.state || !canAct() || !!model.pending; $('ready').textContent = model.state?.ready?.[model.self] ? '取消准备' : '准备';
     $('last-result').hidden = !model.lastResult; $('last-result').textContent = model.lastResult;
   }
   if (view === 'game') {
     $('game-room').textContent = `#${model.room.roomId} ${model.room.name}`;
+    const other = model.room.members[1 - myIndex()]; $('peer-status').textContent = `${memberName(other)} · ${memberStatus(other)}`; $('peer-status').classList.toggle('subtle', memberStatus(other) !== '在线');
     const state = model.state, me = myIndex(), myTurn = state?.turn === me;
     $('turn-badge').textContent = state ? `第 ${(state.move || 0) + 1} 回合` : '正在同步';
     $('turn').textContent = !state ? '等待棋面' : state.winner >= 0 ? '对局结束' : myTurn ? '轮到你了' : '对方思考中';
@@ -293,7 +361,7 @@ function renderClock() {
 
 $('connect').onclick = () => connection.connect();
 $('refresh').onclick = sync; $('lobby-refresh').onclick = listRooms;
-$('create-open').onclick = () => { $('create-error').textContent = ''; openDialog('create-dialog'); $('room-name').focus(); };
+$('create-open').onclick = () => { $('create-error').textContent = ''; $('room-name').value = `${nickname || memberName(model.self)}的房间`; openDialog('create-dialog'); $('room-name').focus(); };
 $('create-form').onsubmit = event => {
   event.preventDefault(); const name = $('room-name').value.trim();
   if ([...name].length < 1 || [...name].length > 32 || /[\u0000-\u001f\u007f-\u009f]/.test(name)) {
@@ -305,7 +373,7 @@ $('ready').onclick = () => action({ type: 'READY', ready: !model.state?.ready?.[
 for (const choice of $('time-choices').children) choice.onclick = () => action({ type: 'TIME', seconds: Number(choice.dataset.seconds) });
 for (const button of document.querySelectorAll('.leave')) button.onclick = () => confirm('退出房间？', model.room?.playing ? '当前对局将按退出判负。' : '退出后回到房间大厅。', () => send({ type: 'LEAVE' }));
 for (const button of document.querySelectorAll('.dissolve')) button.onclick = () => confirm('解散房间？', model.room?.playing ? '你将认输，房间内的玩家会回到大厅。' : '房间内的玩家会回到大厅。', () => send(context('DISSOLVE')));
-$('disconnect').onclick = () => confirm('断开连接？', model.room?.playing ? '当前对局将按退出判负。' : '再次连接后会回到大厅。', () => connection.disconnect());
+$('disconnect').onclick = () => confirm('断开连接？', model.room?.playing ? '当前对局将按退出判负。' : '再次连接后会回到大厅。', () => { send({ type: 'LOGOUT' }); connection.disconnect(); clearRoom(); model.self = model.token = model.boot = ''; connection.identity = {}; persist(); render(); });
 let rulesLoaded = false;
 async function showRules() {
   openDialog('rules-dialog');
@@ -314,9 +382,16 @@ async function showRules() {
 }
 $('rules-open').onclick = showRules; for (const button of document.querySelectorAll('.rules-link')) button.onclick = showRules;
 $('settings-open').onclick = () => {
+  $('nickname').value = nickname || memberName(model.self);
   $('server-address').textContent = location.host;
   $('connection-kind').textContent = location.protocol === 'https:' ? 'HTTPS · 安全连接' : 'HTTP · 普通连接';
   openDialog('settings-dialog');
+};
+$('nickname-save').onclick = () => {
+  const value = $('nickname').value.trim();
+  if (!value || [...value].length > 24 || /[\u0000-\u001f\u007f-\u009f]/.test(value)) { toast('请输入 1 至 24 个字符，不含控制字符'); return; }
+  nickname = value; try { localStorage.setItem('chess.nickname', value); } catch { toast('浏览器未允许保存用户名'); }
+  if (model.online) profile(); render(); toast('用户名已保存');
 };
 for (const key of ['sound', 'motion']) {
   $(key).checked = preferences[key];
@@ -344,4 +419,4 @@ window.addEventListener('resize', stopBoardEffect);
 window.addEventListener('pagehide', () => connection.disconnect());
 window.addEventListener('pageshow', event => { if (event.persisted) connection.connect(); });
 window.addEventListener('online', () => connection.resume());
-renderRooms(); render(); connection.connect();
+restore(); renderRooms(); render(); connection.connect();

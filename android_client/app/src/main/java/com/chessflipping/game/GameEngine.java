@@ -1,6 +1,7 @@
 package com.chessflipping.game;
 
 import java.util.*;
+import org.json.*;
 
 /** The project's custom flip-chess rules. No Android or network dependencies. */
 public final class GameEngine {
@@ -32,6 +33,28 @@ public final class GameEngine {
         }
         turn = random.nextInt(2);
         history.add(boardKey());
+    }
+
+    public GameEngine(JSONObject saved) throws JSONException {
+        seconds = saved.getInt("seconds");
+        if (seconds != 0 && seconds != 30 && seconds != 60 && seconds != 90) throw new JSONException("Invalid time limit");
+        JSONArray board = saved.getJSONArray("pieces"), face = saved.getJSONArray("revealed"), color = saved.getJSONArray("colors");
+        if (board.length() != 32 || face.length() != 32 || color.length() != 2) throw new JSONException("Invalid saved board");
+        for (int i = 0; i < 32; i++) { pieces[i] = board.getInt(i); revealed[i] = face.getBoolean(i); if (Math.abs(pieces[i]) > 7) throw new JSONException("Invalid piece"); }
+        for (int i = 0; i < 2; i++) colors[i] = color.getInt(i);
+        JSONArray taken = saved.getJSONArray("captured"), past = saved.getJSONArray("history");
+        for (int i = 0; i < taken.length(); i++) captured.add(taken.getInt(i));
+        for (int i = 0; i < past.length(); i++) { String key = past.getString(i); if (key.length() != 32) throw new JSONException("Invalid history"); history.add(key); }
+        turn = saved.getInt("turn"); winner = saved.getInt("winner"); reason = saved.getString("reason");
+        lastFrom = saved.getInt("lastFrom"); lastTo = saved.getInt("lastTo");
+        deadline = saved.getLong("deadline"); started = saved.getBoolean("started");
+        if (turn < 0 || turn > 1 || winner < -1 || winner > 1 || !history.contains(boardKey())) throw new JSONException("Invalid saved game");
+    }
+    public JSONObject save() throws JSONException {
+        return new JSONObject().put("seconds", seconds).put("pieces", new JSONArray(pieces)).put("revealed", new JSONArray(revealed))
+                .put("colors", new JSONArray(colors)).put("captured", new JSONArray(captured)).put("history", new JSONArray(history))
+                .put("turn", turn).put("winner", winner).put("reason", reason).put("lastFrom", lastFrom).put("lastTo", lastTo)
+                .put("deadline", deadline).put("started", started);
     }
 
     public void start(long now) { if (!started) { started = true; resetClock(now); } }

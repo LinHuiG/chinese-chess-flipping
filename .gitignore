@@ -8,3 +8,5 @@
 *.log
 *.jks
 *.keystore
+/server/app-update/latest.apk
+/server/app-update/latest.json

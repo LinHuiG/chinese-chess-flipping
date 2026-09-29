@@ -18,10 +18,11 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 
-OkHttp / Okio / Kotlin
+OkHttp / Okio / Kotlin / AndroidX
 OkHttp: https://github.com/square/okhttp
 Okio: https://github.com/square/okio
 Kotlin: https://github.com/JetBrains/kotlin
+AndroidX (including FileProvider): https://android.googlesource.com/platform/frameworks/support/
 Licensed under the Apache License 2.0, reproduced below.
 
 

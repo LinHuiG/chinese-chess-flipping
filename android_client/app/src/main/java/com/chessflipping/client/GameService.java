@@ -3,6 +3,11 @@ package com.chessflipping.client;
 import android.app.*;
 import android.content.*;
 import android.os.*;
+import android.net.*;
+import android.util.AtomicFile;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.*;
 import com.chessflipping.game.HostController;
 import org.json.*;
 import java.util.*;
@@ -24,13 +29,41 @@ public final class GameService extends Service {
     public long roomsRevision;
     public long serverLatency = -1, directLatency = -1;
     public boolean direct;
+    public AppUpdater updater;
+    private boolean updateChecked;
     private UdpPeer udp;
     private String p2pId = "";
     private int p2pGeneration;
     private boolean p2pRequested;
-    private final Map<String, Boolean> directRequests = new HashMap<>();
-    private final LinkedHashMap<String, JSONObject> directActions = new LinkedHashMap<>();
-    private final Runnable actionDeadline = this::fallback;
+    private JSONObject pendingAction;
+    private int actionAttempts, p2pAttempts;
+    private boolean synced, loaded, storageFailed;
+    private String token = "", bootId = "";
+    private final Map<String,String> names = new HashMap<>();
+    private final ArrayDeque<String> diagnostics = new ArrayDeque<>();
+    private final ExecutorService storage = Executors.newSingleThreadExecutor();
+    private ConnectivityManager connectivity;
+    private String network = "";
+    private final Runnable punchRetry = this::tryP2p;
+    private final Runnable actionDeadline = () -> {
+        if (pendingAction == null || !connected) return;
+        if (direct) fallback();
+        else if (++actionAttempts <= 3) { sendServer(pendingAction); handler.postDelayed(this.actionDeadline, 5000); }
+        else notice("操作尚未确认，请刷新同步或退出房间");
+    };
+    private final ConnectivityManager.NetworkCallback networks = new ConnectivityManager.NetworkCallback() {
+        @Override public void onLinkPropertiesChanged(Network n, LinkProperties properties) {
+            String value = n.toString() + properties.getLinkAddresses().toString();
+            handler.post(() -> {
+                boolean changed = !network.isEmpty() && !network.equals(value); network = value;
+                if (changed) {
+                    p2pAttempts = 0; fallback();
+                    if (client != null) client.close();
+                    handler.removeCallbacks(retry); if (foreground && enabled) handler.postDelayed(retry, 1500);
+                }
+            });
+        }
+    };
     public static final class Outcome {
         public final boolean won, live;
         public final String reason;
@@ -56,10 +89,13 @@ public final class GameService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        updater = new AppUpdater(this, this::sendServer, this::changed);
         NotificationManager manager = getSystemService(NotificationManager.class);
         manager.createNotificationChannel(new NotificationChannel("game", "联机游戏连接", NotificationManager.IMPORTANCE_LOW));
         wakeLock = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "chessflipping:connection");
         wakeLock.setReferenceCounted(false);
+        connectivity = getSystemService(ConnectivityManager.class);
+        connectivity.registerDefaultNetworkCallback(networks);
     }
     @Override public IBinder onBind(Intent intent) { return binder; }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -81,7 +117,7 @@ public final class GameService extends Service {
     public Outcome takeOutcome() { Outcome value = outcome; outcome = null; return value; }
     private void scheduleTick() {
         handler.removeCallbacks(tick);
-        long delay = referee.nextTickDelay();
+        long delay = connected && synced ? referee.nextTickDelay() : -1;
         if (delay >= 0) handler.postDelayed(tick, delay);
     }
     public String host() { return preferences().getString("host", DEFAULT_HOST); }
@@ -98,11 +134,8 @@ public final class GameService extends Service {
         handler.removeCallbacks(retry);
         if (!enabled || !foreground || client != null) return;
         final int current = ++generation;
-        String did = preferences().getString("did", null);
-        if (did == null) {
-            did = getSharedPreferences("MainActivity", MODE_PRIVATE).getString("device_id", UUID.randomUUID().toString().replace("-", ""));
-            preferences().edit().putString("did", did).apply();
-        }
+        if (!loaded) { loadSaved(); loaded = true; }
+        JSONObject identity = put(put(json("IDENTITY"), "userId", selfId), "token", token);
         status = "正在连接 " + endpoint();
         changed();
         TcpClient.Listener listener = new TcpClient.Listener() {
@@ -117,26 +150,28 @@ public final class GameService extends Service {
             public void onEvent(String text) { dispatch(() -> receive(text)); }
             public void onJsonMessage(JSONObject value, boolean event) { dispatch(() -> receive(value)); }
             public void onLatency(long millis) { dispatch(() -> { serverLatency = millis; networkChanged(); }); }
+            public void onAppChunk(JSONObject header, byte[] bytes) { dispatch(() -> updater.chunk(header, bytes)); }
             public void onClosed(String reason) { dispatch(() -> {
-                client = null; connected = false; serverLatency = -1; clearRoom(); selfId = ""; rooms.clear(); listing.clear(); listingRooms = false;
-                outcome = null; roomsRevision++;
+                updater.connectionLost();
+                client = null; connected = false; synced = false; serverLatency = -1; closeDirect(); rooms.clear(); listing.clear(); listingRooms = false;
+                handler.removeCallbacks(tick); handler.removeCallbacks(actionDeadline); roomsRevision++;
                 if (wakeLock.isHeld()) wakeLock.release();
                 status = reason + (foreground && enabled ? "，3 秒后重连" : "");
                 changed();
                 if (foreground && enabled) handler.postDelayed(retry, 3000);
             }); }
         };
-        client = transport().equals("TCP") ? new TcpClient(did, getPackageName(), "0.5.0", listener)
-                : new WsClient(did, getPackageName(), "0.5.0", transport().equals("HTTPS"), listener);
+        client = transport().equals("TCP") ? new TcpClient(identity, listener)
+                : new WsClient(identity, transport().equals("HTTPS"), listener);
         client.connect(host(), port());
     }
     public void disconnect() {
-        enabled = false; generation++;
-        handler.removeCallbacks(retry);
-        if (client != null) client.close();
-        client = null; connected = false; serverLatency = -1; clearRoom(); selfId = ""; rooms.clear(); listing.clear(); listingRooms = false;
-        outcome = null; roomsRevision++;
-        status = "已断开连接";
+        if (updater.busy) updater.cancel("已取消更新");
+        enabled = false; generation++; handler.removeCallbacks(retry);
+        if (client != null) { if (connected) client.request(json("LOGOUT")); else client.close(); }
+        client = null; connected = false; synced = false; serverLatency = -1;
+        clearRoom(); selfId = token = bootId = ""; rooms.clear(); listing.clear(); listingRooms = false;
+        save(null); outcome = null; roomsRevision++; status = "已断开连接";
         if (wakeLock.isHeld()) wakeLock.release();
         stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); changed();
     }
@@ -144,11 +179,13 @@ public final class GameService extends Service {
         saveServer(host, port, "TCP");
     }
     public void saveServer(String host, int port, String transport) {
+        String previous = endpoint();
         disconnect();
         preferences().edit().putString("host", host).putInt("port", port).putString("transport", transport).apply();
+        loaded = previous.equals(endpoint());
     }
     private void clearRoom() {
-        closeDirect(); p2pId = ""; p2pRequested = false; directActions.clear(); directRequests.clear();
+        closeDirect(); p2pId = ""; p2pRequested = false; p2pAttempts = 0; pendingAction = null; handler.removeCallbacks(actionDeadline); handler.removeCallbacks(punchRetry);
         room = state = null; lastResult = ""; referee.clear(); handler.removeCallbacks(tick);
     }
     public boolean isHost() { return room != null && selfId.equals(room.optString("hostId")); }
@@ -165,6 +202,10 @@ public final class GameService extends Service {
         long remaining = state.optLong("remaining", -1);
         return remaining < 0 ? -1 : Math.max(0, remaining - (SystemClock.elapsedRealtime() - stateReceivedAt));
     }
+    public void checkUpdate() {
+        if (transport().equals("TCP") && !connected) { notice("请先连接 TCP 服务器"); return; }
+        updater.check(host(), port(), transport());
+    }
     public void listRooms() {
         if (!connected || room != null || listingRooms) return;
         listing.clear(); listingRooms = true; send(json("LIST")); changed();
@@ -173,7 +214,12 @@ public final class GameService extends Service {
     public void join(long id) { send(put(json("JOIN"), "roomId", id)); }
     public void leave() { send(json("LEAVE")); }
     public void dissolve() { send(context("DISSOLVE")); }
-    public void sync() { action(put(json("SYNC"), "seq", state == null ? 0 : state.optLong("move"))); }
+    public void sync() {
+        if (!connected || room == null) return;
+        if (pendingAction != null) { actionAttempts = 0; sendServer(pendingAction); handler.removeCallbacks(actionDeadline); handler.postDelayed(actionDeadline, 5000); }
+        else if (isHost()) { try { referee.syncState(); } catch (JSONException ex) { notice("状态同步失败"); } }
+        else action(json("SYNC"));
+    }
     public void ready(boolean value) { action(put(json("READY"), "ready", value)); }
     public void timeLimit(int value) { action(put(json("TIME"), "seconds", value)); }
     public void move(int from, int to) {
@@ -182,15 +228,20 @@ public final class GameService extends Service {
         action(action);
     }
     private void action(JSONObject action) {
+        if (!connected || room == null || storageFailed) { notice("连接正在恢复"); return; }
+        if (!"SYNC".equals(action.optString("type")) && !canAct()) { notice("等待双方完成重连同步"); return; }
+        if (pendingAction != null) { notice("上一步正在确认，请稍候"); return; }
         JSONObject request = put(put(context("ACTION"), "action", action), "operationId", UUID.randomUUID().toString().replace("-", ""));
-        if (direct && playing()) {
-            if (isHost()) { directAction(request, selfId); return; }
-            if (!directActions.isEmpty()) { notice("上一步正在确认，请稍候"); return; }
-            directActions.put(request.optString("operationId"), request);
-            if (sendDirect(request)) { handler.postDelayed(actionDeadline, 3500); return; }
-            fallback(); return;
-        }
-        sendServer(request);
+        pendingAction = request; actionAttempts = 0;
+        save(() -> deliverAction(request));
+    }
+    private void deliverAction(JSONObject request) {
+        if (!connected || request != pendingAction) return;
+        if (isHost()) {
+            try { referee.action(put(request, "actorId", selfId)); scheduleTick(); }
+            catch (JSONException ex) { notice("操作处理失败"); }
+        } else if (!sendDirect(request)) sendServer(request);
+        handler.removeCallbacks(actionDeadline); if (pendingAction != null) handler.postDelayed(actionDeadline, direct ? 3500 : 5000);
     }
     private JSONObject context(String type) {
         JSONObject request = json(type);
@@ -202,85 +253,82 @@ public final class GameService extends Service {
     }
     private void sendServer(JSONObject request) { if (connected && client != null) client.request(request); else notice("连接尚未建立"); }
     private void send(JSONObject request) {
-        String type = request.optString("type");
-        Boolean localAction = "HOST_REPLY".equals(type) ? directRequests.remove(request.optString("requestId")) : null;
-        if (localAction != null) {
-            if (localAction && !request.optBoolean("ok")) { notice(request.optString("error", "操作无效")); return; }
-            JSONObject reply = put(put(context("DIRECT_REPLY"), "operationId", request.optString("operationId")), "ok", request.optBoolean("ok"));
-            if (request.optBoolean("ok")) { put(reply, "state", request.optJSONObject("state")); applyState(reply); }
-            else put(reply, "error", request.optString("error"));
-            if (!sendDirect(reply)) { fallback(); if (request.optBoolean("ok")) sendServer(put(context("HOST_STATE"), "state", request.optJSONObject("state"))); }
-            return;
+        String kind = request.optString("type");
+        if (!kind.equals("HOST_REPLY") && !kind.equals("HOST_STATE") && !kind.equals("START") && !kind.equals("FINISH")) {
+            sendServer(request); return;
         }
-        if ("HOST_STATE".equals(type) && direct && !request.optBoolean("finalState")) {
-            JSONObject update = put(context("DIRECT_STATE"), "state", request.optJSONObject("state")); applyState(update);
-            if (!sendDirect(update)) fallback();
-            return;
-        }
-        sendServer(request);
+        // Save the referee and operation result before exposing a committed move to either peer.
+        save(() -> {
+            if (!connected || (request.has("roomId") && !matches(request))) return;
+            String type = request.optString("type");
+            if ("HOST_REPLY".equals(type) || "HOST_STATE".equals(type)) {
+                if ("HOST_REPLY".equals(type)) acceptReply(request); else applyState(request);
+                if (!request.optBoolean("ok", true) && selfId.equals(request.optString("targetId"))) return;
+                if (room.optJSONArray("members").length() == 2) {
+                    if (request.optBoolean("finalState") || !sendDirect(request)) sendServer(request);
+                }
+            } else sendServer(request);
+            scheduleTick(); changed();
+        });
     }
-
     private boolean sendDirect(JSONObject value) {
-        return direct && udp != null && udp.send(value.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    }
-    private void directAction(JSONObject message, String actor) {
-        String operation = message.optString("operationId");
-        if (!operation.matches("[0-9a-f]{32}") || !matches(message)) return;
-        JSONObject forward = put(put(put(put(context("FORWARD"), "requestId", operation), "operationId", operation), "actorId", actor), "action", message.optJSONObject("action"));
-        directRequests.put(operation, actor.equals(selfId));
-        try { referee.action(forward); scheduleTick(); }
-        catch (JSONException ex) { directRequests.remove(operation); fallback(); }
-        changed();
+        if (!connected || !direct || udp == null) return false;
+        try { return udp.send(com.chessflipping.protocol.WireProtocol.plain(GameConnection.packet(value))); }
+        catch (Exception ex) { return false; }
     }
     private void applyState(JSONObject message) {
         if (!matches(message)) return;
-        JSONObject update = message.optJSONObject("state");
-        if (update != null && (state == null || update.optLong("seq") > state.optLong("seq"))) {
-            state = update; stateReceivedAt = SystemClock.elapsedRealtime();
+        JSONObject next = message.optJSONObject("state"); if (next == null) return;
+        if (state == null || next.optLong("seq") > state.optLong("seq") || !synced) {
+            state = next; stateReceivedAt = SystemClock.elapsedRealtime();
+            if (!synced) { synced = true; sendServer(json("AVAILABLE")); }
         }
     }
-    private void peerMessage(JSONObject message) {
-        if (!direct || !matches(message)) return;
-        String type = message.optString("type");
-        if (isHost()) {
-            if ("ACTION".equals(type)) directAction(message, room.optJSONArray("members").optString(1));
-            return;
+    private void acceptReply(JSONObject message) {
+        if (message.optBoolean("ok")) applyState(message);
+        String operation = message.optString("operationId");
+        if (pendingAction != null && operation.equals(pendingAction.optString("operationId"))) {
+            pendingAction = null; handler.removeCallbacks(actionDeadline);
+            if (!message.optBoolean("ok")) notice(message.optString("error", "操作无效"));
         }
-        if ("DIRECT_STATE".equals(type)) applyState(message);
-        else if ("DIRECT_REPLY".equals(type)) {
-            directActions.remove(message.optString("operationId"));
-            if (directActions.isEmpty()) handler.removeCallbacks(actionDeadline);
-            if (message.optBoolean("ok")) applyState(message); else notice(message.optString("error", "操作无效"));
-        } else return;
-        changed();
+    }
+    private void peerMessage(JSONObject message) throws JSONException {
+        if (!matches(message) || room == null) return;
+        JSONArray members = room.getJSONArray("members");
+        message.put("actorId", members.getString(isHost() ? 1 : 0)); receive(message);
     }
     private void closeDirect() {
         p2pGeneration++; if (udp != null) udp.close(); udp = null; direct = false; directLatency = -1;
-        handler.removeCallbacks(actionDeadline); networkChanged();
+        networkChanged();
     }
     private void fallback() { fallback(true); }
     private void fallback(boolean signal) {
         String previous = p2pId; boolean existed = udp != null || direct;
-        closeDirect(); p2pId = "";
-        if (connected && room != null && !previous.isEmpty() && signal) sendServer(put(context("P2P_STOP"), "p2pId", previous));
+        closeDirect(); p2pId = ""; p2pRequested = false;
+        if (connected && room != null && signal && !previous.isEmpty()) sendServer(put(context("P2P_STOP"), "p2pId", previous));
         if (connected && room != null) {
-            for (JSONObject request : directActions.values()) sendServer(request);
+            if (pendingAction != null) sendServer(pendingAction);
             if (existed && isHost()) try { referee.syncState(); } catch (JSONException ignored) { }
+            handler.removeCallbacks(punchRetry); if (p2pAttempts < 2) handler.postDelayed(punchRetry, 3000);
         }
-        directActions.clear();
+    }
+    private void tryP2p() {
+        if (connected && synced && playing() && canAct() && room.optBoolean("p2pAvailable") && !p2pRequested && udp == null && p2pAttempts < 2) {
+            p2pAttempts++; p2pRequested = true; sendServer(context("P2P_REQUEST"));
+        }
     }
     private void p2pMessage(JSONObject message) throws JSONException {
         if (!matches(message)) return;
         String type = message.optString("type"), sid = message.optString("p2pId");
         if (!sid.matches("[0-9a-f]{32}")) return;
         if ("P2P_OFFER".equals(type) && isHost()) {
-            p2pId = sid; byte[] master = new byte[32]; new java.security.SecureRandom().nextBytes(master);
+            if (!p2pRequested) p2pAttempts++; p2pId = sid; p2pRequested = true; byte[] master = new byte[32]; new java.security.SecureRandom().nextBytes(master);
             sendServer(put(put(context("P2P_KEY"), "p2pId", sid), "key", Base64.getEncoder().encodeToString(master)));
             Arrays.fill(master, (byte) 0); return;
         }
         if ("P2P_CONFIG".equals(type)) {
             if (udp != null && sid.equals(p2pId)) return;
-            closeDirect(); p2pId = sid; final int epoch = p2pGeneration;
+            if (!p2pRequested) p2pAttempts++; p2pRequested = true; closeDirect(); p2pId = sid; final int epoch = p2pGeneration;
             byte[] master = Base64.getDecoder().decode(message.getString("key"));
             String binding = sid + "|" + room.optLong("roomId") + "|" + room.optLong("version") + "|" + room.optString("gameId")
                     + "|" + room.optJSONArray("members").optString(0) + "|" + room.optJSONArray("members").optString(1);
@@ -289,9 +337,9 @@ public final class GameService extends Service {
                     private void dispatch(Runnable task) { handler.post(() -> { if (epoch == p2pGeneration && sid.equals(p2pId)) task.run(); }); }
                     public void local(JSONArray values) { dispatch(() -> sendServer(put(put(context("P2P_LOCAL"), "p2pId", sid), "candidates", values))); }
                     public void ready() { dispatch(() -> sendServer(put(context("P2P_READY"), "p2pId", sid))); }
-                    public void message(JSONObject value) { dispatch(() -> peerMessage(value)); }
+                    public void message(JSONObject value) { dispatch(() -> { try { peerMessage(value); } catch (JSONException ex) { fallback(); } }); }
                     public void latency(long value) { dispatch(() -> { directLatency = value; networkChanged(); }); }
-                    public void failed() { dispatch(GameService.this::fallback); }
+                    public void failed(String reason) { dispatch(() -> { diagnostic(reason); fallback(); }); }
                 });
             } catch (Exception ex) { fallback(); }
             finally { Arrays.fill(master, (byte) 0); message.remove("key"); }
@@ -314,7 +362,26 @@ public final class GameService extends Service {
             if (message.optString("type").startsWith("P2P_")) { p2pMessage(message); return; }
             switch (message.optString("type")) {
                 case "SESSION":
-                    selfId = message.getString("selfId"); clearRoom(); listingRooms = false; listRooms(); break;
+                    if (!message.optBoolean("resumed") || !bootId.equals(message.optString("bootId"))) { clearRoom(); resultGameId = ""; }
+                    selfId = message.getString("selfId"); token = message.getString("token"); bootId = message.getString("bootId");
+                    listingRooms = false; p2pAttempts = 0; profile(); save(null);
+                    if (!message.optBoolean("inRoom")) {
+                        clearRoom(); sendServer(json("AVAILABLE")); listRooms();
+                        if (!updateChecked && preferences().getBoolean("autoUpdate", true)) { updateChecked = true; checkUpdate(); }
+                    }
+                    break;
+                case "APP_VERSION": updater.info(message); break;
+                case "PROFILE_REQUEST": profile(); break;
+                case "PROFILE": names.put(message.getString("userId"), message.getString("name")); break;
+                case "PRESENCE":
+                    if (matches(message)) { room.put("presence", message.getJSONObject("presence")); tryP2p(); }
+                    break;
+                case "ACTION":
+                    if (matches(message) && isHost() && synced) referee.action(message);
+                    break;
+                case "HOST_REPLY": if (matches(message) && room.optString("hostId").equals(message.optString("actorId"))) { acceptReply(message); save(null); } break;
+                case "HOST_STATE": if (matches(message) && room.optString("hostId").equals(message.optString("actorId"))) { applyState(message); save(null); } break;
+                case "ECHO": if (message.has("message")) notice(message.optString("message")); break;
                 case "ROOMS":
                     if (room != null) break;
                     JSONArray page = message.getJSONArray("rooms");
@@ -326,23 +393,10 @@ public final class GameService extends Service {
                 case "ROOM":
                     acceptRoom(message); break;
                 case "ROOM_CLOSED":
-                    clearRoom(); listingRooms = false; listRooms(); break;
-                case "STATE":
-                    applyState(message);
-                    break;
-                case "FORWARD":
-                    if (matches(message) && isHost()) referee.action(message); break;
-                case "GAME_OVER":
-                    if (matches(message) && !resultGameId.equals(message.optString("gameId"))) {
-                        resultGameId = message.optString("gameId");
-                        boolean won = selfId.equals(message.optString("winnerId"));
-                        String reason = reason(message.optString("reason"));
-                        lastResult = (won ? "你赢了" : "本局落败") + " · " + reason;
-                        outcome = new Outcome(won, reason, foreground && observer != null);
-                    }
-                    break;
+                    clearRoom(); save(null); listingRooms = false; sendServer(json("AVAILABLE")); listRooms(); break;
+                case "GAME_OVER": finishResult(message); break;
                 case "RESULT":
-                    if (message.optString("request").startsWith("P2P_")) { if (!message.optBoolean("ok")) fallback(); return; }
+                    if (message.optString("request").startsWith("P2P_")) { if (!message.optBoolean("ok")) { diagnostic("SIGNAL_REJECTED"); fallback(); } return; }
                     if (!message.optBoolean("ok")) {
                         if ("LIST".equals(message.optString("request"))) { listing.clear(); listingRooms = false; roomsRevision++; }
                         notice(message.optString("error", "请求失败"));
@@ -362,16 +416,82 @@ public final class GameService extends Service {
                 && room.optString("gameId").equals(message.optString("gameId"));
     }
     private void acceptRoom(JSONObject message) throws JSONException {
-        if (room != null && room.optLong("roomId") == message.optLong("roomId")
-                && message.optLong("version") <= room.optLong("version")) return;
-        closeDirect(); p2pId = ""; p2pRequested = false; directActions.clear(); directRequests.clear();
-        room = message; state = null; listingRooms = false;
-        if (message.optBoolean("playing")) { lastResult = ""; outcome = null; }
+        if (room != null && room.optLong("roomId") == message.optLong("roomId") && message.optLong("version") < room.optLong("version")) return;
+        boolean same = matches(message);
+        closeDirect(); p2pId = ""; p2pRequested = false;
+        if (!same) { pendingAction = null; state = null; p2pAttempts = 0; handler.removeCallbacks(actionDeadline); }
+        room = message; synced = false; listingRooms = false;
+        if (message.optJSONObject("lastResult") != null) finishResult(message.getJSONObject("lastResult"));
+        else if (message.optBoolean("playing")) lastResult = "";
         referee.room(message, selfId);
-        if (playing() && !isHost() && room.optBoolean("p2pAvailable") && !p2pRequested) {
-            p2pRequested = true; sendServer(context("P2P_REQUEST"));
-        }
+        JSONArray members = message.getJSONArray("members");
+        names.keySet().removeIf(id -> !id.equals(members.optString(0)) && !id.equals(members.optString(1)));
+        if (pendingAction != null) { actionAttempts = 0; JSONObject retryAction = pendingAction; save(() -> deliverAction(retryAction)); }
+        else if (!isHost()) action(json("SYNC"));
+        save(null);
     }
+    private void finishResult(JSONObject message) {
+        String key = message.optLong("roomId") + ":" + message.optString("gameId");
+        if (key.equals(resultGameId)) return;
+        resultGameId = key;
+        boolean won = selfId.equals(message.optString("winnerId")); String why = reason(message.optString("reason"));
+        lastResult = (won ? "你赢了" : "本局落败") + " · " + why;
+        outcome = new Outcome(won, why, foreground && connected); save(null);
+    }
+    public String nickname() {
+        String value = preferences().getString("nickname", "");
+        return value.isEmpty() ? "玩家" + (selfId.length() >= 4 ? selfId.substring(0,4) : "") : value;
+    }
+    public void nickname(String value) { preferences().edit().putString("nickname", value.trim()).apply(); profile(); changed(); }
+    private void profile() { names.put(selfId, nickname()); if (connected) sendServer(put(json("PROFILE"), "name", nickname())); }
+    public String memberName(String id) { return id.equals(selfId) ? nickname() : names.getOrDefault(id, "玩家" + id.substring(0, Math.min(4, id.length()))); }
+    public String memberStatus(String id) {
+        if (!connected) return id.equals(selfId) ? "重连中" : "状态待确认";
+        String value = room == null || room.optJSONObject("presence") == null ? "syncing" : room.optJSONObject("presence").optString(id, "offline");
+        return switch (value) { case "online" -> "在线"; case "suspect" -> "连接异常"; case "syncing" -> "同步中"; default -> "重连中"; };
+    }
+    public boolean canAct() {
+        if (!connected || !synced || room == null || storageFailed) return false;
+        JSONArray members = room.optJSONArray("members");
+        for (int i=0; i<members.length(); i++) if (!"在线".equals(memberStatus(members.optString(i)))) return false;
+        return true;
+    }
+    private AtomicFile saveFile() { return new AtomicFile(new File(getFilesDir(), "session-" + Integer.toHexString(endpoint().hashCode()) + ".json")); }
+    private void save(Runnable after) {
+        if (storageFailed) return;
+        try {
+            JSONObject value = new JSONObject().put("endpoint", endpoint()).put("self", selfId).put("token", token).put("boot", bootId)
+                    .put("room", room).put("state", state).put("referee", referee.save()).put("pending", pendingAction)
+                    .put("stateAt", stateReceivedAt).put("diagnostics", new JSONArray(diagnostics)).put("resultGame", resultGameId).put("names", new JSONObject(names)).put("elapsed", SystemClock.elapsedRealtime());
+            byte[] bytes = value.toString().getBytes(StandardCharsets.UTF_8);
+            AtomicFile file = saveFile(); int current = generation;
+            storage.execute(() -> {
+                FileOutputStream stream = null;
+                try { stream = file.startWrite(); stream.write(bytes); file.finishWrite(stream); }
+                catch (Exception ex) { if (stream != null) file.failWrite(stream); handler.post(() -> { storageFailed = true; notice("本地存档失败，已停止提交新操作"); changed(); }); return; }
+                if (after != null) handler.post(() -> { if (current == generation && !storageFailed) after.run(); });
+            });
+        } catch (Exception ex) { storageFailed = true; notice("本地存档失败，已停止提交新操作"); }
+    }
+    private void loadSaved() {
+        try {
+            AtomicFile file = saveFile(); if (!file.getBaseFile().exists()) return;
+            JSONObject value = new JSONObject(new String(file.readFully(), StandardCharsets.UTF_8));
+            if (!endpoint().equals(value.optString("endpoint"))) return;
+            selfId = value.optString("self"); token = value.optString("token"); bootId = value.optString("boot");
+            room = value.optJSONObject("room"); state = value.optJSONObject("state"); pendingAction = value.optJSONObject("pending");
+            resultGameId = value.optString("resultGame"); stateReceivedAt = value.optLong("stateAt");
+            JSONArray logs=value.optJSONArray("diagnostics"); if(logs!=null) for(int i=0;i<Math.min(20,logs.length());i++) diagnostics.addLast(logs.getString(i));
+            // A device reboot invalidates the monotonic deadline; do not grant a fresh turn.
+            if (SystemClock.elapsedRealtime() < value.optLong("elapsed")) { clearRoom(); notice("设备已重启，原棋局无法恢复"); return; }
+            referee.restore(value.getJSONObject("referee"));
+            JSONObject n = value.optJSONObject("names"); if (n != null) { Iterator<String> keys = n.keys(); while (keys.hasNext()) { String key = keys.next(); names.put(key,n.getString(key)); } }
+        } catch (Exception ex) { clearRoom(); notice("本地棋局存档无法读取"); }
+    }
+    private void diagnostic(String reason) {
+        if (diagnostics.size() >= 20) diagnostics.removeFirst(); diagnostics.addLast(reason); save(null);
+    }
+    public String diagnostics() { return diagnostics.isEmpty() ? "尚无直连失败记录" : String.join("\n", diagnostics); }
     private static JSONObject json(String type) { return put(new JSONObject(), "type", type); }
     private static JSONObject put(JSONObject object, String key, Object value) {
         try { object.put(key, value); return object; }
@@ -383,13 +503,19 @@ public final class GameService extends Service {
     public static String reason(String value) {
         return switch (value) {
             case "TIMEOUT" -> "每步用时已到";
+            case "RESTORE_FAILED" -> "房主棋局存档无法恢复";
             case "NO_PIECES" -> "一方棋子已全部被吃";
             case "NO_MOVES" -> "没有合法行动";
             case "HOST_DISSOLVED" -> "房主认输并解散房间";
-            case "DISCONNECTED" -> "对局中连接断开";
+            case "DISCONNECTED" -> "断线超过 60 秒";
             default -> "对局中退出房间";
         };
     }
-    @Override public void onTaskRemoved(Intent rootIntent) { disconnect(); super.onTaskRemoved(rootIntent); }
-    @Override public void onDestroy() { observer = null; disconnect(); handler.removeCallbacksAndMessages(null); super.onDestroy(); }
+    @Override public void onDestroy() {
+        observer = null; enabled = false; generation++;
+        if (client != null) client.close(); client = null; closeDirect();
+        if (wakeLock.isHeld()) wakeLock.release();
+        connectivity.unregisterNetworkCallback(networks); storage.shutdown(); updater.close();
+        handler.removeCallbacksAndMessages(null); super.onDestroy();
+    }
 }

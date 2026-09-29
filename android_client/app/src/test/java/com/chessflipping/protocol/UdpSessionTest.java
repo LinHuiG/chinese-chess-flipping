@@ -1,13 +1,13 @@
 package com.chessflipping.protocol;
 
-import org.junit.jupiter.api.Test;
+import org.junit.Test;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.*;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.Assert.*;
 
-class UdpSessionTest {
-    @Test void reorderedPacketsAuthenticateWithoutAdvancingWindowOnForgery() throws Exception {
+public class UdpSessionTest {
+    @Test public void reorderedPacketsAuthenticateWithoutAdvancingWindowOnForgery() throws Exception {
         byte[] key=new byte[32];new SecureRandom().nextBytes(key);String id="12345678901234567890123456789012";
         try(UdpSession a=new UdpSession(id,key,"game-a",true);UdpSession b=new UdpSession(id,key,"game-a",false)){
             byte[] first=a.encrypt(3,"first".getBytes(StandardCharsets.UTF_8)),second=a.encrypt(3,"second".getBytes(StandardCharsets.UTF_8));
@@ -22,7 +22,7 @@ class UdpSessionTest {
             assertThrows(java.security.GeneralSecurityException.class,()->a.decrypt(reflected,reflected.length));
         }
     }
-    @Test void sessionsSizeAndReplayWindowAreBounded() throws Exception {
+    @Test public void sessionsSizeAndReplayWindowAreBounded() throws Exception {
         byte[] key=new byte[32];new SecureRandom().nextBytes(key);String id="12345678901234567890123456789012";
         try(UdpSession a=new UdpSession(id,key,"one",true);UdpSession b=new UdpSession(id,key,"one",false);UdpSession other=new UdpSession(id,key,"two",false)){
             byte[] first=a.encrypt(1,new byte[8]);assertThrows(java.security.GeneralSecurityException.class,()->other.decrypt(first,first.length));

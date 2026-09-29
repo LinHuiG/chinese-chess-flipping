@@ -3,6 +3,7 @@ RUN apk add --no-cache musl-dev
 WORKDIR /workspace
 COPY Cargo.toml Cargo.lock ./
 COPY src/*.rs ./src/
+COPY app-update ./app-update
 COPY src/main/resources/web ./src/main/resources/web
 RUN cargo build --locked --release
 

@@ -1,3 +1,4 @@
+import { id } from './transport.js';
 // Rules mirror android_client/.../game/GameEngine.java. Hidden identities stay on the host.
 export function randomInt(bound) {
   const bytes = new Uint32Array(1), limit = Math.floor(0x100000000 / bound) * bound;
@@ -16,6 +17,14 @@ export class GameEngine {
     this.revealed = Array(32).fill(false); this.colors = [0, 0]; this.captured = [];
     this.turn = random(2); this.winner = -1; this.reason = ''; this.lastFrom = this.lastTo = -1;
     this.started = false; this.deadline = 0; this.history = new Set([this.key()]);
+  }
+  save(now, wall = Date.now()) { return { ...this, history: [...this.history], deadline: wall + this.deadline - now }; }
+  static restore(saved, now, wall = Date.now()) {
+    if (![0,30,60,90].includes(saved.seconds) || saved.pieces?.length !== 32 || saved.revealed?.length !== 32 || saved.colors?.length !== 2
+        || ![0,1].includes(saved.turn) || !Array.isArray(saved.history) || !Array.isArray(saved.captured) || !Number.isFinite(saved.deadline)
+        || saved.pieces.some(p => !Number.isInteger(p) || Math.abs(p) > 7) || saved.revealed.some(v => typeof v !== 'boolean')) throw Error('棋局存档无效');
+    const game = Object.assign(Object.create(GameEngine.prototype), saved, { history: new Set(saved.history), deadline: now + saved.deadline - wall });
+    if (!game.history.has(game.key())) throw Error('棋局历史无效'); return game;
   }
   start(now) { if (!this.started) { this.started = true; this.resetClock(now); } }
   resetClock(now) { this.deadline = now + this.seconds * 1000; }
@@ -99,21 +108,45 @@ export class GameEngine {
 
 export class HostController {
   constructor(send, clock = () => performance.now()) { this.send = send; this.clock = clock; this.seconds = 60; this.clear(); }
-  clear() { this.room = this.game = null; this.self = ''; this.ready = new Set(); this.starting = this.finishing = false; this.sequence = this.move = 0; }
+  clear() { this.room = this.game = null; this.self = ''; this.ready = new Set(); this.starting = this.finishing = false; this.sequence = this.move = 0; this.startId = ''; this.completed = new Map(); }
   host() { return this.room && this.self === this.room.hostId; }
   setRoom(room, self) {
-    this.room = room; this.self = self; this.sequence = 0; this.finishing = false;
+    const same = this.room?.roomId === room.roomId && this.room.version === room.version;
+    const startedHere = this.starting && this.startId === room.startId && this.game;
+    this.room = room; this.self = self; this.finishing = false;
+    if (!same) { this.sequence = 0; this.completed.clear(); }
     if (!room.playing) {
-      this.game = null; this.starting = false; this.ready.clear(); this.move = 0;
+      this.game = null; this.starting = false; this.startId = '';
+      if (!same) { this.ready.clear(); this.move = 0; }
       if (this.host()) this.publish();
-    } else if (this.host() && this.game) { this.starting = false; this.game.start(this.clock()); this.publish(); }
+    } else if (this.host()) {
+      if ((!same && !startedHere) || !this.game) {
+        this.game = null; this.send({ ...this.context('FINISH'), winnerId: room.members[1], reason: 'RESTORE_FAILED' }); return;
+      }
+      this.starting = false; this.game.checkTimeout(this.clock());
+      if (this.game.winner >= 0) this.finish(); else this.publish();
+    }
+  }
+  save() {
+    return { room: this.room, self: this.self, seconds: this.seconds, ready: [...this.ready], sequence: this.sequence, move: this.move,
+      starting: this.starting, startId: this.startId, completed: [...this.completed], game: this.game?.save(this.clock()) ?? null };
+  }
+  restore(saved) {
+    this.clear(); Object.assign(this, { room: saved.room, self: saved.self, seconds: saved.seconds, sequence: saved.sequence, move: saved.move,
+      starting: saved.starting, startId: saved.startId, ready: new Set(saved.ready), completed: new Map(saved.completed),
+      game: saved.game ? GameEngine.restore(saved.game, this.clock()) : null });
   }
   nextTickDelay() { return this.host() && this.room.playing && this.game?.seconds > 0 && !this.finishing ? Math.max(1, this.game.remaining(this.clock())) : -1; }
   tick() { if (this.nextTickDelay() >= 0 && this.game.checkTimeout(this.clock())) this.finish(); }
   failed(command) { if (command === 'START') { this.starting = false; this.game = null; } }
   action(message) {
-    if (!this.host()) return;
-    const { action, actorId } = message, members = this.room.members, player = members.indexOf(actorId);
+    if (!this.host() || !/^[0-9a-f]{32}$/.test(message.operationId)) return;
+    const { action, actorId, operationId } = message, members = this.room.members, player = members.indexOf(actorId);
+    const identity = `${actorId}:${operationId}`;
+    if (this.completed.has(identity)) {
+      const error = this.completed.get(identity);
+      this.send({ ...this.context('HOST_REPLY'), targetId: actorId, operationId, ok: !error, ...(error ? { error } : { state: this.snapshot(++this.sequence) }) }); return;
+    }
     let error = null;
     if (player < 0) error = '你已不在该房间';
     else if (action.type === 'SYNC') { /* Never resets the clock. */ }
@@ -128,12 +161,13 @@ export class HostController {
       else if (![0, 30, 60, 90].includes(action.seconds)) error = '时间选项无效';
       else { this.seconds = action.seconds; this.ready.clear(); }
     } else error = '未知操作';
-    this.send({ ...this.context('HOST_REPLY'), requestId: message.requestId, ok: !error,
+    this.completed.set(identity, error || ''); if (this.completed.size > 128) this.completed.delete(this.completed.keys().next().value);
+    this.send({ ...this.context('HOST_REPLY'), targetId: actorId, operationId, ok: !error,
       ...(error ? { error } : { state: this.snapshot(++this.sequence) }) });
     if (this.room.playing && this.game?.winner >= 0) this.finish();
     else if (!this.room.playing && !this.starting && members.length === 2 && members.every(m => this.ready.has(m))) {
-      this.starting = true; this.move = 0; this.game = new GameEngine(this.seconds);
-      this.send({ ...this.context('START'), state: this.snapshot(0) });
+      this.starting = true; this.move = 0; this.startId = id(); this.game = new GameEngine(this.seconds); this.game.start(this.clock());
+      this.send({ ...this.context('START'), operationId: this.startId });
     }
   }
   snapshot(seq) {
@@ -149,6 +183,7 @@ export class HostController {
   finish() {
     if (this.finishing || !this.game || this.game.winner < 0 || !this.room.playing) return;
     this.finishing = true;
+    this.send({ ...this.context('HOST_STATE'), finalState: true, state: this.snapshot(++this.sequence) });
     this.send({ ...this.context('FINISH'), winnerId: this.room.members[this.game.winner], reason: this.game.reason });
   }
 }

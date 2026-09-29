@@ -5,12 +5,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.zip.CRC32;
 
-/** Protocol v1. Keep this platform-independent source identical in server and client. */
+/** Protocol v2: common TCP/WebSocket frame; CRC is redundant with authenticated TCP. */
 public final class WireProtocol {
-    public static final int HEADER_SIZE = 21, VERSION = 1, ENCRYPTED = 1;
-    public static final int MAGIC = 0xFCFC, TOTAL_OFFSET = 2, CRC_OFFSET = 17;
+    public static final int HEADER_SIZE = 17, VERSION = 2, ENCRYPTED = 1;
+    public static final int MAGIC = 0xFCFC, TOTAL_OFFSET = 2;
     public static final int MAX_CONTROL = 4096, MAX_BODY = 65536;
     public static final int CRYPTO_OVERHEAD = 28;
     public static final int MAX_FRAME = HEADER_SIZE + MAX_CONTROL + MAX_BODY + CRYPTO_OVERHEAD;
@@ -29,7 +28,6 @@ public final class WireProtocol {
         private Frame(byte[] bytes) throws IOException {
             validateHeader(bytes);
             if (bytes.length != ByteBuffer.wrap(bytes).getInt(TOTAL_OFFSET)) throw new IOException("Frame length mismatch");
-            if (ByteBuffer.wrap(bytes, CRC_OFFSET, 4).getInt() != crc(bytes)) throw new IOException("CRC32 mismatch");
             this.bytes = bytes;
             ByteBuffer header = ByteBuffer.wrap(bytes);
             header.position(TOTAL_OFFSET + 4);
@@ -39,7 +37,7 @@ public final class WireProtocol {
             encrypted = bytes[16] == ENCRYPTED;
         }
         public byte[] bytes() { return bytes.clone(); }
-        public byte[] aad() { return Arrays.copyOf(bytes, CRC_OFFSET); }
+        public byte[] aad() { return Arrays.copyOf(bytes, HEADER_SIZE); }
         public byte[] payload() { return Arrays.copyOfRange(bytes, HEADER_SIZE, bytes.length); }
     }
 
@@ -79,7 +77,7 @@ public final class WireProtocol {
         validateHeader(header); // Validate before allocating any peer-controlled size.
         byte[] frame = Arrays.copyOf(header, ByteBuffer.wrap(header).getInt(TOTAL_OFFSET));
         readFully(input, frame, HEADER_SIZE, frame.length - HEADER_SIZE);
-        return decode(frame);
+        return new Frame(frame);
     }
 
     private static void readFully(InputStream in, byte[] bytes, int offset, int length) throws IOException {
@@ -107,7 +105,7 @@ public final class WireProtocol {
         int total = HEADER_SIZE + packet.control.length + packet.body.length + (encrypted ? CRYPTO_OVERHEAD : 0);
         byte[] header = ByteBuffer.allocate(HEADER_SIZE).putShort((short)MAGIC).putInt(total).putInt(packet.control.length)
                 .putInt(packet.body.length).put((byte)VERSION).put((byte)packet.type)
-                .put((byte)(encrypted ? ENCRYPTED : 0)).putInt(0).array();
+                .put((byte)(encrypted ? ENCRYPTED : 0)).array();
         validateHeader(header);
         return header;
     }
@@ -115,7 +113,6 @@ public final class WireProtocol {
     static byte[] assemble(byte[] header, byte[] payload) throws IOException {
         byte[] frame = join(header, payload);
         if (frame.length != ByteBuffer.wrap(header).getInt(TOTAL_OFFSET)) throw new IOException("Payload length mismatch");
-        ByteBuffer.wrap(frame).putInt(CRC_OFFSET, crc(frame));
         return frame;
     }
 
@@ -123,13 +120,6 @@ public final class WireProtocol {
         if (plaintext.length != frame.controlLength + frame.bodyLength) throw new IOException("Plaintext length mismatch");
         return new Packet(frame.type, Arrays.copyOf(plaintext, frame.controlLength),
                 Arrays.copyOfRange(plaintext, frame.controlLength, plaintext.length));
-    }
-
-    public static int crc(byte[] frame) {
-        CRC32 crc = new CRC32();
-        crc.update(frame, 0, CRC_OFFSET);
-        crc.update(frame, HEADER_SIZE, frame.length - HEADER_SIZE);
-        return (int)crc.getValue();
     }
 
     public static byte[] join(byte[]... arrays) {

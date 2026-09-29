@@ -139,14 +139,12 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "chess-server"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aes-gcm",
  "axum",
  "base64",
  "bytes",
- "crc32fast",
- "futures-util",
  "hkdf",
  "p256",
  "rand_core 0.6.4",
@@ -181,15 +179,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "crc32fast"
-version = "1.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
-dependencies = [
- "cfg-if",
 ]
 
 [[package]]

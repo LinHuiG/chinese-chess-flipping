@@ -29,7 +29,7 @@ public final class SecureSession implements AutoCloseable {
         check(sendSequence);
         byte[] header = WireProtocol.header(packet, true), nonce = nonce(sendPrefix, sendSequence);
         Cipher cipher = cipher(Cipher.ENCRYPT_MODE, sendKey, nonce);
-        cipher.updateAAD(Arrays.copyOf(header, WireProtocol.CRC_OFFSET));
+        cipher.updateAAD(Arrays.copyOf(header, WireProtocol.HEADER_SIZE));
         byte[] ciphertext = cipher.doFinal(WireProtocol.join(packet.control, packet.body));
         byte[] frame = WireProtocol.assemble(header, WireProtocol.join(nonce, ciphertext));
         sendSequence++;
