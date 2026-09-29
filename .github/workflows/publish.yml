@@ -42,7 +42,7 @@ jobs:
           java-version: '25'
       - uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools platforms;android-37 build-tools;36.0.0'
+          packages: 'platform-tools platforms;android-37.0 build-tools;36.0.0'
           log-accepted-android-sdk-licenses: false
       # Only a main push or manual publish receives the fixed signing key. PRs use disposable debug signing.
       - name: Build signed update APK
