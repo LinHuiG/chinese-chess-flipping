@@ -9,6 +9,12 @@ use tokio::{
     net::{TcpListener, UdpSocket},
     time::sleep_until,
 };
+// 本地默认从工程目录读取；镜像指定 /app，资源无需编译进可执行程序。
+fn resource_root() -> std::path::PathBuf {
+    std::env::var_os("CHESS_RESOURCE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
 // 读取正整数环境变量并检查范围；端口或线程数错误直接终止启动，避免默默使用错误配置。
 fn config(name: &str, default: usize, max: usize) -> Result<usize, String> {
     let v = std::env::var(name)
@@ -38,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // 当前服务端监听 IPv4，但可以通过控制链路交换客户端的全局 IPv6 候选。
 async fn run(tcp: u16, http: u16, udp: u16) -> io::Result<()> {
     update::init().map_err(io::Error::other)?;
+    net::init_assets()?;
     let tcp_listener = TcpListener::bind(("0.0.0.0", tcp)).await?;
     let http_listener = TcpListener::bind(("0.0.0.0", http)).await?;
     let udp_socket = UdpSocket::bind(("0.0.0.0", udp)).await?;
@@ -81,7 +88,7 @@ async fn run(tcp: u16, http: u16, udp: u16) -> io::Result<()> {
         }
     });
     println!("chess-server 0.6.0 TCP={tcp} HTTP={http} UDP={udp}");
-    // HTTP 提供内嵌网页、App 更新和 /ws 升级入口；外部反向代理负责 HTTPS/WSS。
+    // HTTP 提供镜像内的网页、App 更新和 /ws 升级入口；外部反向代理负责 HTTPS/WSS。
     let app = axum::Router::new()
         .route("/api/app/version", axum::routing::get(update::http_version))
         .route(

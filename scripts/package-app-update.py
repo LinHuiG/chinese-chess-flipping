@@ -1,4 +1,4 @@
-"""Package the built APK and its manifest before compiling Rust (local or Actions)."""
+"""Package the built APK and its manifest as runtime image resources (local or Actions)."""
 from pathlib import Path
 import hashlib, json, re, shutil, sys
 root = Path(__file__).resolve().parent.parent

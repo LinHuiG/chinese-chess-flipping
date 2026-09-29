@@ -52,6 +52,15 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-37.0 build-tools;36.0.0'
           log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            server/target
+          key: rust-check-${{ runner.os }}-${{ hashFiles('server/Cargo.lock', 'server/Cargo.toml', 'server/src/*.rs') }}
+          restore-keys: rust-check-${{ runner.os }}-
       # Only a main push or manual publish receives the fixed signing key. PRs use disposable debug signing.
       - name: Build signed update APK
         if: steps.scope.outputs.publish_image == 'true'
@@ -70,13 +79,13 @@ jobs:
           umask 077
           printf '%s' "$APK_KEYSTORE_B64" | base64 --decode > "$APK_KEYSTORE"
           unset APK_KEYSTORE_B64
-          android_client/gradlew -p android_client --no-daemon assembleRelease
+          android_client/gradlew -p android_client --no-daemon --build-cache assembleRelease
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify android_client/app/build/outputs/apk/release/app-release.apk
           python3 scripts/package-app-update.py --release
       - name: Build debug APK for checks
         if: steps.scope.outputs.publish_image != 'true'
         run: |
-          android_client/gradlew -p android_client --no-daemon assembleDebug
+          android_client/gradlew -p android_client --no-daemon --build-cache assembleDebug
           python3 scripts/package-app-update.py
       - name: Verify update manifest
         run: python3 scripts/package-app-update.py --check
@@ -101,7 +110,11 @@ jobs:
             if curl --fail --silent 'http://127.0.0.1:18880/api/app/version?versionCode=0' > /dev/null; then break; fi
             sleep 1
           done
-          android_client/gradlew -p android_client --no-daemon testDebugUnitTest lintDebug
+          # 验证网页来自镜像资源目录，保留 HEAD 与未知路径行为。
+          curl --fail --silent http://127.0.0.1:18880/game.js | cmp - server/src/main/resources/web/game.js
+          curl --fail --silent --head http://127.0.0.1:18880/rules.txt
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18880/missing)" = 404
+          android_client/gradlew -p android_client --no-daemon --build-cache testDebugUnitTest lintDebug
       - uses: actions/setup-node@v4
         with:
           node-version: '24'

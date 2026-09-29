@@ -327,32 +327,44 @@ async fn ws(mut socket: WebSocket, hub: Shared) {
         }
     }
 }
-// 网页资源编译进程序；固定路径白名单，无磁盘目录穿越。HEAD 不发送正文，并设置基本浏览器安全头。
+// 固定白名单在启动时读入一次，响应仅克隆 Bytes 引用；不按用户路径访问磁盘。
+const ASSETS: &[(&str, &str)] = &[
+    ("index.html", "text/html; charset=utf-8"),
+    ("style.css", "text/css; charset=utf-8"),
+    ("app.js", "text/javascript; charset=utf-8"),
+    ("game.js", "text/javascript; charset=utf-8"),
+    ("transport.js", "text/javascript; charset=utf-8"),
+    ("icon.svg", "image/svg+xml"),
+    ("rules.txt", "text/plain; charset=utf-8"),
+    ("capture.wav", "audio/wav"),
+    ("victory.wav", "audio/wav"),
+    ("defeat.wav", "audio/wav"),
+];
+static WEB: std::sync::OnceLock<Vec<bytes::Bytes>> = std::sync::OnceLock::new();
+pub fn init_assets() -> std::io::Result<()> {
+    let root = crate::resource_root().join("src/main/resources/web");
+    let assets = ASSETS
+        .iter()
+        .map(|(name, _)| std::fs::read(root.join(name)).map(bytes::Bytes::from))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    WEB.set(assets)
+        .map_err(|_| std::io::Error::other("Web assets already initialized"))
+}
+// HEAD 不发送正文，保留资源长度和浏览器安全头。
 pub async fn asset(uri: Uri, method: Method) -> Response {
     if method != Method::GET && method != Method::HEAD {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
-    macro_rules! item {
-        ($name:literal,$mime:literal) => {
-            (
-                include_bytes!(concat!("main/resources/web/", $name)).as_slice(),
-                $mime,
-            )
-        };
-    }
-    let (bytes, mime) = match uri.path() {
-        "/" | "/index.html" => item!("index.html", "text/html; charset=utf-8"),
-        "/style.css" => item!("style.css", "text/css; charset=utf-8"),
-        "/app.js" => item!("app.js", "text/javascript; charset=utf-8"),
-        "/game.js" => item!("game.js", "text/javascript; charset=utf-8"),
-        "/transport.js" => item!("transport.js", "text/javascript; charset=utf-8"),
-        "/icon.svg" => item!("icon.svg", "image/svg+xml"),
-        "/rules.txt" => item!("rules.txt", "text/plain; charset=utf-8"),
-        "/capture.wav" => item!("capture.wav", "audio/wav"),
-        "/victory.wav" => item!("victory.wav", "audio/wav"),
-        "/defeat.wav" => item!("defeat.wav", "audio/wav"),
-        _ => return StatusCode::NOT_FOUND.into_response(),
+    let name = if uri.path() == "/" {
+        "index.html"
+    } else {
+        uri.path().strip_prefix('/').unwrap_or("")
     };
+    let Some(index) = ASSETS.iter().position(|(file, _)| *file == name) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let bytes = WEB.get().expect("init web assets")[index].clone();
+    let mime = ASSETS[index].1;
     Response::builder().header("content-type",mime).header("content-length",bytes.len()).header("cache-control","no-cache").header("x-content-type-options","nosniff").header("referrer-policy","same-origin")
         .header("content-security-policy","default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
         .body(if method==Method::HEAD{Body::empty()}else{Body::from(bytes)}).unwrap()
