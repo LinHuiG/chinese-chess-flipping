@@ -12,6 +12,7 @@
 - 按用户追问改为 Actions 构建固定签名 release APK，再生成清单并内嵌镜像；不提交 APK。Android / 服务端 / 打包脚本 / 发布工作流变化均触发镜像发布。已通过 GitHub Secrets API 加密配置 4 项 APK 签名参数，私钥未写入仓库或镜像；PR 不注入发布密钥，正式发布缺少配置直接失败。
 - 本地 release APK：0.6.0 / versionCode 7，2253138 字节，SHA-256 `6cbc74f832eee32f0b2605ea6eac4a7f2c27310f37a3262005d8f097ca6c9009`，路径 android_client/app/build/outputs/apk/release/app-release.apk；apksigner 验证通过，证书与原 0.5.1 一致。Actions 构建的 APK 哈希可能不同，以附件内清单为准。0.5.x 无更新入口，首次需手动覆盖安装。
 - 未验证：系统未知来源授权与真实安装流程、真实 Android 进程重启/真机系统兼容、真实 Wi-Fi/5G/IPv6 连通性与公网 NAT 改善、Linux 镜像/性能变化。不得将本机编译/桌面检查当成这些结论。Actions 实际结果待发布后记录。
+- 主改造提交 314dd52 已推送。首轮 Actions 36557834285 在 setup-android v3 阶段失败：默认请求 Google 已停止提供的 tools 包；未进入 APK 编译和镜像发布。已按上游说明改用 v4、明确 SDK 包并将 setup-java 升至 v5，后续结果待核对。
 
 更新时间：2026-09-29（Asia/Shanghai）。新线程先阅读本文和 README.md，再检查 git status；当前代码、测试和远端状态优先于历史记录。
 

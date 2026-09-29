@@ -36,13 +36,14 @@ jobs:
           fi
           echo "publish_image=$publish_image" >> "$GITHUB_OUTPUT"
           echo "Publish image: $publish_image" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '25'
-      - uses: android-actions/setup-android@v3
-      - name: Install Android SDK
-        run: sdkmanager 'platforms;android-37' 'build-tools;36.0.0'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-37 build-tools;36.0.0'
+          log-accepted-android-sdk-licenses: false
       # Only a main push or manual publish receives the fixed signing key. PRs use disposable debug signing.
       - name: Build signed update APK
         if: steps.scope.outputs.publish_image == 'true'
