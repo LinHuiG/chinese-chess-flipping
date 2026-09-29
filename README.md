@@ -20,10 +20,12 @@
 ### Android
 
 1. 打开 [GitHub Actions](https://github.com/LinHuiG/chinese-chess-flipping/actions/workflows/publish.yml)，选择最近一次成功发布的运行，下载 `app-update` 附件，解压并安装其中的 `latest.apk`。下载 Actions 附件需要登录 GitHub。
-2. 打开 App，在设置中选择服务器。默认配置为 `HTTP / hgame.tudoucoding.tech / 80`，也可以改为自己部署的服务器。
+2. 打开 App，在设置中选择服务器。默认配置为 **TCP / fqgame.tdcode.tech / 8888**，也可以改为自己部署的服务器。
 3. 一人创建房间，另一人从大厅加入，双方点击“准备”开始对局。
 
 客户端最低系统版本为 Android 8.0。后续更新可在 App 设置中检查，下载安装需要系统确认。
+
+升级会保留已保存的服务器设置。需要切换到默认服务器时，在设置中点击“恢复默认值”，再点击“保存并连接”。
 
 ### 网页版
 

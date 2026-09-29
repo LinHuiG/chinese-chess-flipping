@@ -14,8 +14,8 @@ import java.util.*;
 
 /** Owns the connection and host referee independently of Activity/lock-screen lifetime. */
 public final class GameService extends Service {
-    public static final String DEFAULT_HOST = "hgame.tudoucoding.tech";
-    public static final int DEFAULT_PORT = 80;
+    public static final String DEFAULT_HOST = "fqgame.tdcode.tech";
+    public static final int DEFAULT_PORT = 8888;
     public interface Observer { void changed(); void notice(String text); default void networkChanged() { } }
     public final class LocalBinder extends Binder { public GameService service() { return GameService.this; } }
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -122,7 +122,7 @@ public final class GameService extends Service {
     }
     public String host() { return preferences().getString("host", DEFAULT_HOST); }
     public int port() { return preferences().getInt("port", DEFAULT_PORT); }
-    public String transport() { return preferences().getString("transport", preferences().contains("port") ? "TCP" : "HTTP"); }
+    public String transport() { return preferences().getString("transport", "TCP"); }
     public String endpoint() { return transport().toLowerCase(java.util.Locale.ROOT) + "://" + host() + ":" + port(); }
     public void observe(Observer value) { observer = value; if (value != null) value.changed(); }
     public void foreground(boolean value) {

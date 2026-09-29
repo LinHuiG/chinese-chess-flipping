@@ -1,5 +1,6 @@
 # 项目协作说明
 
+- 2026-09-30 用户确认当前 APK 默认配置为 **TCP / fqgame.tdcode.tech / 8888**；新安装、设置页“恢复默认值”及使用文档保持一致，升级保留已保存的服务器设置。该要求覆盖历史默认地址与 HTTP 默认模式。
 - 新线程先阅读根目录 `PROJECT_STATUS.md` 和 `README.md`，再检查 `git status`。前者是历史执行记录，当前文件、测试和远端状态优先。
 - 房间、会话清理或自动重连相关工作，先阅读 [已归档房间方案](docs/ROOM_MANAGEMENT_PLAN.md)。棋盘、走子、吃子、胜负、禁止重复棋面和每步计时相关工作，先阅读 [已确认棋局规则](docs/GAME_RULES.md)。两份文档区分已确认规则与实现建议；方案归档不代表业务已经实现，不再把棋局规则列为尚未定义。
 - `server/` 和 `android_client/` 属于同一个仓库中的独立工程。GitHub Actions 配置放根目录 `.github/workflows/`，Docker 构建上下文只使用 `server/`。

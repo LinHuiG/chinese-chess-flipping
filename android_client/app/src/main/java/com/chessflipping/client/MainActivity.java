@@ -392,7 +392,7 @@ public final class MainActivity extends Activity implements GameService.Observer
         addText(inner, "服务器", 14);
         Switch tcp = new Switch(this); tcp.setText("使用 TCP 连接"); tcp.setTextSize(17); tcp.setTextColor(INK);
         tcp.setPadding(dp(14), dp(12), dp(14), dp(12)); tcp.setBackground(surface(Color.WHITE, 12));
-        tcp.setChecked(service != null && service.transport().equals("TCP"));
+        tcp.setChecked(service == null || service.transport().equals("TCP"));
         tcp.setThumbTintList(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_checked}, new int[0]}, new int[]{Color.WHITE, Color.WHITE}));
         tcp.setTrackTintList(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_checked}, new int[0]}, new int[]{Color.rgb(52, 199, 89), LINE}));
         inner.addView(tcp, new LinearLayout.LayoutParams(-1, dp(58)));
@@ -446,7 +446,7 @@ public final class MainActivity extends Activity implements GameService.Observer
                     .setNegativeButton("取消", null).setPositiveButton("保存并连接", (d, w) -> save.run()).show();
             else save.run();
         });
-        button(inner, "恢复默认值", () -> { host.setText(GameService.DEFAULT_HOST); tcp.setChecked(false); protocol.check(httpId); port.setText(Integer.toString(GameService.DEFAULT_PORT)); });
+        button(inner, "恢复默认值", () -> { host.setText(GameService.DEFAULT_HOST); tcp.setChecked(true); protocol.check(httpId); port.setText(Integer.toString(GameService.DEFAULT_PORT)); });
         button(inner, "返回", () -> { settings = false; changed(); });
         button(inner, "开源许可", () -> {
             try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(getResources().openRawResource(R.raw.third_party_notices), java.nio.charset.StandardCharsets.UTF_8))) {

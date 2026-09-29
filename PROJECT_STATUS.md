@@ -1,5 +1,12 @@
 # 项目执行记录与交接
 
+## Android 默认服务器改为 fqgame.tdcode.tech（2026-09-30）
+
+- 用户要求 APK 默认配置与文档统一为 TCP / fqgame.tdcode.tech / 8888，并授权提交。已同步 GameService 的默认域名、端口和协议，以及设置页尚未绑定服务时的 TCP 选中状态和“恢复默认值”；保留已经保存的服务器设置，用户可通过“恢复默认值”后“保存并连接”切换。
+- Android 版本递增为 0.6.2 / versionCode 9，便于应用内更新识别；服务端版本和协议不变。根 README、Android README、部署说明及 AGENTS.md 已同步，历史实施/验收记录保持原貌。
+- 本地使用已有 Android Studio JBR 完成 assembleDebug（11 秒），生成调试 APK；git diff --cached --check 通过。未扩展回归测试，未验证真机安装、界面操作或目标域名公网连通性，未部署服务器。正式签名 APK 和镜像发布结果待本次推送后的 Actions。
+- 本轮文件已暂存，保留本机 Gradle JVM 未跟踪配置及本地教学资料。
+
 ## AGPL 许可与 README 整理（2026-09-30）
 
 - 用户选择 AGPL-3.0，并授权将许可证与 README 一起提交推送。新增根目录 LICENSE，采用 SPDX 发布的 AGPL v3 标准全文；README 和 server/Cargo.toml 明确标识为 AGPL-3.0-only。第三方代码、资源及原有许可声明保留各自许可，本轮未进行完整依赖许可审计。

@@ -10,7 +10,7 @@ APK：app/build/outputs/apk/debug/app-debug.apk，调试签名，不包含正式
 
 ## 使用
 
-新安装默认 HTTP hgame.tudoucoding.tech:80；HTTP 使用 WS，HTTPS 使用 WSS，路径固定 /ws。设置页可切换 HTTP/HTTPS 或启用 TCP（默认 8888）。旧版保存的设置保留，不覆盖用户地址。右上角设置可保存域名/IP 和端口，更换服务器会退出当前房间并重新连接。模拟器联调填 10.0.2.2 和服务端对应的 HTTP 或 TCP 端口；真机填开发电脑局域网 IP。
+新安装默认使用 **TCP / fqgame.tdcode.tech / 8888**。设置页可切换 HTTP/HTTPS；HTTP 使用 WS，HTTPS 使用 WSS，路径固定 /ws。升级保留已保存的服务器设置；点击“恢复默认值”会填入上述 TCP 配置，再点击“保存并连接”生效。右上角设置可保存域名/IP 和端口，更换服务器会退出当前房间并重新连接。模拟器联调填 10.0.2.2 和服务端对应的 HTTP 或 TCP 端口；真机填开发电脑局域网 IP。
 
 0.5.0 显示服务器心跳 RTT 和“直连／中转”。新版安卓双方开局后由非房主申请 UDP 直连；加密探测成功后传业务包，失败自动中转，UDP 延迟仅在直连成功且取得有效样本后显示。服务器连接一直保留。Web 或旧客户端对局继续中转。
 
@@ -30,4 +30,4 @@ GameService 独立维护连接及房主业务，采用用户可停止的前台�
 
 GameEngine 和 HostController 无 Android 依赖，在完整仓库的 Maven 检查中与实际 TcpClient 一起验证。暗棋真实身份和历史棋面仅由房主保存，公开快照用 99 表示暗棋。
 
-HTTP 明文访问按需求开启；HTTPS 使用系统证书及主机名校验，不接受任意证书。WebSocket 使用 OkHttp 4.12.0，TCP 继续使用原有加密实现。游戏和房主裁判共用同一套逻辑。0.5.0/versionCode 5；本机 Gradle JVM 配置不入库。
+HTTP 明文访问按需求开启；HTTPS 使用系统证书及主机名校验，不接受任意证书。WebSocket 使用 OkHttp 4.12.0，TCP 继续使用原有加密实现。游戏和房主裁判共用同一套逻辑。当前客户端版本为 0.6.2 / versionCode 9。
