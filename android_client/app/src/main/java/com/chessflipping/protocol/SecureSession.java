@@ -36,6 +36,12 @@ public final class SecureSession implements AutoCloseable {
         return frame;
     }
 
+    public synchronized byte[] sealConnect(byte[] prefix,byte[] metadata) throws IOException,GeneralSecurityException {
+        check(sendSequence);byte[] nonce=nonce(sendPrefix,sendSequence);
+        Cipher cipher=cipher(Cipher.ENCRYPT_MODE,sendKey,nonce);cipher.updateAAD(prefix);
+        byte[] result=WireProtocol.join(nonce,cipher.doFinal(metadata));sendSequence++;return result;
+    }
+
     public synchronized WireProtocol.Packet decrypt(WireProtocol.Frame frame) throws IOException, GeneralSecurityException {
         check(receiveSequence);
         if (!frame.encrypted) throw new IOException("Plaintext forbidden after key exchange");

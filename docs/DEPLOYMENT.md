@@ -1,12 +1,12 @@
-# 服务器部署（Rust 0.6.0）
+# 服务器部署（赛博房间 0.7.0 / v3）
 
-Android 客户端默认配置为 **TCP / fqgame.tdcode.tech / 8888**。自建服务器时，在 App 设置中改为自己的域名/IP 和对应端口。升级保留已保存的设置；需要使用新默认值时，点击“恢复默认值”后再“保存并连接”。
+Android 客户端默认配置为 **TCP / fqgame.tdcode.tech / 8888**。自建服务器时，在 App 设置中改为自己的域名/IP 和对应端口。升级保留已保存的设置；需要使用新默认值时，点击“恢复默认值”后再“保存设置”。
 
-网页顶部的“下载 APK”提供当前镜像内的 Android 安装包，使用同源接口 `GET /api/app/latest.apk?versionCode=0`，无需额外存放安装包或配置下载服务。`versionCode=0` 表示首次安装；App 内检查更新仍传入已安装的版本号。
+网页顶部的“下载 App”提供当前镜像内的 Android 安装包，使用同源接口 `GET /api/app/latest.apk?versionCode=0`，无需额外存放安装包或配置下载服务。`versionCode=0` 表示首次安装；App 内检查更新仍传入已安装的版本号。
 
-实际已发布版本和 Actions 结果见 ../PROJECT_STATUS.md。本轮由用户自行部署，不沿用历史部署操作授权。公开文档仅保留通用配置，不记录实际部署地址、登录账号、密码或管理入口。
+实际已发布版本和 Actions 结果见 ../PROJECT_STATUS.md。部署结果以对应发布记录为准。公开文档仅保留通用配置，不记录实际部署地址、登录账号、密码或管理入口。
 
-0.6.0 使用不兼容旧版的协议 v2，服务端和两端客户端需一起升级。增加 60 秒恢复、昵称、P2P 候选和重试、App 更新；真实 Wi-Fi/5G 直连改善仍待验收。
+0.7.0 为赛博房间协议 v3，与旧版不兼容，服务端、APK 和网页需一起更新。Rust 改为通用房间转发，App/Web 共用翻棋与多人黄金矿工。首次从旧版升级请从网页手动安装 APK，旧 TCP 协议无法连接新服务端下载；保留原签名与服务器设置。真实 Wi-Fi/5G 直连仍待真机验收。
 
 ## Actions 构建 App 和镜像
 
@@ -16,20 +16,20 @@ Actions 已改用原生声明 Node.js 24 的版本（包括 checkout、cache、G
 
 仍保留内部 `git diff`：GitHub 在超过 1,000 个提交的推送或差异计算超时等情况下可能直接运行带路径过滤的工作流，因此不能把“工作流被 push 触发”等同于“确有发布范围改动”。参考 [路径差异计算说明](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#git-diff-comparisons)。缓存优化不改变检出深度、发布判定或架构标签策略。
 
-### 已验证产物复用（2026-09-30）
+### 已验证产物复用（2026-10-13）
 
 以下假设所需精确缓存存在且完整，工具环境未变化；首次运行、缓存丢失或校验失败会补建和补测。使用当前输入哈希，而非简单比较上一次提交，避免回退代码、切分支或恢复一个失败提交时错误复用。
 
 | 当前输入变化 | APK 与客户端单元测试/lint | 检查用 Rust 编译/单元测试 | TCP/WS/更新下载互通 |
 | --- | --- | --- | --- |
-| 仅 Web 资源 | 复用并跳过 | 复用并跳过 | 已验证相同两端组合时跳过 |
+| 仅 Web 资源 | 构建并检查（App 内置同一份资源） | 复用并跳过 | 运行 |
 | 仅 Android | 构建并检查 | 复用并跳过 | 运行 |
 | 仅 Rust | 复用并跳过 | 构建并检查 | 运行 |
 | Android 与 Rust 都变 | 构建并检查 | 构建并检查 | 运行 |
 
-网页逻辑检查、APK 清单/哈希校验、启动当前服务并核对 HTTP 资源、发布镜像中的资源核对仍保留。只改 Web 不需要启动 JDK/Android/Gradle 设置步骤（互通缓存也有效时），但仍准备 Rust 工具链以核对其真实版本；若 stable 更新则 Rust 与互通缓存失效。镜像内 Rust 仍靠现有分架构 BuildKit 缓存复用，Docker 缓存丢失时需重编；检查用二进制不能替代 musl/arm64 镜像二进制。
+网页逻辑检查、APK 清单/哈希校验、启动当前服务并核对 HTTP 资源、发布镜像中的资源核对仍保留。只改 Web 也会重建 APK，因 App 内置同一份玩法资源；同时准备 Rust 工具链以核对其真实版本；若 stable 更新则 Rust 与互通缓存失效。镜像内 Rust 仍靠现有分架构 BuildKit 缓存复用，Docker 缓存丢失时需重编；检查用二进制不能替代 musl/arm64 镜像二进制。
 
-- `checked-apk-v1-*`：保存成品 latest.apk 与 latest.json。输入包含整个 android_client、APK 打包脚本、工作流、Runner 镜像版本/架构、debug 或 release 变体、缓存代次。构建配置和客户端测试改动也失效；复用前再次校验版本、大小、包名清单及 SHA-256。
+- `checked-apk-v1-*`：保存成品 latest.apk 与 latest.json。输入包含整个 android_client、server/src/main/resources/web、APK 打包脚本、工作流、Runner 镜像版本/架构、debug 或 release 变体、缓存代次。构建配置和客户端测试改动也失效；复用前再次校验版本、大小、包名清单及 SHA-256。
 - `checked-rust-v1-*`：保存检查用 chess-server 与 SHA-256 校验文件。输入包含 Rust 源码、Cargo 配置/锁文件、build.rs、Cargo/工具链配置、工作流、Runner 镜像版本/架构、实际 rustc/Cargo 版本和缓存代次；Web/APK 资源不计入 Rust 源码输入。
 - `checked-interop-v1-*`：保存上面两组输入组合的通过标记。任一端或其构建/测试输入改变、任一成品需要重建、组合标记缺失/不匹配，都执行互通。Gradle 的 interop 任务禁用自身的 UP-TO-DATE 与构建缓存，防止外部服务端变化却复用 Java 测试结果。
 - 三种缓存只在本次所有必需检查与 Web 检查成功后保存。仅 `cache-hit == 'true'` 且内容校验成功才可跳过，前缀命中不能当成已验证。Gradle/Cargo 依赖与中间编译缓存继续作为冷构建加速；[restore/save 分离](https://github.com/actions/cache) 用于控制保存时机。
@@ -55,7 +55,7 @@ Docker 编译阶段只复制 Cargo.toml、Cargo.lock 和 src/*.rs；网页、APK
 
 发布时缺少任何一项即报错；PR 检查使用临时 debug 签名，不获得发布密钥。构建后临时 keystore 删除，私钥不进入仓库、附件或镜像。保留原签名才能覆盖已经安装的版本，不能每次 Actions 都生成新密钥。参考 [Android 签名说明](https://developer.android.com/studio/publish/app-signing) 与 [GitHub Secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)。
 
-每次 App 发布递增 `android_client/app/build.gradle.kts` 的 versionCode，并修改 versionName。检查更新比较 versionCode；更改服务器程序但没有 App 新版本时不会重复下载。首次从 0.5.x 升级需手动安装 app-update 附件中的 APK，此后可在 App 内更新。下载后校验包名、版本、SHA-256 和签名，安装需 Android 系统确认；在设置中可关闭自动检查。
+每次 App 发布递增 `android_client/app/build.gradle.kts` 的 versionCode，并修改 versionName。检查更新比较 versionCode；更改服务器程序但没有 App 新版本时不会重复下载。首次从 0.6.x 或更早版本升级需手动安装网页或 app-update 附件中的 APK，此后可在 App 内更新。下载后校验包名、版本、SHA-256 和签名，安装需 Android 系统确认；在设置中手动检查更新。
 
 ## UDP 排查
 
@@ -113,6 +113,6 @@ location / {
 
 - 更新会清空在线房间，客户端重新连接后回大厅。
 - 直连期间服务器连接仍必须保持；网络断开保留至最后心跳后 60 秒，倒计时继续。
-- 可使用上一版 sha-* 镜像标签回退。0.6.0 协议 v2 与 0.5.x 不兼容，回退或升级须同时处理服务端和客户端。
+- 可使用上一版 sha-* 镜像标签回退。0.7.0 协议 v3 与 0.6.x 及更早版本不兼容，回退或升级须同时处理服务端和客户端。
 - main 推送中的 Android、server/ 或 APK 打包脚本变化触发镜像发布；仅改工作流或仓库文档不会触发推送构建。PR 仍执行检查，手动触发仍可发布。
 - 服务端只使用 Cargo 构建，生产启动程序为 /app/chess-server。

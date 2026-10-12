@@ -1,33 +1,29 @@
-# Android 客户端
+# 赛博房间 Android
 
-Android Studio 打开本目录，使用 IDE 自带 JDK。compile/target SDK 37，最低 API 26，AGP 9.4.0、Gradle 9.6.0。
+版本 0.7.0 / versionCode 10，包名保持 com.chessflipping.client。Android Studio 打开本目录；JDK 25、AGP 9.4.0、Gradle 9.6.0、compile/target SDK 37，最低 API 26。
 
 ~~~powershell
-.\gradlew.bat assembleDebug lintDebug
+.\gradlew.bat assembleDebug testDebugUnitTest lintDebug
 ~~~
 
-APK：app/build/outputs/apk/debug/app-debug.apk，调试签名，不包含正式发布密钥。
+调试 APK 在 app/build/outputs/apk/debug/app-debug.apk。正式发布使用 Actions 中原有签名，调试签名不能覆盖正式包。
 
 ## 使用
 
-新安装默认使用 **TCP / fqgame.tdcode.tech / 8888**。设置页可切换 HTTP/HTTPS；HTTP 使用 WS，HTTPS 使用 WSS，路径固定 /ws。升级保留已保存的服务器设置；点击“恢复默认值”会填入上述 TCP 配置，再点击“保存并连接”生效。右上角设置可保存域名/IP 和端口，更换服务器会退出当前房间并重新连接。模拟器联调填 10.0.2.2 和服务端对应的 HTTP 或 TCP 端口；真机填开发电脑局域网 IP。
+默认 **TCP / fqgame.tdcode.tech / 8888**。升级保留服务器设置，设置页“恢复默认值”后“保存设置”生效。可改 HTTP/HTTPS，分别使用 WS/WSS，路径 /ws。模拟器使用 10.0.2.2 访问开发电脑。
 
-0.5.0 显示服务器心跳 RTT 和“直连／中转”。新版安卓双方开局后由非房主申请 UDP 直连；加密探测成功后传业务包，失败自动中转，UDP 延迟仅在直连成功且取得有效样本后显示。服务器连接一直保留。Web 或旧客户端对局继续中转。
+大厅选择翻棋（2 人）或黄金矿工（2–3 人）。凑齐设定人数，大家准备后开局。房主退出立即解散，不转让。矿工每位玩家操作自己的爪子和购物，房主每 5 秒保存，也可手动保存；重新建房可继续，按加入顺序恢复原座位财富和装备。房主进入后台会暂停矿工。
 
-UDP 使用房主经服务器分发的随机主密钥，按方向派生 AES-256-GCM 密钥，带防重放、操作去重和有限重试。HTTP/WS 模式不限制 P2P；此模式下密钥分发经过明文链路。首版使用 IPv4、1200 字节上限，不分片；超大业务包回退服务器。双方 NAT 不支持打洞时自动中转，不要求用户手动设置。
+翻棋规则、禁止重复棋面、30/60/90 秒或不限时、两侧阵亡统计保持。棋盘真实暗棋只存房主设备。心跳每 5 秒，15 秒未回包时重连，服务端最后有效心跳后 60 秒回收；有效期内可恢复连接。服务器重启使房间失效，矿工本地存档仍保留。
 
-大厅创建或加入房间，房主选择每步时间，双方准备后开局。大厅、等待页、对局页右上角均可查看完整规则。棋盘左侧为红方、右侧为黑方的阵亡统计；顺序为将帅、士、象、车、马、炮、兵卒，未阵亡灰显，阵亡后点亮并显示数字角标。
+## 实现
 
-点击暗棋翻开；点击己方明棋选中，再点目标格移动或吃子；再次点击选中棋子取消选择。规则详情见 [棋局方案](../docs/GAME_RULES.md)。
+App 的 UI、玩法、房主裁判和存档共用 server/src/main/resources/web 的 ES 模块，构建时直接打包为本地 assets。GameService 持有本地 WebView，Activity 重建时重新挂接；不下载远端页面进入 NativeRoom 桥接环境。只允许 appassets.androidplatform.net/web 的本地资源，外部链接交系统浏览器。
 
-0.3.0 使用原生浅色界面、自适应双棋子图标，以及按需播放的翻棋/走子/吃子动画和胜负反馈。设置可分别关闭音效与动画，动画同时遵守系统动画开关；静音/振动模式或媒体音量为零不播放音效，切后台释放音效资源。音效与图标由仓库 scripts/generate-game-assets.ps1 离线生成，App 不运行该生成脚本。
+Java 保留原生 TCP 自定义 ECDH/HKDF/AES-GCM、OkHttp WS/WSS、UDP socket、设置和 APK 校验安装。P2P 按已获准对端协商密钥，带方向密钥、64 包重放窗口与客户端分片；操作未获房主确认时 400 ms 经服务器重试。Web 玩家或 UDP 不通时服务器转发，HTTP 模式不禁止 App 之间尝试 UDP。
 
-棋盘静止时没有动画帧回调；有限时对局的显示倒计时按秒更新，房主超时按剩余时间预约。同步、恢复前台和跳跃快照不追播历史动效。原生 UI 夹具位于 src/androidTest/，只进入测试 APK，不是生产服务端接口；其结果不等于实际联机和真机性能验收。
+UDP 最大数据报 1200 字节，单对端 256 KB/s 预算；20 KB 分片重组已在本机 socket 测试。真实 Wi‑Fi/5G NAT 组合与厂商后台策略仍需真机验收。
 
-GameService 独立维护连接及房主业务，采用用户可停止的前台服务和续期有限的唤醒锁，后台不主动断开。5 秒心跳，连续 30 秒无 PONG 关闭；前台每次连接/握手失败完全结束后等待 3 秒重试。成功回大厅，不恢复旧房间。退出 App 或移除最近任务关闭连接。
+用户可通过常驻通知断开。Android 13+ 请求通知权限，Android 17 请求局域网权限。正式 APK 关闭 WebView 调试，debug 包可用 CDP 验收。测试夹具只打入 androidTest APK。
 
-使用 Android 的 specialUse 前台服务类型，依据 [Android 前台服务类型说明](https://developer.android.com/develop/background-work/services/fgs/service-types)。Android 13+ 请求通知权限，Android 17 请求局域网权限；拒绝权限可在系统设置中重新授权。模拟器检查不等于厂商真机兼容验收。
-
-GameEngine 和 HostController 无 Android 依赖，在完整仓库的 Maven 检查中与实际 TcpClient 一起验证。暗棋真实身份和历史棋面仅由房主保存，公开快照用 99 表示暗棋。
-
-HTTP 明文访问按需求开启；HTTPS 使用系统证书及主机名校验，不接受任意证书。WebSocket 使用 OkHttp 4.12.0，TCP 继续使用原有加密实现。游戏和房主裁判共用同一套逻辑。当前客户端版本为 0.6.2 / versionCode 9。
+接入新功能见 [开发指南](../docs/FRAMEWORK_DEVELOPMENT_GUIDE.md)，协议见 [接入手册](../docs/CYBER_ROOM_INTEGRATION_MANUAL.md)。v3 不兼容旧版，需要一起升级服务器与客户端。

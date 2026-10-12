@@ -56,7 +56,7 @@ jobs:
         if: steps.scope.outputs.should_check == 'true'
         id: inputs
         env:
-          ANDROID_INPUTS: ${{ hashFiles('android_client/**', 'scripts/package-app-update.py') }}
+          ANDROID_INPUTS: ${{ hashFiles('android_client/**', 'server/src/main/resources/web/**', 'scripts/package-app-update.py') }}
           RUST_INPUTS: ${{ hashFiles('server/Cargo.*', 'server/src/**/*.rs', 'server/.cargo/**', 'server/build.rs', 'server/rust-toolchain*', '.cargo/**', 'rust-toolchain*') }}
           WORKFLOW_INPUTS: ${{ hashFiles('.github/workflows/publish.yml') }}
           APK_VARIANT: ${{ steps.scope.outputs.publish_image == 'true' && 'release' || 'debug' }}
@@ -203,7 +203,7 @@ jobs:
           node-version: '24'
       - name: Check browser game recovery and protocol
         if: steps.scope.outputs.should_check == 'true'
-        run: node scripts/session-v2-test.mjs
+        run: node scripts/client-test.mjs
       - name: Record successful validation
         if: steps.scope.outputs.should_check == 'true'
         env:

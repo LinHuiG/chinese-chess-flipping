@@ -87,7 +87,7 @@ async fn run(tcp: u16, http: u16, udp: u16) -> io::Result<()> {
             }
         }
     });
-    println!("chess-server 0.6.0 TCP={tcp} HTTP={http} UDP={udp}");
+    println!("cyber-room protocol=3 TCP={tcp} HTTP={http} UDP={udp}");
     // HTTP 提供镜像内的网页、App 更新和 /ws 升级入口；外部反向代理负责 HTTPS/WSS。
     let app = axum::Router::new()
         .route("/api/app/version", axum::routing::get(update::http_version))

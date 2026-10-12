@@ -9,8 +9,8 @@ android {
         applicationId = "com.chessflipping.client"
         minSdk = 26
         targetSdk = 37
-        versionCode = 9
-        versionName = "0.6.2"
+        versionCode = 10
+        versionName = "0.7.0"
         testInstrumentationRunner = "com.chessflipping.client.PresentationChecks"
     }
     compileOptions {
@@ -29,6 +29,9 @@ android {
     }
 }
 
+// App 和浏览器直接使用同一份客户端资源，不维护生成副本。
+android.sourceSets.getByName("main").assets.srcDir(rootProject.file("../server/src/main/resources"))
+
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.core:core:1.15.0")
@@ -39,9 +42,9 @@ dependencies {
 // CI 分开复用客户端检查和两端互通结果；普通本地测试仍执行全部用例。
 tasks.withType<Test>().configureEach {
     when (providers.gradleProperty("chessTestSuite").orNull) {
-        "client" -> filter.excludeTestsMatching("com.chessflipping.client.TransportV2Test")
+        "client" -> filter.excludeTestsMatching("com.chessflipping.client.TransportV3Test")
         "interop" -> {
-            filter.includeTestsMatching("com.chessflipping.client.TransportV2Test")
+            filter.includeTestsMatching("com.chessflipping.client.TransportV3Test")
             // 服务端属于外部进程，Gradle 的 Java 输入缓存无法反映它的变化。
             outputs.upToDateWhen { false }
             outputs.cacheIf { false }

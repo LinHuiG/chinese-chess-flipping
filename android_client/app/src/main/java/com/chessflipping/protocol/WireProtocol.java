@@ -6,16 +6,16 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
-/** Protocol v2: common TCP/WebSocket frame; CRC is redundant with authenticated TCP. */
+/** Protocol v3: common TCP, WebSocket and UDP frame. */
 public final class WireProtocol {
-    public static final int HEADER_SIZE = 17, VERSION = 2, ENCRYPTED = 1;
+    public static final int HEADER_SIZE = 17, VERSION = 3, ENCRYPTED = 1;
     public static final int MAGIC = 0xFCFC, TOTAL_OFFSET = 2;
     public static final int MAX_CONTROL = 4096, MAX_BODY = 65536;
     public static final int CRYPTO_OVERHEAD = 28;
     public static final int MAX_FRAME = HEADER_SIZE + MAX_CONTROL + MAX_BODY + CRYPTO_OVERHEAD;
     public static final int PUBLIC_KEY_REQUEST = 1, SERVER_HELLO = 2, CLIENT_KEY = 3,
-            SERVER_FINISHED = 4, CLIENT_FINISHED = 5, READY = 6,
-            BUSINESS_REQUEST = 16, BUSINESS_RESPONSE = 17, BUSINESS_EVENT = 18, PING = 32, PONG = 33, ERROR = 127;
+            READY = 4,
+            BUSINESS_REQUEST = 16, BUSINESS_EVENT = 18, PING = 32, PONG = 33, PEER_MESSAGE = 64;
 
     private WireProtocol() {}
 
@@ -59,7 +59,7 @@ public final class WireProtocol {
         int version = in.get() & 255, type = in.get() & 255, flags = in.get() & 255;
         if (version != VERSION) throw new IOException("Unsupported protocol version");
         if (flags != 0 && flags != ENCRYPTED) throw new IOException("Unsupported flags/compression");
-        if (type == 0 || x < 2 || x > MAX_CONTROL || y < 0 || y > MAX_BODY)
+        if (type == 0 || x < 0 || x > MAX_CONTROL || y < 0 || y > MAX_BODY)
             throw new IOException("Invalid type or lengths");
         long expected = HEADER_SIZE + (long)x + y + (flags == ENCRYPTED ? CRYPTO_OVERHEAD : 0);
         if (total != expected || total > MAX_FRAME) throw new IOException("Invalid total length");
@@ -100,7 +100,7 @@ public final class WireProtocol {
         return split(frame, frame.payload());
     }
 
-    static byte[] header(Packet packet, boolean encrypted) throws IOException {
+    public static byte[] header(Packet packet, boolean encrypted) throws IOException {
         if (packet.type < 1 || packet.type > 255) throw new IOException("Invalid packet type");
         int total = HEADER_SIZE + packet.control.length + packet.body.length + (encrypted ? CRYPTO_OVERHEAD : 0);
         byte[] header = ByteBuffer.allocate(HEADER_SIZE).putShort((short)MAGIC).putInt(total).putInt(packet.control.length)
@@ -128,5 +128,19 @@ public final class WireProtocol {
         ByteBuffer out = ByteBuffer.allocate(length);
         for (byte[] array : arrays) out.put(array);
         return out.array();
+    }
+
+    public static java.util.Map<String,String> control(byte[] bytes) throws IOException {
+        String text=java.nio.charset.StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString();
+        java.util.Map<String,String> result=new java.util.LinkedHashMap<>();
+        if(bytes.length>MAX_CONTROL||(!text.isEmpty()&&!text.endsWith("\n")))throw new IOException("Invalid control");
+        if(!text.isEmpty())for(String line:text.substring(0,text.length()-1).split("\n",-1)){
+            int colon=line.indexOf(':');if(colon<1)throw new IOException("Invalid control line");
+            String key=line.substring(0,colon),value=line.substring(colon+1);
+            if(!key.matches("[A-Za-z][A-Za-z0-9_-]*")||value.indexOf('\r')>=0||value.indexOf(0)>=0
+                ||(key.matches("op|requestId|roomId|to|from|ok|error")&&result.containsKey(key)))throw new IOException("Invalid control line");
+            result.put(key,value);
+        }
+        return result;
     }
 }

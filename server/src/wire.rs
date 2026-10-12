@@ -1,4 +1,4 @@
-//! v2 帧边界与 TCP 密码学。固定头 17 字节：magic/总长/控制长/包体长/version/kind/flags。
+//! 赛博房间 v3：TCP、WS、UDP 共用帧，控制行与不透明正文分离。
 use aes_gcm::{aead::AeadInPlace, Aes256Gcm, KeyInit};
 use hkdf::Hkdf;
 use p256::{
@@ -24,11 +24,11 @@ fn u32at(b: &[u8], p: usize) -> usize {
 }
 // 分配包体前校验版本、标志和总长，控制头最多 4 KiB、正文最多 64 KiB。
 fn check(h: &[u8]) -> Result<usize> {
-    if h.len() < 17 || h[..2] != [252, 252] || h[14] != 2 || h[15] == 0 || h[16] > 1 {
+    if h.len() < 17 || h[..2] != [252, 252] || h[14] != 3 || h[15] == 0 || h[16] > 1 {
         return Err("Invalid header".into());
     }
     let (n, x, y) = (u32at(h, 2), u32at(h, 6), u32at(h, 10));
-    if !(2..=4096).contains(&x) || y > 65536 || n != 17 + x + y + if h[16] == 1 { 28 } else { 0 } {
+    if x > 4096 || y > 65536 || n != 17 + x + y + if h[16] == 1 { 28 } else { 0 } {
         return Err("Invalid length".into());
     }
     Ok(n)
@@ -59,7 +59,7 @@ fn header(kind: u8, x: usize, y: usize, encrypted: bool) -> Result<Vec<u8>> {
     for v in [n, x, y] {
         b.extend_from_slice(&(v as u32).to_be_bytes())
     }
-    b.extend_from_slice(&[2, kind, encrypted as u8]);
+    b.extend_from_slice(&[3, kind, encrypted as u8]);
     check(&b)?;
     Ok(b)
 }
@@ -94,6 +94,24 @@ pub struct Cipher {
     sequence: u64,
 }
 impl Cipher {
+    // CONNECT 的协商资料保持可读，只认证解密后面的身份申请，并消耗接收序号 0。
+    pub fn open_connect(&mut self, payload: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
+        if payload.len() < 28 {
+            return Err("Short CONNECT".into());
+        }
+        let nonce = self.nonce()?;
+        if payload[..12] != nonce {
+            return Err("Nonce sequence".into());
+        }
+        let end = payload.len() - 16;
+        let tag: [u8; 16] = payload[end..].try_into().unwrap();
+        let mut plain = payload[12..end].to_vec();
+        self.cipher
+            .decrypt_in_place_detached(&nonce.into(), aad, &mut plain, &tag.into())
+            .map_err(|_| "Authentication failed")?;
+        self.sequence += 1;
+        Ok(plain)
+    }
     // 密钥只保留在 AES 对象中；派生临时材料在 derive 结束时清零。
     fn new(key: &[u8], prefix: &[u8]) -> Self {
         Self {
@@ -172,7 +190,7 @@ pub fn derive(
     let mut salt = Sha256::new();
     salt.update(&server[..32]);
     salt.update(&client[..32]);
-    let mut info = b"chess-flipping/tcp/v2".to_vec();
+    let mut info = b"cyber-room/tcp/v3".to_vec();
     info.extend_from_slice(transcript);
     let mut material = Zeroizing::new([0u8; 72]);
     Hkdf::<Sha256>::new(Some(&salt.finalize()), secret.raw_secret_bytes())
@@ -184,7 +202,35 @@ pub fn derive(
     Ok((send, receive))
 }
 
-// 验证 v2 帧边界及加密完整性，特别是移除 CRC 后仍保留 GCM 认证和重放拒绝。
+// 控制扩展只校验语法、不重编码；仅为路由保留字段建立借用索引。
+pub fn control(bytes: &[u8]) -> Result<std::collections::BTreeMap<&str, &str>> {
+    let text = std::str::from_utf8(bytes).map_err(|_| "Invalid UTF-8")?;
+    if bytes.len() > 4096 || (!text.is_empty() && !text.ends_with('\n')) {
+        return Err("Invalid control".into());
+    }
+    let mut fields = std::collections::BTreeMap::new();
+    for line in text.split_terminator('\n') {
+        let (key, value) = line.split_once(':').ok_or("Invalid control line")?;
+        if !key.bytes().next().is_some_and(|b| b.is_ascii_alphabetic())
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            || value.bytes().any(|b| b == b'\r' || b == 0)
+        {
+            return Err("Invalid control line".into());
+        }
+        if matches!(
+            key,
+            "op" | "requestId" | "roomId" | "to" | "from" | "ok" | "error"
+        ) && fields.insert(key, value).is_some()
+        {
+            return Err("Duplicate reserved field".into());
+        }
+    }
+    Ok(fields)
+}
+
+// 帧边界、GCM 认证与重放拒绝。
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,7 +242,7 @@ mod tests {
         assert!(plaintext(&b[..b.len() - 1]).is_err());
         b[14] = 1;
         assert!(plaintext(&b).is_err());
-        b[14] = 2;
+        b[14] = 3;
         b.push(0);
         assert!(plaintext(&b).is_err());
     }

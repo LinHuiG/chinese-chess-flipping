@@ -1,5 +1,4 @@
-import { id } from './transport.js';
-// Rules mirror android_client/.../game/GameEngine.java. Hidden identities stay on the host.
+// App 与 Web 共用的翻棋规则；暗棋身份只留在房主设备。
 export function randomInt(bound) {
   const bytes = new Uint32Array(1), limit = Math.floor(0x100000000 / bound) * bound;
   do { crypto.getRandomValues(bytes); } while (bytes[0] >= limit);
@@ -103,87 +102,5 @@ export class GameEngine {
     const repeated = this.history.has(this.key());
     this.pieces[from] = original; this.revealed[from] = true; this.pieces[to] = 0; this.revealed[to] = false;
     return !repeated;
-  }
-}
-
-export class HostController {
-  constructor(send, clock = () => performance.now()) { this.send = send; this.clock = clock; this.seconds = 60; this.clear(); }
-  clear() { this.room = this.game = null; this.self = ''; this.ready = new Set(); this.starting = this.finishing = false; this.sequence = this.move = 0; this.startId = ''; this.completed = new Map(); }
-  host() { return this.room && this.self === this.room.hostId; }
-  setRoom(room, self) {
-    const same = this.room?.roomId === room.roomId && this.room.version === room.version;
-    const startedHere = this.starting && this.startId === room.startId && this.game;
-    this.room = room; this.self = self; this.finishing = false;
-    if (!same) { this.sequence = 0; this.completed.clear(); }
-    if (!room.playing) {
-      this.game = null; this.starting = false; this.startId = '';
-      if (!same) { this.ready.clear(); this.move = 0; }
-      if (this.host()) this.publish();
-    } else if (this.host()) {
-      if ((!same && !startedHere) || !this.game) {
-        this.game = null; this.send({ ...this.context('FINISH'), winnerId: room.members[1], reason: 'RESTORE_FAILED' }); return;
-      }
-      this.starting = false; this.game.checkTimeout(this.clock());
-      if (this.game.winner >= 0) this.finish(); else this.publish();
-    }
-  }
-  save() {
-    return { room: this.room, self: this.self, seconds: this.seconds, ready: [...this.ready], sequence: this.sequence, move: this.move,
-      starting: this.starting, startId: this.startId, completed: [...this.completed], game: this.game?.save(this.clock()) ?? null };
-  }
-  restore(saved) {
-    this.clear(); Object.assign(this, { room: saved.room, self: saved.self, seconds: saved.seconds, sequence: saved.sequence, move: saved.move,
-      starting: saved.starting, startId: saved.startId, ready: new Set(saved.ready), completed: new Map(saved.completed),
-      game: saved.game ? GameEngine.restore(saved.game, this.clock()) : null });
-  }
-  nextTickDelay() { return this.host() && this.room.playing && this.game?.seconds > 0 && !this.finishing ? Math.max(1, this.game.remaining(this.clock())) : -1; }
-  tick() { if (this.nextTickDelay() >= 0 && this.game.checkTimeout(this.clock())) this.finish(); }
-  failed(command) { if (command === 'START') { this.starting = false; this.game = null; } }
-  action(message) {
-    if (!this.host() || !/^[0-9a-f]{32}$/.test(message.operationId)) return;
-    const { action, actorId, operationId } = message, members = this.room.members, player = members.indexOf(actorId);
-    const identity = `${actorId}:${operationId}`;
-    if (this.completed.has(identity)) {
-      const error = this.completed.get(identity);
-      this.send({ ...this.context('HOST_REPLY'), targetId: actorId, operationId, ok: !error, ...(error ? { error } : { state: this.snapshot(++this.sequence) }) }); return;
-    }
-    let error = null;
-    if (player < 0) error = '你已不在该房间';
-    else if (action.type === 'SYNC') { /* Never resets the clock. */ }
-    else if (this.room.playing) {
-      if (action.type !== 'MOVE' || !this.game) error = '当前操作不可用';
-      else if (action.move !== this.move) error = '棋面已更新，请重新选择';
-      else { error = this.game.act(player, action.from, action.to, this.clock()); if (!error) this.move++; }
-    } else if (this.starting) error = '正在开始对局';
-    else if (action.type === 'READY') { if (action.ready) this.ready.add(actorId); else this.ready.delete(actorId); }
-    else if (action.type === 'TIME') {
-      if (actorId !== this.room.hostId) error = '只有房主可设置时间';
-      else if (![0, 30, 60, 90].includes(action.seconds)) error = '时间选项无效';
-      else { this.seconds = action.seconds; this.ready.clear(); }
-    } else error = '未知操作';
-    this.completed.set(identity, error || ''); if (this.completed.size > 128) this.completed.delete(this.completed.keys().next().value);
-    this.send({ ...this.context('HOST_REPLY'), targetId: actorId, operationId, ok: !error,
-      ...(error ? { error } : { state: this.snapshot(++this.sequence) }) });
-    if (this.room.playing && this.game?.winner >= 0) this.finish();
-    else if (!this.room.playing && !this.starting && members.length === 2 && members.every(m => this.ready.has(m))) {
-      this.starting = true; this.move = 0; this.startId = id(); this.game = new GameEngine(this.seconds); this.game.start(this.clock());
-      this.send({ ...this.context('START'), operationId: this.startId });
-    }
-  }
-  snapshot(seq) {
-    const state = { seq, seconds: this.seconds, ready: Object.fromEntries([...this.ready].map(id => [id, true])) };
-    const game = this.game;
-    if (game) Object.assign(state, { board: game.publicBoard(), colors: [...game.colors], turn: game.turn,
-      remaining: game.remaining(this.clock()), move: this.move, captured: [...game.captured],
-      lastFrom: game.lastFrom, lastTo: game.lastTo, winner: game.winner });
-    return state;
-  }
-  context(type) { return { type, roomId: this.room.roomId, version: this.room.version, gameId: this.room.gameId }; }
-  publish() { this.send({ ...this.context('HOST_STATE'), state: this.snapshot(++this.sequence) }); }
-  finish() {
-    if (this.finishing || !this.game || this.game.winner < 0 || !this.room.playing) return;
-    this.finishing = true;
-    this.send({ ...this.context('HOST_STATE'), finalState: true, state: this.snapshot(++this.sequence) });
-    this.send({ ...this.context('FINISH'), winnerId: this.room.members[this.game.winner], reason: this.game.reason });
   }
 }

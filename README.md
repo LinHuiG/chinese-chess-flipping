@@ -1,37 +1,41 @@
-# 翻棋联机
+# 赛博房间
 
-和朋友下一盘暗棋。无需注册，创建房间、加入、准备，即可开始双人对局。
+和朋友开一个房间，玩翻棋或一起淘金。无需注册，创建房间、加入、准备，即可开始。
 
-项目提供原生 Android 客户端和适配手机、电脑的网页版，支持跨端联机。服务端使用 Rust，可通过 Docker 自行部署。
+项目提供 Android App 和适配手机、电脑的网页版，玩法共用一份客户端代码，支持跨端联机。Rust 只管理通用房间与不透明转发，可通过 Docker 自行部署。
 
 ## 功能
 
-- **双人房间**：自定义昵称和房间名，双方准备后自动开局。
+- **可选玩法的房间**：翻棋 2 人，黄金矿工 2–3 人；自定义昵称和房间名，凑齐人数并准备后自动开局。房主退出直接解散。
+- **多人黄金矿工**：每人一只爪子、独立积分，金块、石头、钻石、仓鼠、钱袋、狗屎和 TNT；9 种商店道具，1,000 关、10 个矿区主题，原创画面、动画与合成音效。
+- **房主存档**：矿工每 5 秒自动保存，也可手动保存；重新建房可继续，按加入顺序恢复座位财富与装备。
 - **4×8 暗棋棋盘**：翻棋、走子、特殊吃法、阵亡统计，游戏内可随时查看规则。
 - **每步计时**：支持 30、60、90 秒或不限时，禁止重复棋面。
 - **断线恢复**：短暂断网、App 重启或网页刷新后，可在会话有效期内恢复对局。
 - **直连与中转**：Android 玩家之间可尝试 UDP 直连，失败自动使用服务器中转；网页版通过服务器联机。
 - **连接状态与更新**：显示网络延迟，Android 客户端支持在设置中检查更新。
 
-完整玩法见 [棋局规则](docs/GAME_RULES.md)。
+翻棋规则见 [棋局规则](docs/GAME_RULES.md)，矿工操作和道具说明在游戏内“?”。基于底座开发新功能见 [赛博房间接入手册](docs/CYBER_ROOM_INTEGRATION_MANUAL.md) 与 [客户端开发指南](docs/FRAMEWORK_DEVELOPMENT_GUIDE.md)。
 
 ## 开始游戏
 
 ### Android
 
-1. 打开服务器网页，点击顶部的“下载 APK”获取 Android 安装包。也可从 [GitHub Actions](https://github.com/LinHuiG/chinese-chess-flipping/actions/workflows/publish.yml) 最近一次成功发布的运行中下载 `app-update` 附件，解压并安装其中的 `latest.apk`（下载 Actions 附件需要登录 GitHub）。
+1. 打开服务器网页，点击顶部的“下载 App”获取 Android 安装包。也可从 [GitHub Actions](https://github.com/LinHuiG/chinese-chess-flipping/actions/workflows/publish.yml) 最近一次成功发布的运行中下载 `app-update` 附件，解压并安装其中的 `latest.apk`（下载 Actions 附件需要登录 GitHub）。
 2. 打开 App，在设置中选择服务器。默认配置为 **TCP / fqgame.tdcode.tech / 8888**，也可以改为自己部署的服务器。
-3. 一人创建房间，另一人从大厅加入，双方点击“准备”开始对局。
+3. 房主选择翻棋或黄金矿工并创建房间，朋友从大厅加入，大家点击“准备好了”开始。
+
+0.7.0 使用协议 v3，与旧版不兼容。首次请从网页手动安装新版 APK，同时更新服务端；旧 TCP 客户端无法通过新协议自助更新。
 
 客户端最低系统版本为 Android 8.0。后续更新可在 App 设置中检查，下载安装需要系统确认。
 
-升级会保留已保存的服务器设置。需要切换到默认服务器时，在设置中点击“恢复默认值”，再点击“保存并连接”。
+升级会保留已保存的服务器设置。需要切换到默认服务器时，在设置中点击“恢复默认值”，再点击“保存设置”。
 
 ### 网页版
 
 在浏览器中打开服务器的网站即可游玩，无需安装。网页与 Android 客户端连接同一台服务器时，可以加入同一个房间。
 
-会话保留至最后一次有效心跳后 60 秒，断线期间回合倒计时继续。服务端重启会清空在线房间，需要重新创建或加入。
+会话保留至最后一次有效心跳后 60 秒，翻棋断线期间倒计时继续。矿工房主进入后台自动暂停，可由房主继续。服务端重启会清空在线房间，需重新创建；房主的矿工本地存档仍可继续。
 
 ## Docker 部署
 
@@ -110,7 +114,7 @@ cargo run --locked --release --manifest-path server/Cargo.toml
 ```powershell
 cargo test --locked --manifest-path server/Cargo.toml
 .\android_client\gradlew.bat -p android_client lintDebug testDebugUnitTest
-node scripts/session-v2-test.mjs
+node scripts/client-test.mjs
 ```
 
 运行客户端与服务端的互通测试时，先启动本地服务端，再设置 `CHESS_TEST_TCP_PORT` 和 `CHESS_TEST_HTTP_PORT` 为对应端口；未设置时跳过互通测试。
@@ -120,8 +124,8 @@ node scripts/session-v2-test.mjs
 | 路径 | 内容 |
 | --- | --- |
 | `server/` | Rust 服务端、Docker 配置 |
-| `server/src/main/resources/web/` | 网页客户端 |
-| `android_client/` | 原生 Java Android 客户端 |
+| `server/src/main/resources/web/` | App/Web 共用客户端与玩法 |
+| `android_client/` | Android 壳、原生传输与打包 |
 | `scripts/` | APK 打包与网页检查脚本 |
 | `docs/` | 游戏规则、通信协议和部署文档 |
 

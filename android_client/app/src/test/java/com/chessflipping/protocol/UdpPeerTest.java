@@ -1,74 +1,35 @@
 package com.chessflipping.protocol;
-
 import com.chessflipping.client.UdpPeer;
 import org.json.*;
 import org.junit.Test;
 import java.net.*;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.*;
 import static org.junit.Assert.*;
-
-public class UdpPeerTest {
-    private static String id() { return UUID.randomUUID().toString().replace("-", ""); }
-    private static DatagramPacket receive(DatagramSocket socket) throws Exception {
-        DatagramPacket packet = new DatagramPacket(new byte[1201], 1201);
-        socket.receive(packet); return packet;
+public class UdpPeerTest{
+    static String id(){return UUID.randomUUID().toString().replace("-","");}
+    static JSONObject next(BlockingQueue<JSONObject> events,String type)throws Exception{
+        long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
+        while(System.nanoTime()<end){JSONObject e=events.poll(500,TimeUnit.MILLISECONDS);if(e!=null&&e.optString("type").equals(type)&&(!type.equals("peer")||e.optBoolean("ready")))return e;}
+        throw new AssertionError("Missing "+type);
     }
-    private static void send(DatagramSocket socket, SocketAddress to, byte[] bytes) throws Exception {
-        socket.send(new DatagramPacket(bytes, bytes.length, to));
-    }
-
-    @Test public void authenticatedAlternatePathCarriesProbesDataAndAcknowledgements() throws Exception {
-        byte[] master = new byte[32]; new SecureRandom().nextBytes(master);
-        String loopback = InetAddress.getLoopbackAddress().getHostAddress();
-        String sid = id(); CountDownLatch ready = new CountDownLatch(1), failed = new CountDownLatch(1);
-        BlockingQueue<JSONObject> messages = new LinkedBlockingQueue<>();
-        UdpPeer.Listener listener = new UdpPeer.Listener() {
-            public void local(JSONArray values) { }
-            public void ready() { ready.countDown(); }
-            public void message(JSONObject value) { messages.add(value); }
-            public void latency(long millis) { }
-            public void failed(String reason) { failed.countDown(); }
-        };
-        try (DatagramSocket registration = new DatagramSocket(0, InetAddress.getLoopbackAddress());
-             DatagramSocket lan = new DatagramSocket(0, InetAddress.getLoopbackAddress());
-             DatagramSocket nat = new DatagramSocket(0, InetAddress.getLoopbackAddress());
-             UdpSession remote = new UdpSession(sid, master, "asymmetric-path", false);
-             UdpPeer peer = new UdpPeer(loopback, registration.getLocalPort(), sid, id(), master, "asymmetric-path", true, listener)) {
-            registration.setSoTimeout(3000); lan.setSoTimeout(3000); nat.setSoTimeout(3000);
-            SocketAddress target = receive(registration).getSocketAddress();
-            peer.candidates(new JSONArray().put(new JSONObject().put("host", "2001:db8::1").put("port", 9999)).put(new JSONObject().put("host", loopback).put("port", lan.getLocalPort())));
-            DatagramPacket probe = receive(lan);
-            UdpSession.Packet ping = remote.decrypt(probe.getData(), probe.getLength());
-            assertNotNull(ping); assertEquals(1, ping.type);
-            send(lan, target, remote.encrypt(2, ping.body));
-            send(lan, target, remote.encrypt(1, ByteBuffer.allocate(8).putLong(42).array()));
-            assertTrue(ready.await(3, TimeUnit.SECONDS)); peer.activate();
-
-            // The other direction arrives via NAT even though LAN won our outbound probe.
-            send(nat, target, remote.encrypt(1, ByteBuffer.allocate(8).putLong(43).array()));
-            DatagramPacket response = receive(nat);
-            UdpSession.Packet pong = remote.decrypt(response.getData(), response.getLength());
-            assertNotNull(pong); assertEquals(2, pong.type);
-            byte[] operation = UdpSession.hex(id());
-            byte[] json = WireProtocol.plain(com.chessflipping.client.GameConnection.packet(new JSONObject().put("type","SYNC")));
-            byte[] body = ByteBuffer.allocate(16 + json.length).put(operation).put(json).array();
-            send(nat, target, remote.encrypt(3, body));
-            response = receive(nat);
-            UdpSession.Packet ack = remote.decrypt(response.getData(), response.getLength());
-            assertNotNull(ack); assertEquals(4, ack.type); assertArrayEquals(operation, ack.body);
-            JSONObject delivered = messages.poll(3, TimeUnit.SECONDS);
-            assertNotNull(delivered); assertEquals("SYNC", delivered.getString("type"));
-
-            assertTrue(peer.send("{\"type\":\"STATE\"}".getBytes(StandardCharsets.UTF_8)));
-            UdpSession.Packet data;
-            do { response = receive(lan); data = remote.decrypt(response.getData(), response.getLength()); }
-            while (data == null || data.type != 3);
-            send(nat, target, remote.encrypt(4, java.util.Arrays.copyOf(data.body, 16)));
-            assertFalse("ACK from authenticated alternate path must prevent retry fallback", failed.await(3500, TimeUnit.MILLISECONDS));
+    @Test public void twoPeersDiscoverAndReassembleOpaqueData()throws Exception{
+        BlockingQueue<JSONObject> ea=new LinkedBlockingQueue<>(),eb=new LinkedBlockingQueue<>();String aId=id(),bId=id(),context=id();
+        try(DatagramSocket registration=new DatagramSocket(0,InetAddress.getLoopbackAddress());UdpPeer a=new UdpPeer(ea::add);UdpPeer b=new UdpPeer(eb::add)){
+            registration.setSoTimeout(5000);a.register("127.0.0.1",registration.getLocalPort(),aId,id());b.register("127.0.0.1",registration.getLocalPort(),bId,id());
+            Map<String,Integer> ports=new HashMap<>();
+            for(int i=0;i<2;i++){DatagramPacket d=new DatagramPacket(new byte[1200],1200);registration.receive(d);WireProtocol.Packet p=WireProtocol.plain(WireProtocol.decode(Arrays.copyOf(d.getData(),d.getLength())));assertEquals("210",WireProtocol.control(p.control).get("op"));ports.put(new JSONObject(new String(p.body,StandardCharsets.UTF_8)).getString("clientId"),d.getPort());}
+            String key=Base64.getEncoder().encodeToString(new byte[32]);
+            a.open(new JSONObject().put("peerId",bId).put("master",key).put("context",context).put("initiator",true).put("candidates",new JSONArray().put(new JSONObject().put("ip","127.0.0.1").put("port",ports.get(bId)))));
+            b.open(new JSONObject().put("peerId",aId).put("master",key).put("context",context).put("initiator",false).put("candidates",new JSONArray().put(new JSONObject().put("ip","127.0.0.1").put("port",ports.get(aId)))));
+            assertEquals(bId,next(ea,"peer").getString("peerId"));assertEquals(aId,next(eb,"peer").getString("peerId"));
+            byte[] body=new byte[20000];new Random(1).nextBytes(body);
+            byte[] frame=WireProtocol.plain(new WireProtocol.Packet(64,"format:raw\nextra:a:b\n".getBytes(StandardCharsets.UTF_8),body));
+            assertTrue(a.send(bId,frame));JSONObject delivered=next(eb,"peerPacket");assertEquals(aId,delivered.getString("peerId"));assertArrayEquals(frame,Base64.getDecoder().decode(delivered.getString("data")));
+            assertTrue(b.send(aId,WireProtocol.plain(new WireProtocol.Packet(64,new byte[0],new byte[]{5}))));
+            assertArrayEquals(new byte[]{5},WireProtocol.plain(WireProtocol.decode(Base64.getDecoder().decode(next(ea,"peerPacket").getString("data")))).body);
+            a.clear();assertFalse(a.send(bId,frame));
         }
     }
 }

@@ -1,4 +1,4 @@
-//! 传输适配：TCP 负责加密握手，WS 负责二进制承载；二者共用 v2 帧和业务分发。
+//! TCP 密钥协商与 WS 承载；业务只进入通用 Hub。
 use crate::{
     hub::{Peer, Shared},
     json, wire,
@@ -22,7 +22,7 @@ use tokio::{
     sync::{mpsc, watch},
     time::timeout,
 };
-// 连接生命周期守卫：任意退出路径都解绑当前连接；代次检查防止旧连接误删新连接。
+
 struct Registered {
     hub: Shared,
     user: String,
@@ -36,74 +36,42 @@ impl Drop for Registered {
             .disconnect(&self.user, self.generation);
     }
 }
-// 首次接入必须声明支持的协议版本与平台；UDP 能力另由 Hub 校验。
-fn metadata(v: &Value) -> Result<(), String> {
-    if !matches!(v["CHL"].as_str(), Some("ANDROID" | "WEB" | "IOS")) {
-        return Err("Platform".into());
-    }
-    if v["protocol"].as_u64() != Some(2) {
-        return Err("请升级客户端至 0.6.0".into());
-    }
-    Ok(())
-}
-// 随机 TID 只用于关联握手，不再给每个业务事件生成无用请求编号。
-fn tid(v: &Value) -> Result<String, String> {
-    let t = json::field(v, "TID", 32)?;
-    if !json::hex_id(t) {
-        return Err("TID".into());
-    }
-    Ok(t.into())
-}
-// 握手响应控制头，与加密握手的 transcript 校验配套。
-fn control(tid: &str, code: u16, msg: Option<&str>) -> Vec<u8> {
-    serde_json::to_vec(&json!({"TID":tid,"CODE":code,"MSG":msg})).unwrap()
-}
-// 单次写入有超时，慢接收端不能无限占用写任务。
 async fn write_tcp(s: &mut (impl tokio::io::AsyncWrite + Unpin), b: &[u8]) -> Result<(), String> {
     timeout(Duration::from_secs(5), s.write_all(b))
         .await
         .map_err(|_| "Slow peer")?
         .map_err(|_| "Write failed".into())
 }
-// P-256 + HKDF 派生方向密钥，transcript 绑定双方握手字节。
-// 确认完成后才把身份元数据交给 Hub；这是链路保护，不是证书或账户认证。
 async fn handshake(
     s: &mut TcpStream,
     key: &SecretKey,
 ) -> Result<(wire::Cipher, wire::Cipher, Value), String> {
     let req = wire::read(s).await?;
     let (c, b) = req.plaintext()?;
-    let t = tid(&json::object(c)?)?;
-    if req.kind != 1 || !b.is_empty() {
-        return Err("Handshake request".into());
+    if req.kind != 1 || !c.is_empty() || !b.is_empty() {
+        return Err("KEY_REQUEST".into());
     }
     let hello = wire::hello(key);
-    let response = wire::plain(2, &control(&t, 0, None), &hello)?;
+    let response = wire::plain(2, b"", &hello)?;
     write_tcp(s, &response).await?;
-    let k = wire::read(s).await?;
-    let (c, client) = k.plaintext()?;
-    if k.kind != 3 || tid(&json::object(c)?)? != t {
-        return Err("Handshake key".into());
+    let connect = wire::read(s).await?;
+    let (c, b) = connect.plaintext()?;
+    if connect.kind != 3 || !c.is_empty() || b.len() < 2 {
+        return Err("CONNECT".into());
     }
+    let n = u16::from_be_bytes(b[..2].try_into().unwrap()) as usize;
+    if !(33..=256).contains(&n) || b.len() < 2 + n + 28 {
+        return Err("CONNECT length".into());
+    }
+    let prefix = &connect.bytes[..17 + 2 + n];
     let mut hash = Sha256::new();
     hash.update(&req.bytes);
     hash.update(&response);
-    hash.update(&k.bytes);
-    let transcript = hash.finalize();
-    let (mut send, mut receive) = wire::derive(key, &hello, client, &transcript)?;
-    write_tcp(s, &send.encrypt(4, &control(&t, 0, None), &transcript)?).await?;
-    let (kind, b, x) = receive.decrypt(wire::read(s).await?)?;
-    let meta = json::object(&b[..x])?;
-    if kind != 5 || tid(&meta)? != t || b[x..] != transcript[..] {
-        return Err("Handshake confirmation".into());
-    }
-    metadata(&meta)?;
-    write_tcp(s, &send.encrypt(6, &control(&t, 0, None), &transcript)?).await?;
+    hash.update(prefix);
+    let (send, mut receive) = wire::derive(key, &hello, &b[2..2 + n], &hash.finalize())?;
+    let meta = json::object(&receive.open_connect(&b[2 + n..], prefix)?)?;
     Ok((send, receive, meta))
 }
-
-// TCP/WS 共用入口：先验证连接代次，再处理心跳、路由头或服务器控制命令。
-// 棋局包体保持 Bytes；只有控制命令包体会进入 JSON 解析器。
 fn process(
     hub: &Shared,
     user: &str,
@@ -112,63 +80,60 @@ fn process(
     c: &[u8],
     body: bytes::Bytes,
 ) -> Result<Option<(u8, Vec<u8>, bytes::Bytes)>, String> {
-    let header = json::object(c)?;
-    if !hub.lock().unwrap().active(user, generation) {
+    let mut h = hub.lock().unwrap();
+    if !h.active(user, generation) {
         return Err("Replaced connection".into());
     }
     if kind == 32 {
-        hub.lock().unwrap().ping(user, generation);
-        return Ok(Some((33, c.to_vec(), bytes::Bytes::from_static(b"{}"))));
+        if !c.is_empty() || body.len() > 256 {
+            return Err("PING".into());
+        }
+        json::object(&body)?;
+        h.ping(user, generation);
+        return Ok(Some((33, vec![], body)));
     }
-    // 更新功能号独立于棋局，不占房间状态；每个分块回复都走原连接的有界写通道。
-    if kind == 48 {
-        let current = header["versionCode"]
-            .as_u64()
-            .ok_or("Missing installed version")?;
-        return Ok(Some((
-            49,
-            b"{}".to_vec(),
-            crate::hub::encoded(&crate::update::version(current)),
-        )));
-    }
-    if kind == 50 {
-        return Ok(Some(match crate::update::chunk(&header) {
-            Ok((control, body)) => (51, control, body),
+    // 安装包更新属于已有部署接口，正文和文件块也沿用统一帧。
+    if kind == 48 || kind == 50 {
+        if !c.is_empty() {
+            return Err("Update control".into());
+        }
+        let q = json::object(&body)?;
+        if kind == 48 {
+            return Ok(Some((
+                49,
+                vec![],
+                crate::hub::encoded(&crate::update::version(
+                    q["versionCode"].as_u64().ok_or("versionCode")?,
+                )),
+            )));
+        }
+        return Ok(Some(match crate::update::chunk(&q) {
+            Ok((control, bytes)) => {
+                let object: Value =
+                    serde_json::from_slice(&control).map_err(|_| "Update header")?;
+                let mut lines = String::new();
+                for (k, v) in object.as_object().unwrap() {
+                    lines.push_str(k);
+                    lines.push(':');
+                    lines.push_str(
+                        &v.as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| v.to_string()),
+                    );
+                    lines.push('\n');
+                }
+                (51, lines.into_bytes(), bytes)
+            }
             Err(error) => (
                 49,
-                b"{}".to_vec(),
+                vec![],
                 crate::hub::encoded(&json!({"type":"APP_VERSION","error":error})),
             ),
         }));
     }
-    if kind != 16 {
-        return Err("Unexpected packet".into());
-    }
-    if matches!(
-        header["type"].as_str(),
-        Some("ACTION" | "HOST_REPLY" | "HOST_STATE")
-    ) {
-        let mut h = hub.lock().unwrap();
-        if !h.active(user, generation) {
-            return Err("Replaced connection".into());
-        }
-        if let Err(error) = h.relay(user, header.clone(), body) {
-            h.handle(
-                user,
-                json!({"type":"ECHO","message":error,"failedOperation":header["operationId"]}),
-            );
-        }
-    } else {
-        let q = json::object(&body)?;
-        let mut h = hub.lock().unwrap();
-        if h.active(user, generation) {
-            h.handle(user, q);
-        }
-    }
+    h.handle(user, kind, c, body)?;
     Ok(None)
 }
-// 每个连接一个读取任务和一个有界发送循环；读到的密文就地解密，队列满时产生背压。
-// 关闭发送循环会取消读取任务，并通过守卫解绑用户。
 pub async fn tcp(mut stream: TcpStream, hub: Shared, key: Arc<SecretKey>) {
     let _ = stream.set_nodelay(true);
     let Ok(Ok((mut send, mut receive, meta))) =
@@ -178,14 +143,27 @@ pub async fn tcp(mut stream: TcpStream, hub: Shared, key: Arc<SecretKey>) {
     };
     let (tx, mut out) = mpsc::channel(32);
     let (close, mut closed) = watch::channel(false);
-    let Ok((user, generation)) = hub.lock().unwrap().register(&meta, Peer { tx, close }) else {
-        return;
+    let registration = hub.lock().unwrap().register(&meta, Peer { tx, close });
+    let (user, generation, identity) = match registration {
+        Ok(r) => r,
+        Err(error) => {
+            if let Ok(frame) = send.encrypt(4, format!("ok:0\nerror:{error}\n").as_bytes(), b"{}") {
+                let _ = write_tcp(&mut stream, &frame).await;
+            }
+            return;
+        }
     };
     let _guard = Registered {
         hub: hub.clone(),
         user: user.clone(),
         generation,
     };
+    let Ok(ready) = send.encrypt(4, b"ok:1\n", &crate::hub::encoded(&identity)) else {
+        return;
+    };
+    if write_tcp(&mut stream, &ready).await.is_err() {
+        return;
+    }
     let (mut reader, mut writer) = stream.into_split();
     let (in_tx, mut input) = mpsc::channel(8);
     let read_task = tokio::spawn(async move {
@@ -203,30 +181,25 @@ pub async fn tcp(mut stream: TcpStream, hub: Shared, key: Arc<SecretKey>) {
     loop {
         tokio::select! {
             biased;
-            // 关闭信号优先，接管连接后不要继续处理旧队列。
-            _ = closed.changed() => break,
-            value = input.recv() => {
-                let Some(Ok((kind, bytes, x))) = value else { break; };
-                match process(&hub, &user, generation, kind, &bytes[..x], bytes.slice(x..)) {
-                    Err(_) => break,
-                    Ok(Some((kind, control, body))) => {
-                        let Ok(frame) = send.encrypt(kind, &control, &body) else { break; };
-                        if write_tcp(&mut writer, &frame).await.is_err() { break; }
-                    }
-                    Ok(None) => {}
+            _=closed.changed()=>break,
+            value=input.recv()=>{
+                let Some(Ok((kind,bytes,x)))=value else{break};
+                match process(&hub,&user,generation,kind,&bytes[..x],bytes.slice(x..)){
+                    Err(_)=>break,
+                    Ok(Some((kind,c,b)))=>{let Ok(frame)=send.encrypt(kind,&c,&b)else{break};if write_tcp(&mut writer,&frame).await.is_err(){break;}},
+                    Ok(None)=>{}
                 }
-            }
-            value = out.recv() => {
-                let Some(output) = value else { break; };
-                if !hub.lock().unwrap().active(&user, generation) { break; }
-                let Ok(frame) = send.encrypt(18, &output.header, &output.body) else { break; };
-                if write_tcp(&mut writer, &frame).await.is_err() { break; }
+            },
+            value=out.recv()=>{
+                let Some(output)=value else{break};
+                if !hub.lock().unwrap().active(&user,generation){break;}
+                let Ok(frame)=send.encrypt(output.kind,&output.header,&output.body)else{break};
+                if write_tcp(&mut writer,&frame).await.is_err(){break;}
             }
         }
     }
     read_task.abort();
 }
-// 浏览器 Origin 必须匹配 Host，避免任意外站借用用户浏览器连接本服务；原生 App 可不带 Origin。
 pub async fn ws_upgrade(
     State(hub): State<Shared>,
     headers: HeaderMap,
@@ -255,8 +228,6 @@ pub async fn ws_upgrade(
         .max_frame_size(69649)
         .on_upgrade(move |socket| ws(socket, hub))
 }
-
-// WS 发送与 TCP 使用同一帧布局；外层掩码/TLS 由 WebSocket 栈及反向代理处理。
 async fn ws_send(socket: &mut WebSocket, kind: u8, c: &[u8], b: &[u8]) -> Result<(), String> {
     let bytes = wire::plain(kind, c, b)?;
     timeout(
@@ -267,90 +238,70 @@ async fn ws_send(socket: &mut WebSocket, kind: u8, c: &[u8], b: &[u8]) -> Result
     .map_err(|_| "Slow peer")?
     .map_err(|_| "Write failed".into())
 }
-// 首次二进制帧携带身份，随后接收业务与应用心跳。WS 自带 Ping/Pong 不延长用户存活期限。
 async fn ws(mut socket: WebSocket, hub: Shared) {
     let Ok(Some(Ok(Message::Binary(bytes)))) =
         timeout(Duration::from_secs(10), socket.recv()).await
     else {
-        let _ = socket
-            .send(Message::Text("请升级客户端至 0.6.0".into()))
-            .await;
         return;
     };
-    let Ok((kind, c, b)) = wire::plaintext(&bytes) else {
+    let Ok((3, c, b)) = wire::plaintext(&bytes) else {
         return;
     };
-    let Ok(meta) = json::object(c) else {
-        return;
-    };
-    if kind != 5 || !b.is_empty() || metadata(&meta).is_err() {
+    if !c.is_empty() {
         return;
     }
-    if ws_send(&mut socket, 6, b"{}", b"{}").await.is_err() {
-        return;
-    }
+    let Ok(meta) = json::object(b) else { return };
     let (tx, mut out) = mpsc::channel(32);
     let (close, mut closed) = watch::channel(false);
-    let Ok((user, generation)) = hub.lock().unwrap().register(&meta, Peer { tx, close }) else {
-        return;
+    let registration = hub.lock().unwrap().register(&meta, Peer { tx, close });
+    let (user, generation, identity) = match registration {
+        Ok(r) => r,
+        Err(error) => {
+            let _ = ws_send(
+                &mut socket,
+                4,
+                format!("ok:0\nerror:{error}\n").as_bytes(),
+                b"{}",
+            )
+            .await;
+            return;
+        }
     };
     let _guard = Registered {
         hub: hub.clone(),
         user: user.clone(),
         generation,
     };
+    if ws_send(&mut socket, 4, b"ok:1\n", &crate::hub::encoded(&identity))
+        .await
+        .is_err()
+    {
+        return;
+    }
     loop {
         tokio::select! {
             biased;
-            _ = closed.changed() => break,
-            value = socket.recv() => {
-                let bytes = match value {
-                    Some(Ok(Message::Binary(bytes))) => bytes,
-                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
-                    _ => break,
-                };
-                let Ok((kind, control, body)) = wire::plaintext(&bytes) else { break; };
-                let body = bytes.slice(bytes.len() - body.len()..);
-                match process(&hub, &user, generation, kind, control, body) {
-                    Err(_) => break,
-                    Ok(Some((kind, control, body))) => {
-                        if ws_send(&mut socket, kind, &control, &body).await.is_err() { break; }
-                    }
-                    Ok(None) => {}
+            _=closed.changed()=>break,
+            value=socket.recv()=>{
+                let bytes=match value{Some(Ok(Message::Binary(bytes)))=>bytes,Some(Ok(Message::Ping(_)|Message::Pong(_)))=>continue,_=>break};
+                let Ok((kind,c,b))=wire::plaintext(&bytes)else{break};
+                let body=bytes.slice(bytes.len()-b.len()..);
+                match process(&hub,&user,generation,kind,c,body){
+                    Err(_)=>break,Ok(Some((kind,c,b)))=>{if ws_send(&mut socket,kind,&c,&b).await.is_err(){break;}},Ok(None)=>{}
                 }
-            }
-            value = out.recv() => {
-                let Some(output) = value else { break; };
-                if !hub.lock().unwrap().active(&user, generation) { break; }
-                if ws_send(&mut socket, 18, &output.header, &output.body).await.is_err() { break; }
+            },
+            value=out.recv()=>{
+                let Some(output)=value else{break};
+                if !hub.lock().unwrap().active(&user,generation){break;}
+                if ws_send(&mut socket,output.kind,&output.header,&output.body).await.is_err(){break;}
             }
         }
     }
 }
-// 固定白名单在启动时读入一次，响应仅克隆 Bytes 引用；不按用户路径访问磁盘。
-const ASSETS: &[(&str, &str)] = &[
-    ("index.html", "text/html; charset=utf-8"),
-    ("style.css", "text/css; charset=utf-8"),
-    ("app.js", "text/javascript; charset=utf-8"),
-    ("game.js", "text/javascript; charset=utf-8"),
-    ("transport.js", "text/javascript; charset=utf-8"),
-    ("icon.svg", "image/svg+xml"),
-    ("rules.txt", "text/plain; charset=utf-8"),
-    ("capture.wav", "audio/wav"),
-    ("victory.wav", "audio/wav"),
-    ("defeat.wav", "audio/wav"),
-];
-static WEB: std::sync::OnceLock<Vec<bytes::Bytes>> = std::sync::OnceLock::new();
+// 通用静态资源目录，不把游戏文件名编译进 Rust；拒绝目录穿越及根目录之外的链接。
 pub fn init_assets() -> std::io::Result<()> {
-    let root = crate::resource_root().join("src/main/resources/web");
-    let assets = ASSETS
-        .iter()
-        .map(|(name, _)| std::fs::read(root.join(name)).map(bytes::Bytes::from))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    WEB.set(assets)
-        .map_err(|_| std::io::Error::other("Web assets already initialized"))
+    std::fs::metadata(crate::resource_root().join("src/main/resources/web/index.html")).map(|_| ())
 }
-// HEAD 不发送正文，保留资源长度和浏览器安全头。
 pub async fn asset(uri: Uri, method: Method) -> Response {
     if method != Method::GET && method != Method::HEAD {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
@@ -358,14 +309,41 @@ pub async fn asset(uri: Uri, method: Method) -> Response {
     let name = if uri.path() == "/" {
         "index.html"
     } else {
-        uri.path().strip_prefix('/').unwrap_or("")
+        uri.path().trim_start_matches('/')
     };
-    let Some(index) = ASSETS.iter().position(|(file, _)| *file == name) else {
+    if name.split('/').any(|p| p.is_empty() || p.starts_with('.')) || name.contains(['\\', '%']) {
         return StatusCode::NOT_FOUND.into_response();
+    }
+    let root = crate::resource_root().join("src/main/resources/web");
+    let root = match tokio::fs::canonicalize(root).await {
+        Ok(p) => p,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
-    let bytes = WEB.get().expect("init web assets")[index].clone();
-    let mime = ASSETS[index].1;
-    Response::builder().header("content-type",mime).header("content-length",bytes.len()).header("cache-control","no-cache").header("x-content-type-options","nosniff").header("referrer-policy","same-origin")
+    let path = match tokio::fs::canonicalize(root.join(name)).await {
+        Ok(p) if p.starts_with(&root) => p,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let mime = match path.extension().and_then(|x| x.to_str()).unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "json" => "application/json",
+        "txt" => "text/plain; charset=utf-8",
+        "woff2" => "font/woff2",
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let bytes = match tokio::fs::read(path).await {
+        Ok(b) => b,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    Response::builder().header("content-type",mime).header("content-length",bytes.len()).header("cache-control","no-cache")
+        .header("x-content-type-options","nosniff").header("referrer-policy","same-origin")
         .header("content-security-policy","default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
         .body(if method==Method::HEAD{Body::empty()}else{Body::from(bytes)}).unwrap()
 }

@@ -1,50 +1,30 @@
-// Requires an emulator already hosting the waiting room "Android-smoke" with unlimited turn time.
-const { chromium } = require('playwright');
-const { execFileSync } = require('node:child_process');
-const path = require('node:path');
-const assert = require('node:assert/strict');
-const serial = process.env.CHESS_ANDROID_SERIAL || 'emulator-5554';
-const adb = path.join(process.env.ANDROID_HOME || path.join(process.env.LOCALAPPDATA, 'Android/Sdk'), 'platform-tools/adb.exe');
-const root = path.resolve(__dirname, '..');
-const out = path.join(root, 'server/target/web-checks');
-const shell = (...args) => execFileSync(adb, ['-s', serial, 'shell', ...args], { encoding: 'utf8' });
-function ui(action, text) {
-  return execFileSync('pwsh', ['-NoProfile', '-File', path.join(__dirname, 'android-ui.ps1'), '-Serial', serial, '-Action', action,
-    ...(text ? ['-Text', text] : [])], { encoding: 'utf8' }).trim();
-}
-function tapCell(index) {
-  const nodes = JSON.parse(ui('Inspect'));
-  assert(nodes.some(n => n.text === '你的回合'));
-  const board = nodes.find(n => n['content-desc']?.includes('四列八行'));
-  assert(board, 'Android board visible');
-  const [x1, y1, x2, y2] = board.bounds.match(/\d+/g).map(Number), w = x2 - x1, h = y2 - y1;
-  const density = Number(shell('wm', 'density').match(/(\d+)\s*$/)[1]) / 160;
-  const side = Math.min(52 * density, w * .16), cell = Math.min((w - 2 * side - 16 * density) / 4, (h - 16 * density) / 8);
-  const left = (w - 4 * cell) / 2, top = Math.max(0, (h - 8 * cell) / 2);
-  shell('input', 'tap', String(Math.round(x1 + left + (index % 4 + .5) * cell)), String(Math.round(y1 + top + (Math.floor(index / 4) + .5) * cell)));
-}
-(async () => {
-  let browser;
-  try { browser = await chromium.launch({ headless: true }); } catch { browser = await chromium.launch({ headless: true, channel: 'msedge' }); }
-  try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
-    await page.goto(process.env.CHESS_WEB_URL || 'http://127.0.0.1');
-    await page.locator('.room-item').filter({ hasText: 'Android-smoke' }).getByRole('button', { name: '加入' }).click();
-    await page.locator('#ready').waitFor(); await page.click('#ready'); ui('Tap', '准备');
-    await page.locator('#game').waitFor({ state: 'visible' });
-    await page.waitForFunction(() => document.querySelectorAll('.cell[data-value="99"]').length === 32);
-    for (let i = 0; i < 2; i++) {
-      if ((await page.locator('#turn').textContent()) === '轮到你了') await page.locator('.cell').nth(i).click(); else tapCell(i);
-      await page.waitForFunction(n => document.querySelectorAll('.cell[data-value="99"]').length === n, 31 - i);
-    }
-    assert(JSON.parse(ui('Inspect')).some(n => n.text === '你执红棋' || n.text === '你执黑棋'));
-    await page.screenshot({ path: path.join(out, 'web-with-android.png'), fullPage: true });
-    shell('screencap', '-p', '/sdcard/chess-web-smoke.png');
-    execFileSync(adb, ['-s', serial, 'pull', '/sdcard/chess-web-smoke.png', path.join(out, 'android-with-web.png')]);
-    await page.locator('#game .leave').click(); await page.click('#confirm-ok');
-    await page.locator('#lobby').waitFor({ state: 'visible' });
-    const end = JSON.parse(ui('Inspect')); assert(end.some(n => n.text === '你赢了'));
-    ui('Tap', '继续'); ui('Tap', '解散房间'); ui('Tap', '解散');
-    console.log(JSON.stringify({ result: 'PASS', checks: ['actual Android HTTP host', 'browser guest', 'ready/start', 'one flip on each device', 'colors assigned', 'guest leave / Android wins', 'room dissolved'] }));
-  } finally { await browser.close(); }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+// Requires two debug emulators with WebView CDP forwarded to 19222/19223, and the local server.
+const {chromium}=require('playwright'),assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs');
+(async()=>{
+  const out=path.resolve(__dirname,'../server/target/web-checks');fs.mkdirSync(out,{recursive:true});
+  const hostBrowser=await chromium.connectOverCDP('http://127.0.0.1:19222'),guestBrowser=await chromium.connectOverCDP('http://127.0.0.1:19223');
+  const host=hostBrowser.contexts()[0].pages()[0],guest=guestBrowser.contexts()[0].pages()[0];
+  let browser;try{browser=await chromium.launch({headless:true});}catch{browser=await chromium.launch({headless:true,channel:'msedge'});}
+  const web=await browser.newPage({viewport:{width:1100,height:950}}),errors=[];
+  for(const p of [host,guest,web]){p.setDefaultTimeout(20000);p.on('pageerror',e=>errors.push(e.message));}
+  try{
+    await host.evaluate(async()=>{await window.cyberDisconnect();location.reload();});
+    await guest.evaluate(()=>{window.cyberDisconnect().then(()=>{NativeRoom.configure(JSON.stringify({...JSON.parse(NativeRoom.settings()),host:'10.0.2.2',port:18880,transport:'HTTP'}));location.reload();});});
+    await web.goto('http://127.0.0.1:18880');for(const p of [host,guest,web])await p.locator('#lobby').waitFor({state:'visible'});
+    await host.click('[data-create=miner]');await host.selectOption('#capacity','3');await host.fill('#room-name','App TCP + App WS + Web');await host.click('#create-submit');await host.locator('#waiting').waitFor({state:'visible'});
+    for(const p of [guest,web]){await p.click('#refresh');await p.locator('.room-card').filter({hasText:'App TCP + App WS + Web'}).click();await p.locator('#waiting').waitFor({state:'visible'});}
+    for(const p of [host,guest,web])await p.click('#ready');
+    for(const p of [host,guest,web])await p.locator('#miner').waitFor({state:'visible'});
+    await guest.click('#drop');await web.click('#drop');await host.click('#drop');await host.click('#save');
+    assert.equal(await host.evaluate(()=>JSON.parse(localStorage.getItem('cyber.miner.save')).players.length),3);
+    await host.screenshot({path:path.join(out,'android-miner.png'),fullPage:true});
+    assert.equal(await host.evaluate(()=>document.querySelector('canvas').getContext('2d').getImageData(10,10,1,1).data[3]),255);
+    if(process.env.ADB)fs.writeFileSync(path.join(out,'android-device.png'),require('node:child_process').execFileSync(process.env.ADB,['-s','emulator-5554','exec-out','screencap','-p']));
+    await guest.screenshot({path:path.join(out,'android-guest.png'),fullPage:true});
+    // These emulators have isolated NATs; no usable direct route is expected. The game must still work.
+    assert.ok((await web.textContent('#status')).includes('服务器转发'));
+    await host.locator('#miner .leave').first().click();await host.click('#confirm-ok');
+    for(const p of [host,guest,web])await p.locator('#lobby').waitFor({state:'visible'});
+    assert.deepEqual(errors,[]);console.log('PASS Android 37: native TCP host + native WS guest + browser, three claws, save, relay fallback and host dissolution');
+  }finally{await browser.close();await hostBrowser.close();await guestBrowser.close();}
+})().catch(e=>{console.error(e);process.exitCode=1;});
