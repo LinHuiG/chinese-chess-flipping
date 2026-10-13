@@ -1,6 +1,6 @@
 # 赛博房间 Android
 
-版本 0.7.1 / versionCode 11，包名保持 com.chessflipping.client。Android Studio 打开本目录；JDK 25、AGP 9.4.0、Gradle 9.6.0、compile/target SDK 37，最低 API 26。
+版本 0.7.2 / versionCode 12，包名保持 com.chessflipping.client。Android Studio 打开本目录；JDK 25、AGP 9.4.0、Gradle 9.6.0、compile/target SDK 37，最低 API 26。
 
 ~~~powershell
 .\gradlew.bat assembleDebug testDebugUnitTest lintDebug

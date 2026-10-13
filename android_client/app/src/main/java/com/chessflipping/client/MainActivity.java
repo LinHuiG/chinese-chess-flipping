@@ -11,9 +11,7 @@ public final class MainActivity extends Activity {
     private final ServiceConnection binding=new ServiceConnection(){
         @Override public void onServiceConnected(ComponentName name,IBinder binder){
             service=((GameService.LocalBinder)binder).service();
-            service.exitActivity=()->moveTaskToBack(true);
-            if(service.web.getParent() instanceof ViewGroup)((ViewGroup)service.web.getParent()).removeView(service.web);
-            content.addView(service.web,new FrameLayout.LayoutParams(-1,-1));
+            service.attachWeb(MainActivity.this,content);
         }
         @Override public void onServiceDisconnected(ComponentName name){service=null;}
     };
@@ -38,5 +36,5 @@ public final class MainActivity extends Activity {
     // API 33+ uses OnBackInvokedCallback above; this override is only the older-system fallback.
     @android.annotation.SuppressLint("GestureBackNavigation")
     @Override public void onBackPressed(){if(service!=null)service.web.evaluateJavascript("window.cyberBack && window.cyberBack()",null);else super.onBackPressed();}
-    @Override protected void onDestroy(){if(service!=null){service.exitActivity=null;if(service.web.getParent()==content)content.removeView(service.web);}unbindService(binding);super.onDestroy();}
+    @Override protected void onDestroy(){if(service!=null)service.detachWeb(this);unbindService(binding);super.onDestroy();}
 }

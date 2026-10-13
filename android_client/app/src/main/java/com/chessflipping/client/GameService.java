@@ -21,6 +21,7 @@ public final class GameService extends Service {
     private volatile GameConnection connection;private UdpPeer udp;private int generation;private boolean pageLoaded;private String activeRoom="";
     public Runnable exitActivity;
     private PowerManager.WakeLock wakeLock;public WebView web;public AppUpdater updater;private boolean stopAfterDisconnect;
+    private MutableContextWrapper webContext;
     private static final String ORIGIN="appassets.androidplatform.net";
     @Override public void onCreate(){
         super.onCreate();getSystemService(NotificationManager.class).createNotificationChannel(new NotificationChannel("game","赛博房间连接",NotificationManager.IMPORTANCE_LOW));
@@ -28,7 +29,8 @@ public final class GameService extends Service {
         updater=new AppUpdater(this,q->{if(connection!=null)connection.request(q);},this::updateEvent);
         try{udp=new UdpPeer(this::event);}catch(Exception ignored){}
         WebView.setWebContentsDebuggingEnabled((getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0);
-        web=new WebView(this);WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);
+        webContext=new MutableContextWrapper(getApplicationContext());
+        web=new WebView(webContext);WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);
         s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setAllowFileAccessFromFileURLs(false);s.setAllowUniversalAccessFromFileURLs(false);
         s.setMediaPlaybackRequiresUserGesture(true);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         web.setBackgroundColor(0xfff5f3ef);web.addJavascriptInterface(new Bridge(),"NativeRoom");
@@ -56,6 +58,17 @@ public final class GameService extends Service {
             }
         });
         web.loadUrl("https://"+ORIGIN+"/web/index.html");
+    }
+    public void attachWeb(Activity activity,ViewGroup parent){
+        // Select popups need the current Activity; the service keeps the page across recreation.
+        webContext.setBaseContext(activity);
+        if(web.getParent() instanceof ViewGroup)((ViewGroup)web.getParent()).removeView(web);
+        parent.addView(web,new ViewGroup.LayoutParams(-1,-1));exitActivity=()->activity.moveTaskToBack(true);
+    }
+    public void detachWeb(Activity activity){
+        if(webContext.getBaseContext()!=activity)return;
+        if(web.getParent() instanceof ViewGroup)((ViewGroup)web.getParent()).removeView(web);
+        exitActivity=null;webContext.setBaseContext(getApplicationContext());
     }
     public android.content.SharedPreferences preferences(){return getSharedPreferences("connection",MODE_PRIVATE);}
     private String host(){return preferences().getString("host",DEFAULT_HOST);}
@@ -147,7 +160,7 @@ public final class GameService extends Service {
     }
     @Override public void onDestroy(){
         disconnect();if(udp!=null)udp.close();updater.close();if(wakeLock.isHeld())wakeLock.release();
-        if(web!=null){if(web.getParent() instanceof ViewGroup)((ViewGroup)web.getParent()).removeView(web);web.removeJavascriptInterface("NativeRoom");web.destroy();web=null;}
+        if(web!=null){if(web.getParent() instanceof ViewGroup)((ViewGroup)web.getParent()).removeView(web);webContext.setBaseContext(getApplicationContext());web.removeJavascriptInterface("NativeRoom");web.destroy();web=null;}
         super.onDestroy();
     }
 }

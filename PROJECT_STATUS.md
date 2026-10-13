@@ -1,5 +1,12 @@
 # 项目执行记录与交接
 
+## App 下拉选择修复（2026-10-13，本地验证完成，待发布第一台）
+
+- 用户进一步反馈 App 建房时“选择游戏”和“选择人数”无法下拉；原有脚本直接修改 select 值，没有覆盖原生弹窗。已用 Android 37 模拟器实际触摸选择控件复现 `Native select popup missing: #create-game`。
+- 原 WebView 由 Service context 创建，缺少用于选择弹窗的前台 Activity 上下文。改用 MutableContextWrapper，挂载到 Activity 时切换上下文，脱离时恢复 Application context，保留后台页面和连接并避免旧 Activity 引用。
+- 增加原生触摸及选择列表检查，覆盖游戏切换、2/3 人切换、Activity 重建后的再次选择，以及建房/退出流程。assembleDebug / assembleDebugAndroidTest / lintDebug 通过；同一模拟器覆盖安装旧版时真实点击失败，覆盖安装修复版后所有原生菜单选择、Activity 重建及三人建房/退出检查通过，并人工查看实际 adb 弹窗截图。未验证其他厂商真机。
+- 三人座位修复 `3793eff` 的 [Actions 38325509972](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/38325509972) 四个任务成功，但部署线程尚未部署，已按追加反馈等待合并修复版 0.7.2 / versionCode 12。最终仅部署与验收第一台，第二台不处理；未关机。
+
 ## 三人房座位显示修复（2026-10-13，本地检查通过，待发布第一台）
 
 - 用户截图显示 `1/3 人` 却只有两张座位卡；已复现先创建两人房、退出，再由同一房主建三人房时，座位渲染缓存仅比较成员而复用了旧的两座布局。缓存键现纳入房间 ID、容量和房主身份；不改协议或 Rust。
