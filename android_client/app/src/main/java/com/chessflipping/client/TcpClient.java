@@ -22,6 +22,7 @@ public final class TcpClient implements GameConnection {
     private final ExecutorService reader=Executors.newSingleThreadExecutor();
     private final ScheduledExecutorService writer=Executors.newSingleThreadScheduledExecutor();
     private final Semaphore outstanding=new Semaphore(128);
+    private final Semaphore disposable=new Semaphore(8);
     private final AtomicBoolean closed=new AtomicBoolean(),started=new AtomicBoolean();
     private final Listener listener;private final JSONObject identity;private final Socket socket=new Socket();
     private volatile boolean ready;private volatile SecureSession session;private OutputStream output;
@@ -79,9 +80,12 @@ public final class TcpClient implements GameConnection {
         listener.onPacket(packet);
     }
     @Override public boolean send(WireProtocol.Packet packet){
-        if(!ready||closed.get()||!outstanding.tryAcquire())return false;
-        try{writer.execute(()->{try{writeSecure(packet);}catch(Exception e){stop("消息发送失败");}finally{outstanding.release();}});return true;}
-        catch(RejectedExecutionException e){outstanding.release();return false;}
+        final long queued=System.nanoTime();final int maxAge;
+        try{java.util.Map<String,String> h=WireProtocol.control(packet.control);maxAge="1".equals(h.get("discard"))?Math.max(1,Math.min(2000,Integer.parseInt(h.getOrDefault("maxAgeMs","200")))):0;}catch(Exception e){return false;}
+        if(maxAge>0&&(!ready||closed.get()||outstanding.availablePermits()<32||!disposable.tryAcquire()))return false;
+        if(!ready||closed.get()||!outstanding.tryAcquire()){if(maxAge>0)disposable.release();return false;}
+        try{writer.execute(()->{try{if(maxAge==0||System.nanoTime()-queued<=TimeUnit.MILLISECONDS.toNanos(maxAge))writeSecure(packet);}catch(Exception e){stop("消息发送失败");}finally{outstanding.release();if(maxAge>0)disposable.release();}});return true;}
+        catch(RejectedExecutionException e){outstanding.release();if(maxAge>0)disposable.release();return false;}
     }
     private synchronized void writeSecure(WireProtocol.Packet packet)throws Exception{writeRaw(session.encrypt(packet));}
     private synchronized void writeRaw(byte[] bytes)throws IOException{if(closed.get())throw new IOException("Closed");output.write(bytes);output.flush();}

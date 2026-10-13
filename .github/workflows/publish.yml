@@ -5,7 +5,9 @@ on:
     paths:
       - 'server/**'
       - 'android_client/**'
-      - 'scripts/package-app-update.py'
+      - 'desktop_client/**'
+      - 'scripts/**'
+      - '.github/workflows/publish.yml'
   pull_request:
   workflow_dispatch:
 permissions:
@@ -20,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       publish_image: ${{ steps.scope.outputs.publish_image }}
+      should_check: ${{ steps.scope.outputs.should_check }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -42,7 +45,7 @@ jobs:
             else
               git cat-file -e "$base^{commit}" || git fetch --no-tags origin "$base"
             fi
-            changed_files=$(git diff --name-only "$base" "$GITHUB_SHA" -- server/ android_client/ scripts/package-app-update.py)
+            changed_files=$(git diff --name-only "$base" "$GITHUB_SHA" -- server/ android_client/ desktop_client/ scripts/ .github/workflows/publish.yml)
             if [[ -n "$changed_files" ]]; then publish_image=true; fi
           fi
           # PR 保留检查，手动运行保留强制发布；无应用改动的 push 跳过全部后续步骤。
@@ -56,7 +59,7 @@ jobs:
         if: steps.scope.outputs.should_check == 'true'
         id: inputs
         env:
-          ANDROID_INPUTS: ${{ hashFiles('android_client/**', 'server/src/main/resources/web/**', 'scripts/package-app-update.py') }}
+          ANDROID_INPUTS: ${{ hashFiles('android_client/**', 'server/src/main/resources/web/**', 'scripts/package-app-update.py', 'scripts/fixtures/**') }}
           RUST_INPUTS: ${{ hashFiles('server/Cargo.*', 'server/src/**/*.rs', 'server/.cargo/**', 'server/build.rs', 'server/rust-toolchain*', '.cargo/**', 'rust-toolchain*') }}
           WORKFLOW_INPUTS: ${{ hashFiles('.github/workflows/publish.yml') }}
           APK_VARIANT: ${{ steps.scope.outputs.publish_image == 'true' && 'release' || 'debug' }}
@@ -239,10 +242,44 @@ jobs:
             server/app-update/latest.apk
             server/app-update/latest.json
           if-no-files-found: error
+  build_windows_and_check:
+    name: Build Windows client
+    needs: build_apk_and_check
+    if: needs.build_apk_and_check.outputs.should_check == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop_client/target
+          key: windows-client-${{ runner.os }}-${{ hashFiles('desktop_client/Cargo.lock', 'desktop_client/**', 'server/src/main/resources/web/**', 'scripts/fixtures/**', '.github/workflows/publish.yml') }}
+          restore-keys: windows-client-${{ runner.os }}-
+      - name: Check protocol and build portable executable
+        run: |
+          cargo +stable test --locked --manifest-path desktop_client/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +stable build --locked --release --manifest-path desktop_client/Cargo.toml --features custom-protocol
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/package-desktop-update.py --source desktop_client/target/release/cyber-room.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/package-desktop-update.py --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v6
+        with:
+          name: desktop-update
+          path: |
+            server/desktop-update/latest.exe
+            server/desktop-update/latest.json
+          if-no-files-found: error
   publish:
     name: Publish ${{ matrix.arch }}
     if: needs.build_apk_and_check.outputs.publish_image == 'true'
-    needs: build_apk_and_check
+    needs: [build_apk_and_check, build_windows_and_check]
     strategy:
       fail-fast: false
       matrix:
@@ -261,6 +298,10 @@ jobs:
         with:
           name: app-update
           path: server/app-update
+      - uses: actions/download-artifact@v7
+        with:
+          name: desktop-update
+          path: server/desktop-update
       - name: Lowercase image name
         shell: bash
         env:
@@ -304,6 +345,9 @@ jobs:
           python3 -c 'import json,sys; actual=json.load(open(sys.argv[1])); expected=json.load(open("server/app-update/latest.json")); assert all(actual[k]==v for k,v in expected.items())' "$RUNNER_TEMP/version.json"
           curl --fail --silent http://127.0.0.1:18880/game.js | cmp - server/src/main/resources/web/game.js
           curl --fail --silent 'http://127.0.0.1:18880/api/app/latest.apk?versionCode=0' | cmp - server/app-update/latest.apk
+          curl --fail --silent http://127.0.0.1:18880/api/desktop/version > "$RUNNER_TEMP/desktop-version.json"
+          python3 -c 'import json,sys; actual=json.load(open(sys.argv[1])); expected=json.load(open("server/desktop-update/latest.json",encoding="utf-8")); assert all(actual[k]==v for k,v in expected.items())' "$RUNNER_TEMP/desktop-version.json"
+          curl --fail --silent http://127.0.0.1:18880/api/desktop/latest.exe | cmp - server/desktop-update/latest.exe
       - name: Publish verified architecture tags
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

@@ -30,6 +30,8 @@ public final class UdpSession implements AutoCloseable {
     }
     public synchronized WireProtocol.Packet decrypt(byte[] packet,int length)throws GeneralSecurityException,IOException{
         if(closed||length<45||length>MAX_PACKET)return null;
+        // Reject another peer's nonce prefix before allocating and parsing its entire frame.
+        for(int i=0;i<4;i++)if(packet[WireProtocol.HEADER_SIZE+i]!=receivePrefix[i])return null;
         WireProtocol.Frame frame=WireProtocol.decode(Arrays.copyOf(packet,length));if(!frame.encrypted)return null;
         byte[] payload=frame.payload(),nonce=Arrays.copyOf(payload,12);
         if(!MessageDigest.isEqual(Arrays.copyOf(nonce,4),receivePrefix))return null;

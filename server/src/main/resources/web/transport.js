@@ -1,7 +1,7 @@
 // 赛博房间公共帧与会话。普通正文 JSON；rawBody 支持任意字节。
 export const encoder=new TextEncoder(),decoder=new TextDecoder('utf-8',{fatal:true});
 export function id(){return Array.from(crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,'0')).join('');}
-const reserved=new Set(['op','requestId','roomId','to','from','ok','error']);
+const reserved=new Set(['op','requestId','roomId','to','from','ok','error','grant']);
 export function controlBytes(control={}){
   if(control instanceof Uint8Array){parseControl(control);return control;}
   if(typeof control==='string'){const bytes=encoder.encode(control);parseControl(bytes);return bytes;}
@@ -12,7 +12,7 @@ export function parseControl(bytes){
   if(bytes.length>4096 || (text && !text.endsWith('\n')))throw Error('控制头无效');
   if(text)for(const line of text.slice(0,-1).split('\n')){
     const colon=line.indexOf(':'),key=line.slice(0,colon),value=line.slice(colon+1);
-    if(colon<1 || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(key) || /[\r\n\0]/.test(value) || (reserved.has(key)&&key in fields))throw Error('控制头无效');
+    if(colon<1 || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(key) || /[\r\n\0]/.test(value) || ((reserved.has(key)||key==='discard'||key==='maxAgeMs')&&key in fields))throw Error('控制头无效');
     fields[key]=value;
   }
   return fields;
@@ -36,22 +36,25 @@ export function object(bytes){const v=JSON.parse(decoder.decode(bytes));if(!v||t
 export function base64(bytes){let s='';for(let i=0;i<bytes.length;i+=8192)s+=String.fromCharCode(...bytes.subarray(i,i+8192));return btoa(s);}
 export function unbase64(s){return Uint8Array.from(atob(s),c=>c.charCodeAt(0));}
 export const native=globalThis.NativeRoom||null;
+export async function nativeCall(name,...args){if(!native?.[name])return undefined;return await native[name](...args);}
 export function settings(){try{return native?JSON.parse(native.settings()):{};}catch{return {};}}
 export function storageGet(key,fallback=null){try{const text=localStorage.getItem(key);return text?JSON.parse(text):fallback;}catch{return fallback;}}
 export function storageSet(key,value){try{localStorage.setItem(key,JSON.stringify(value));return true;}catch{return false;}}
 export const errors={SESSION_EXPIRED:'连接身份已过期',ROOM_NOT_FOUND:'房间已解散',NOT_HOST:'只有房主可以操作',TARGET_UNAVAILABLE:'对方暂时不在线',TIMEOUT:'房主没有及时回应',LIMIT_EXCEEDED:'请求过多，请稍后重试',SERVER_BUSY:'服务器繁忙',INVALID_ARGUMENT:'请求参数无效'};
 export class RoomClient{
   constructor(callbacks={}){
-    this.callbacks=callbacks;this.pending=new Map();this.ready=false;this.enabled=false;this.generation=0;this.peerReady=new Set();this.peerLatency=new Map();
+    this.callbacks=callbacks;this.pending=new Map();this.ready=false;this.enabled=false;this.generation=0;this.peerReady=new Set();this.peerLatency=new Map();this.peerQuality=new Map();
     if(native)globalThis.addEventListener('native-room',event=>this.nativeEvent(event.detail));
   }
   identityKey(){const s=settings();return 'cyber.identity.'+(native?s.transport+'://'+s.host+':'+s.port:location.host);}
+  get compatibilityError(){const capabilities=this.identity?.capabilities;return Array.isArray(capabilities)&&['room-sync','room-broadcast','host-grant'].every(c=>capabilities.includes(c))?'':'服务器缺少新版房间授权与广播能力，请升级配套服务端后重连';}
+  requireCompatible(){if(!this.ready)throw Error('连接正在恢复');if(this.compatibilityError)throw Object.assign(Error(this.compatibilityError),{code:'INCOMPATIBLE_SERVER'});}
   connect(){
     this.enabled=true;clearTimeout(this.retry);
     if(this.connecting||this.ready)return;
     this.connecting=true;this.identity=storageGet(this.identityKey(),{});const generation=++this.generation;
     this.callbacks.status?.('正在连接…');this.started=Date.now();
-    if(native){native.connect(JSON.stringify(this.identity));}
+    if(native){nativeCall('connect',JSON.stringify(this.identity)).catch(()=>this.finish('连接失败，请检查服务器'));}
     else{
       const url=new URL('/ws',location.href);url.protocol=url.protocol==='https:'?'wss:':'ws:';
       const socket=this.socket=new WebSocket(url);socket.binaryType='arraybuffer';
@@ -69,6 +72,7 @@ export class RoomClient{
     else if(e.type==='peer'){
       if(e.ready)this.peerReady.add(e.peerId);else this.peerReady.delete(e.peerId);
       if(e.ready&&Number.isFinite(e.latency))this.peerLatency.set(e.peerId,e.latency);else this.peerLatency.delete(e.peerId);
+      this.peerQuality.set(e.peerId,e);
       this.callbacks.path?.();
     }else if(e.type==='peerPacket'){
       try{const m=decode(unbase64(e.data));m.control.from=e.peerId;this.callbacks.message?.(m);}catch{}
@@ -98,7 +102,7 @@ export class RoomClient{
   }
   sendPacket(kind,headers,body){return this.sendBytes(packet(kind,headers,body));}
   sendBytes(bytes){
-    if(native){try{return native.send(base64(bytes));}catch{return false;}}
+    if(native){try{return nativeCall('send',base64(bytes)).catch(()=>false);}catch{return false;}}
     if(!this.socket||this.socket.readyState!==1||this.socket.bufferedAmount>1048576)return false;
     try{this.socket.send(bytes);return true;}catch{return false;}
   }
@@ -108,20 +112,20 @@ export class RoomClient{
     return new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{this.pending.delete(requestId);reject(Error('请求超时'));},op===102?32000:10000);
       this.pending.set(requestId,{resolve,reject,timer});
-      try{if(!this.sendPacket(16,{op,requestId,...headers},body))throw Error('发送失败');}
-      catch(e){clearTimeout(timer);this.pending.delete(requestId);reject(e);}
+      Promise.resolve(this.sendPacket(16,{op,requestId,...headers},body)).then(sent=>{if(!sent)throw Error('发送失败');}).catch(e=>{clearTimeout(timer);this.pending.delete(requestId);reject(e);});
     });
   }
-  async createRoom({roomType,name}){return object((await this.request(100,{roomType,name})).rawBody);}
+  async createRoom({roomType,name,locked=false}){return object((await this.request(100,{roomType,name,locked})).rawBody);}
+  async roomSync(roomId,change={}){return object((await this.request(103,{roomId,...change})).rawBody);}
   async listRooms({roomType}){
     let after,rooms=[];
     do{const result=object((await this.request(101,{roomType,...(after?{after}:{})})).rawBody);rooms.push(...result.rooms);after=result.next;}while(after&&rooms.length<10000);
     return rooms;
   }
   joinRoom(roomId,body){return this.request(102,body,{roomId});}
-  replyJoin(request,body){return this.sendPacket(18,{op:102,requestId:request.control.requestId,roomId:request.control.roomId,to:request.control.from,ok:1},body);}
+  replyJoin(request,body){return this.sendPacket(18,{op:102,requestId:request.control.requestId,roomId:request.control.roomId,to:request.control.from,ok:1,grant:body.allowed?1:0},body);}
   leaveRoom(roomId){return this.request(104,{roomId});}
-  sendTo(roomId,to,headers,body,path='auto'){
+  async sendTo(roomId,to,headers,body,path='auto'){
     if(!this.ready)return false;
     if(!/^[a-f0-9]{32}$/.test(roomId)||!/^[a-f0-9]{32}$/.test(to))throw Error('路由标识无效');
     const extension=controlBytes(headers),fields=parseControl(extension);
@@ -129,11 +133,18 @@ export class RoomClient{
     const route=encoder.encode('roomId:'+roomId+'\nto:'+to+'\n'),control=new Uint8Array(route.length+extension.length);
     control.set(route);control.set(extension,route.length);
     if(path!=='relay'&&native&&this.peerReady.has(to)){
-      try{if(native.sendPeer(to,base64(packet(64,control,body))))return true;}catch{}
+      try{const frame=packet(64,control,body);if(frame.length<=1100&&await nativeCall('sendPeer',to,base64(frame)))return true;}catch{}
     }
     if(path==='direct')return false;
     const op=encoder.encode('op:200\n'),relay=new Uint8Array(op.length+control.length);relay.set(op);relay.set(control,op.length);
     return this.sendPacket(16,relay,body);
+  }
+  broadcast(roomId,targets,headers,body){
+    if(!this.ready||Array.isArray(targets)&&targets.length===0)return false;
+    if(!/^[a-f0-9]{32}$/.test(roomId)||targets?.some(t=>!/^[a-f0-9]{32}$/.test(t)))throw Error('路由标识无效');
+    const fields=parseControl(controlBytes(headers));if([...reserved].some(k=>k in fields))throw Error('扩展控制头不能覆盖路由字段');
+    if(fields.discard==='1'&&this.socket?.bufferedAmount>16384)return false;
+    return this.sendPacket(16,{op:201,roomId,...(targets?{to:[...new Set(targets)].join(',')}:{}),...fields},body);
   }
   tick(){
     const now=Date.now();
@@ -144,13 +155,14 @@ export class RoomClient{
   }
   finish(reason){
     if(!this.connecting&&!this.ready&&!this.socket)return;
+    clearTimeout(this.retry);this.retry=null;
     this.ready=this.connecting=false;++this.generation;clearInterval(this.timer);clearTimeout(this.retry);
     const socket=this.socket;this.socket=null;if(socket){socket.onclose=socket.onerror=socket.onmessage=socket.onopen=null;socket.close();}
-    if(native)native.disconnect();
+    if(native)nativeCall('disconnect').catch(()=>{});
     this.clearPeers();for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(Error(reason));}this.pending.clear();
     this.callbacks.closed?.(reason);
-    if(this.enabled)this.retry=setTimeout(()=>this.connect(),3000);
+    if(this.enabled){const generation=this.generation;this.retry=setTimeout(()=>{if(this.enabled&&this.generation===generation)this.connect();},3000);}
   }
-  disconnect(){this.enabled=false;this.finish('已断开连接');}
-  clearPeers(){this.peerReady.clear();this.peerLatency.clear();if(native)native.closePeers();}
+  disconnect(){this.enabled=false;clearTimeout(this.retry);this.retry=null;this.finish('已断开连接');}
+  clearPeers(){this.peerReady.clear();this.peerLatency.clear();this.peerQuality.clear();if(native)nativeCall('closePeers').catch(()=>{});}
 }

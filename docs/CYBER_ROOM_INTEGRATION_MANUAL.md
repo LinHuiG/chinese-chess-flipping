@@ -1,10 +1,14 @@
 # 赛博房间接入手册
 
-2026-10-13，基础协议 v3，已实现并完成本地 TCP/WS 互通、UDP 帧和转发检查。与旧 v2 不兼容。App 更新接口另见 [协议索引](PROTOCOL.md)。本手册只规定通信基础，不规定游戏、文件、直播或其他客户端业务协议。
+2026-10-14，基础协议 v3，现行客户端/服务端版本 0.8.1。已实现并完成本地 TCP/WS 互通、UDP 帧和转发检查，与旧 v2 不兼容。App 更新接口另见 [协议索引](PROTOCOL.md)。本手册只规定通信基础，不规定游戏、文件、直播或其他客户端业务协议。
+
+0.8.0 增加 ROOM_SYNC(103)、BROADCAST(201) 和 JOIN 控制字段 grant。17 字节 v3 外壳与握手不变，服务端和客户端需配套升级；旧客户端缺少 grant 的批准回复会被拒绝。设计依据见 [广播方案](ROOM_BROADCAST_PLAN.md)，实际跨端接口见 [实现契约](WATCH_ROOM_IMPLEMENTATION.md)。
+
+0.8.1 在 READY 成功正文增加通用能力声明，让客户端在建房、入房前识别不支持 103/201/grant 的旧服；不增加握手消息或业务专用功能号。
 
 ## 1 基础服务的边界
 
-Rust 只提供七个基础功能：创建房间、查询房间、加入房间、退出房间、关闭房间、定向转发、UDP 地址发现。入房接口负责把申请转给房主，再把房主结果返回申请者；房主决定是否允许，服务端不解析裁决正文或维护正式业务成员。房主身份对应创建房间的客户端，权限、踢人及功能内容由客户端实现。
+Rust 提供九个基础功能：创建、查询、加入、同步授权、退出、关闭、定向转发、指定广播和 UDP 地址发现。房主决定是否允许入房，服务端只记录房主声明的通用路由授权、关联代次与锁标记，不解析裁决正文、密码或玩法。路由授权不代替客户端正式成员及业务权限。
 
 客户端可以自行扩展控制头；转发时保留扩展字段的原始字节和顺序，正文同样原样转发。Rust 不读取 type、messageId、游戏序号、文件偏移、媒体格式等业务字段。普通客户端正文可以用 JSON，大数据直接用二进制。
 
@@ -39,7 +43,7 @@ myField:any:value
 - 每行第一个冒号分隔 key 和 value，其余冒号保留。每行包括最后一行都以 LF 结束，不接受 CRLF 或空行。
 - key 使用 ASCII 字母、数字、下划线或连字符，以字母开头，大小写敏感。value 使用 UTF-8，不允许 CR、LF、NUL，不做转义或空白裁剪。基础字段再按各自格式检查。
 - 空控制区长度为 0，不写 `{}`。正文紧接控制区，没有额外空行；只依据长度分区。
-- 基础保留控制字段是 op、requestId、roomId、to、from、ok、error，不得重复或被客户端用作其他含义。其他字段属于客户端扩展，可重复，原始顺序保留，由客户端自行解释。clientId、token 是接入正文的字段，不额外占用控制字段名。
+- 基础保留控制字段是 op、requestId、roomId、to、from、ok、error、grant，不得重复或被客户端用作其他含义。通用投递字段 discard、maxAgeMs 也不得重复。其他字段属于客户端扩展，可重复，原始顺序保留，由客户端自行解释。clientId、token 是接入正文的字段，不额外占用控制字段名。
 - 转发器只扫描必要的基础字段，不把扩展字段整理成 JSON 或重新编码。仍检查整体语法、UTF-8 和长度边界；性能收益未做实测。
 
 ID 文本统一为随机 128 位值的 32 个小写十六进制字符，token 为独立随机 256 位恢复凭据的无填充 Base64url。示例中的 R、C1、Q 为便于阅读的占位符。功能号用十进制文本，ok 用 1/0。服务端管理正文是 UTF-8 JSON 对象，客户端转发正文不解析。
@@ -70,11 +74,13 @@ kind 是“包的大类”，op 是“调用服务端的哪项功能”。客户
 | 1 | 客户端 → 服务端 | 1 / 0，KEY_REQUEST | 空 | 空 |
 | 2 | 服务端 → 客户端 | 2 / 0，SERVER_HELLO | 空 | 32 字节服务端随机量 + P-256 DER 公钥 |
 | 3 | 客户端 → 服务端 | 3 / 0，CONNECT | 空 | 客户端协商资料 + 加密的身份申请，布局见下 |
-| 4 | 服务端 → 客户端 | 4 / 1，READY | ok；失败时加 error | 成功为 clientId、token；失败为 {} |
+| 4 | 服务端 → 客户端 | 4 / 1，READY | ok；失败时加 error | 成功为 clientId、token、serverVersion、capabilities；失败为 {} |
 
 READY 就是“建立或恢复连接身份”的结果，不是再发起一次握手。客户端收到 ok:1 才进入可用状态；服务端拒绝恢复时返回 ok:0/error:SESSION_EXPIRED。READY 无须再确认，也不代表房主批准入房。协商三条、结果一条，总共四条应用层消息；握手按连接顺序执行，不另加 requestId。
 
-第三条不明文发送对称密钥。沿用 ECDH 时，客户端发送自己的临时公钥，双方派生相同的方向密钥；无需额外传输 AES 密钥。身份申请 JSON：新建为 `{}`，恢复为 `{"clientId":"C1","token":"恢复凭据"}`。READY 成功正文为 `{"clientId":"C1","token":"恢复凭据"}`。
+第三条不明文发送对称密钥。沿用 ECDH 时，客户端发送自己的临时公钥，双方派生相同的方向密钥；无需额外传输 AES 密钥。身份申请 JSON：新建为 `{}`，恢复为 `{"clientId":"C1","token":"恢复凭据"}`。0.8.1 READY 成功正文为 `{"clientId":"C1","token":"恢复凭据","serverVersion":"0.8.1","capabilities":["room-sync","room-broadcast","host-grant"]}`。
+
+serverVersion 为展示用字符串，capabilities 为字符串数组：room-sync 表示支持 103，room-broadcast 表示支持 201，host-grant 表示按房主 JOIN grant 维护通用路由授权。客户端检查数组包含全部三项，不以版本号代替能力检查；缺少任意一项时显示“服务器缺少新版房间授权与广播能力，请升级配套服务端后重连”，不发起 CREATE/JOIN，也不恢复房间或探测调用 103。身份握手成功、列表可读取不等于支持新版房间。INCOMPATIBLE_SERVER 是共享客户端本地错误，不是服务端返回的握手错误。原生桥保留 READY 原始正文，不丢弃新增字段。
 
 第三条正文为 `helloLength(u16) | clientHello | nonce(12) | 密文 | tag(16)`。clientHello 是 32 字节客户端随机量加 DER 公钥，helloLength 为这两项的总字节数；密文的明文是身份申请 JSON。这是握手专用混合正文：flags=0 表示不使用整帧加密外壳，身份申请本身仍必须加密。服务端先读客户端公钥派生密钥，认证通过后才读取恢复凭据。
 
@@ -94,12 +100,14 @@ WS 跳过 1/2，直接交换 CONNECT(3)/READY(4)，flags=0，正文直接使用�
 
 | op | 名称 | 必填参数 | 可选参数 | 成功正文 |
 | --- | --- | --- | --- | --- |
-| 100 | CREATE | 正文 roomType、name | 无 | roomId |
+| 100 | CREATE | 正文 roomType、name | 正文 locked（布尔，默认 false） | roomId |
 | 101 | LIST | 正文 roomType | 正文 after | rooms、next |
 | 102 | JOIN 加入房间 | 控制区 roomId；正文为入房申请 | 客户端扩展字段 | 控制区 roomId、from（房主 ID）；正文为房主裁决 |
+| 103 | ROOM_SYNC | 正文 roomId | 房主可传 locked、revoke（ID 数组） | roomId、hostId、version、locked、members |
 | 104 | LEAVE 退出房间 | 正文 roomId | 无 | {} |
 | 105 | CLOSE | 正文 roomId | 无 | {} |
 | 200 | SEND | 控制区 roomId、to；正文任意字节 | 控制区 requestId、客户端扩展字段 | 有 requestId 时回 {} 表示入队 |
+| 201 | BROADCAST | 控制区 roomId；正文任意字节 | 控制区 to、requestId、discard、maxAgeMs、扩展字段 | 有 requestId 时回 delivered、dropped 入队计数 |
 | 210 | UDP_DISCOVER | 正文 {} | 无 | ticket、port |
 
 字段类型：roomType/name 为字符串，roomId/hostId/to/after 为 ID 字符串；rooms 是数组，next 是 ID 字符串或 null；ticket 为 16 个随机字节的 32 个十六进制字符，port 为 JSON 整数。SEND 的 requestId 可省略，不要求每个数据块都等待服务端应答。
@@ -124,10 +132,10 @@ WS 跳过 1/2，直接交换 CONNECT(3)/READY(4)，flags=0，正文直接使用�
 | --- | --- | --- | --- |
 | 加入者 → 服务端 | 16 | op:102、requestId:Q、roomId:R | 入房申请 |
 | 服务端 → 房主 | 16 | 原控制区，追加 from:C1 | 原样申请 |
-| 房主 → 服务端 | 18 | op:102、requestId:Q、roomId:R、to:C1、ok:1 | 裁决结果 |
+| 房主 → 服务端 | 18 | op:102、requestId:Q、roomId:R、to:C1、ok:1、grant:1 或 grant:0 | 裁决结果 |
 | 服务端 → 加入者 | 18 | 原回复控制区，追加 from:C0 | 原样裁决 |
 
-流程：服务端根据 roomId 找到房主 → 为申请者建立通信关联并转发申请 → 房主检查后回复 → 服务端核对回复来自该房主、对应本次请求，再转回加入者。服务端只维护有界的临时请求对应关系，不自行批准，也不读取正文中的 allowed。转发两方向都禁止发送者自带 from，统一由服务端追加可信来源；输入控制区最多 4058 字节，原有行及正文不改。
+流程：服务端根据 roomId 找到房主 → 建立临时通信关联并转发申请 → 房主检查后回复 → 服务端核对来源及请求对应关系，按 grant:1 登记通用路由授权及随机 association，或按 grant:0 清理未授权的临时关联，再转回加入者。不自行批准，不读取正文中的 allowed；房主 SDK 保证 grant 与 allowed 一致。未批准的临时关联不能 SEND/BROADCAST 或读取授权快照。转发两方向禁止自带 from，统一追加可信来源；输入控制区最多 4058 字节。
 
 客户端框架的普通裁决正文：允许为 `{"allowed":true}`，拒绝为 `{"allowed":false,"reason":"功能不匹配"}`；allowed 为布尔值、拒绝原因 reason 为可选字符串，其他所需信息由房主在正文或扩展控制字段中补充。服务端不固定这些业务字段，也可透传以后由两端协商的加密正文。
 
@@ -135,13 +143,19 @@ WS 跳过 1/2，直接交换 CONNECT(3)/READY(4)，flags=0，正文直接使用�
 
 房间不存在、房主不可达或请求超时由服务端返回 kind=18/op=102、原 requestId、ok:0/error，正文 `{}`；这类失败不冒充房主回复。超时和主动 LEAVE 会结束本次请求，迟到回复丢弃；客户端框架未获准时释放通信关联。通信关联不等于正式成员，收信端仍以房主当前授权判断消息是否合法。
 
+### 103 ROOM_SYNC 授权同步
+
+已获准客户端发送 `{"roomId":"R"}`，返回 `{"roomId":"R","hostId":"C0","version":1,"locked":false,"members":[{"clientId":"C0","association":"随机ID","online":true}]}`。members 只含房主明确授权者，最多 16 个通用路由成员；六人限制属于观影客户端规则。短时离线仍保留授权，online 只表示当前连接情况。
+
+房主可附加 `locked:true/false` 更新目录锁标记，或 `revoke:["C1"]` 撤销路由权限；不可撤销自身。参数全部校验后才修改。服务端不接收密码，列表中的 locked 仅供展示。授权变化和锁标记变化增加 version；退出后重新批准会产生新 association。恢复时客户端按快照校对身份与代次，不能把曾经入房当作永久许可。撤权通知使用 op:104、正文含 revoked:true。
+
 ### 104 LEAVE 退出房间
 
 输入：`{"roomId":"R"}`。响应：`{}`。
 
 流程：客户端调用 LEAVE → 服务端取消该客户端在此房间尚未完成的入房请求并移除通信关联 → 返回成功，并向房主推送 kind=18/op=104、正文 `{"roomId":"R","clientId":"C1"}` → 房主更新本地成员状态。通知无 requestId。关联已经不存在时可视为已退出；离开不需要房主批准。
 
-只能退出自己，不能把别人的 clientId 作为参数。房主调用 LEAVE 时执行 CLOSE 的关闭流程。房主踢人仍是客户端消息，其他客户端立即停止接受被踢者的业务消息，不依赖被踢者愿意调用 LEAVE。
+只能退出自己，不能把别人的 clientId 作为参数。房主调用 LEAVE 时执行 CLOSE；房主撤销别人的通信权限使用 103 的 revoke。其他客户端也必须停止接受被撤权者的业务消息和 UDP，不依赖被踢者自愿 LEAVE。
 
 ### 105 CLOSE 关闭房间
 
@@ -165,7 +179,7 @@ myField:any:value
 
 正文可以是 JSON，也可以是文件块或任何其他字节。服务端只执行以下流程：
 
-1. 根据当前连接找到发送者 clientId；检查发送者与目标都已接通 roomId。
+1. 根据当前连接找到发送者 clientId；检查发送者与目标都得到房主对 roomId 的路由授权。
 2. 读取 to，找到目标连接；不解读 type、myField 或正文。
 3. 将固定头 kind 改为 64，在原控制区末尾追加 `from:真实发送者clientId\n`。原控制区所有已有行，包括 op、to、requestId 和扩展字段，都保持原字节、原顺序。
 4. 重新计算外层长度，按目标链路加密并投递。正文逐字节保持原样。
@@ -190,6 +204,16 @@ P2P 使用同类客户端控制头和正文，具体直连适配器可以直接�
 
 没有 requestId 时，目标不可达等投递失败不返回关联结果；需要反馈的调用必须携带 requestId。无论是否有回执，服务端都执行同样的路由和资源校验。入队成功不等于对端已经执行。
 
+### 201 BROADCAST 指定目标广播
+
+kind=16，控制区 `op:201`、`roomId:R`，正文任意字节。省略 to 表示当前全部获准成员，排除自己；`to:C1,C2` 表示逗号分隔名单，重复 ID 去重；显式空 `to:` 表示零目标。指定目标必须全部属于当前授权名单且不含发送者；非法名单整体拒绝，不先发送一部分。原控制字节、正文及可信 from 的处理沿用 SEND，正文不会按目标重编码。
+
+每个接收目标独立尝试入队，离线或慢端不阻塞其他人。有 requestId 时返回 `{"delivered":2,"dropped":1}`，delivered 只表示成功入队，不代表送达、播放或执行。接收端仍收到 kind=64、op:201。P2P 已选择的成员从 to 中排除，剩余成员一次广播；全直连时不发送空广播。
+
+SEND/广播均可带 `discard:1` 和 `maxAgeMs:200`；时间范围 1–2000 ms，必须成对合法。默认可靠投递不带这些字段，或仅带 discard:0。时限从服务端接收时计算，写出前过期会丢弃；不能撤回已经写入 TCP 的字节。客户端还需限制自己的发送队列和播放时效。输出同时绑定发送与接收者的 association，退出/撤权后的旧排队消息不进入重新加入的关联。
+
+当前服务端每连接输出队列 64 项，保留 8 项控制空间；发送者仍受每秒 1,000 次请求及按扇出计费的 4 MiB/s 字节预算限制。无名单广播按最多 16 份保守计费。超额返回限制错误或丢弃无回执请求，不因正常超额直接关闭来源连接；慢端写超时可独立断开。资源限制是当前实现参数，不是服务质量承诺。
+
 ### 210 UDP_DISCOVER 地址发现
 
 输入：`{}`。响应：`{"ticket":"登记票据","port":8888}`。发现服务器地址沿用当前服务端地址，port 是它的 UDP 端口，不是对端端口。
@@ -204,11 +228,15 @@ UDP 登记同样使用第 2 节的 17 字节固定头，kind=16、flags=0，控�
 
 PING/PONG 为 kind=32/33，控制区为空，正文例如 `{"pingId":"P","sentAtMs":1000}`，服务端原样回显。沿用 5 秒心跳、最后有效心跳后 60 秒回收会话的基线；宽限内可以凭 clientId/token 恢复，过期释放关联，房主过期则关闭其房间。服务端重启后会话和房间失效。
 
+0.8.1 共享客户端恢复房间时先核对服务端能力，再读取 103 授权快照。网络超时等暂时失败不清除本地房间，在连接仍可用时 3 秒后重试；ROOM_NOT_FOUND、NOT_MEMBER、SESSION_EXPIRED 或返回的 hostId 改变表示原房间已失效。成员重新 JOIN 时被明确拒绝也退出。收到 SESSION_EXPIRED 的失败 READY 后清除旧凭据并重新申请身份；随后重复的原生 closed 通知不得取消已经安排的重连，用户主动 disconnect 则必须取消。
+
+所有恢复和房间操作的异步结果须核对发起时的 roomId、身份、连接代次和本地房间生命周期；离房、换房或更换身份后到达的旧成功/失败结果均不能覆盖或清空新房间。这些是客户端本地检查，不为帧增加字段。媒体播放器及 Emby 结束通知的清理顺序另见 [跨端实现契约](WATCH_ROOM_IMPLEMENTATION.md#媒体与下载)，Rust 不解析该业务正文。
+
 服务端内部需要有界连接数、包大小、速率和排队字节；不把每个内部计数和配额都变成协议字段。慢接收或资源不足时拒绝入队，不无限缓存文件。UDP 分片缓存和拥塞控制由客户端负责。
 
 普通管理请求用 requestId 关联结果。CREATE、LEAVE、CLOSE 可在当前会话短期缓存中返回重复请求的原结果；缓存有界，不提供永久恰好执行一次保证。建房结果不确定时先检查列表，不换新编号反复盲建。JOIN 按（roomId、申请者 clientId、requestId）对应申请与房主回复：相同未完成请求只保留一份，房主处理重试时以当前授权状态答复，不把历史同意当作永久入房许可。SEND 不按 requestId 去重，业务去重由客户端扩展字段决定。
 
-失败响应控制区含原 op、requestId、ok:0、error，正文 `{}`。主要错误包括 INVALID_ARGUMENT、SESSION_EXPIRED、ROOM_NOT_FOUND、NOT_HOST、TARGET_UNAVAILABLE、TIMEOUT、LIMIT_EXCEEDED、SERVER_BUSY；管理 JSON 格式错误可能返回解析错误文本。非法 TCP 帧或握手关闭连接，非法 UDP 数据报丢弃。
+失败响应控制区含原 op、requestId、ok:0、error，正文 `{}`。主要错误包括 INVALID_ARGUMENT、SESSION_EXPIRED、ROOM_NOT_FOUND、NOT_MEMBER、NOT_HOST、TARGET_UNAVAILABLE、TIMEOUT、LIMIT_EXCEEDED、SERVER_BUSY；管理 JSON 格式错误可能返回解析错误文本。非法 TCP 帧或握手关闭连接，非法 UDP 数据报丢弃。
 
 ## 7 客户端入房流程示例
 

@@ -221,7 +221,15 @@ pub fn control(bytes: &[u8]) -> Result<std::collections::BTreeMap<&str, &str>> {
         }
         if matches!(
             key,
-            "op" | "requestId" | "roomId" | "to" | "from" | "ok" | "error"
+            "op" | "requestId"
+                | "roomId"
+                | "to"
+                | "from"
+                | "ok"
+                | "error"
+                | "grant"
+                | "discard"
+                | "maxAgeMs"
         ) && fields.insert(key, value).is_some()
         {
             return Err("Duplicate reserved field".into());

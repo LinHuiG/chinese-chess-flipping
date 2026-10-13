@@ -1,5 +1,7 @@
 import {GameRoom,GAMES} from './room.js';
-import {native,settings,storageGet,storageSet} from './transport.js';
+import {native,nativeCall,settings,storageGet,storageSet} from './transport.js';
+import {WatchRoom} from './watch.js';
+import {installChoices} from './choices.js';
 import {SHOP,THEMES} from './miner.js';
 import {MinerView,Sound} from './miner-view.js';
 const $=id=>document.getElementById(id),sound=new Sound(),view=new MinerView($('mine-canvas'),sound);
@@ -8,8 +10,10 @@ if(native&&storageGet('cyber.preferences.migrated')!==true){
   storageSet('cyber.nickname',initial.nickname||'');storageSet('cyber.sound',initial.sound!==false);storageSet('cyber.motion',initial.motion!==false);storageSet('cyber.preferences.migrated',true);
 }
 sound.enabled=storageGet('cyber.sound',true);view.motion=storageGet('cyber.motion',!matchMedia('(prefers-reduced-motion: reduce)').matches);
-let status='正在连接…',rooms=[],listing=false,selected=-1,boardKey='',lastMove=-1,lastRound='',lastRoom='',toastTimer,confirmResolve,resultSound='';
-const game=new GameRoom({changed:render,lobby:refresh,notice:toast,status:s=>{status=s;render();},network:network,native:nativeEvent});
+let status='正在连接…',rooms=[],listing=false,lobbyVersion=0,selected=-1,boardKey='',lastMove=-1,lastRound='',lastRoom='',toastTimer,confirmResolve,resultSound='';
+let watch,embyContext='',embyRequest=0,passwordContext='';
+const game=new GameRoom({changed:render,lobby:refresh,notice:toast,status:s=>{status=s;render();},network:network,native:nativeEvent,module:e=>watch?.event(e).catch(fail),kick:async p=>{if(await confirm('移出成员？','将 '+p.name+' 移出房间。','移出'))game.kick(p.id).catch(fail);}});
+watch=new WatchRoom(game,toast);
 const pieceNames={1:['','帅','仕','相','车','马','炮','兵'],'-1':['','将','士','象','车','马','炮','卒']};
 function label(value){return value===99?'✦':value?pieceNames[Math.sign(value)][Math.abs(value)]:'';}
 function element(tag,className,text){const e=document.createElement(tag);if(className)e.className=className;if(text!==undefined)e.textContent=text;return e;}
@@ -36,14 +40,20 @@ function network(){
       value=direct.length?'直连 '+direct.length+'/'+peers.length+' · '+Math.max(...direct.map(p=>game.client.peerLatency.get(p.id)||0))+' ms':'服务器转发'+(game.latency!==undefined?' · '+game.latency+' ms':'');
     }else value='已连接'+(game.latency!==undefined?' · '+game.latency+' ms':'');
   }
+  if(connected&&game.client.compatibilityError)value=game.client.compatibilityError;
   text('status',value);$('network').title=value;
 }
 function render(){
   const r=game.room,connected=game.client.ready;
+  if(passwordContext&&!game.current(passwordContext)){$('password-dialog').close();passwordContext='';}
+  if(embyContext&&(!game.current(embyContext)||!game.host||r?.game!=='watch')){embyContext='';embyRequest++;$('emby-dialog').close();$('emby-user').value='';$('emby-password').value='';$('emby-share').checked=false;$('emby-items').replaceChildren();}
+  if(r||!connected)lobbyVersion++;
   $('offline').hidden=connected||!!r;$('lobby').hidden=!connected||!!r;
   $('waiting').hidden=!r||r.status!=='waiting';
   $('chess').hidden=!r||r.game!=='chess'||r.status==='waiting';
   $('miner').hidden=!r||r.game!=='miner'||r.status==='waiting';
+  $('watch').hidden=!r||r.game!=='watch';
+  document.querySelectorAll('.room-password').forEach(b=>b.hidden=!game.host);
   $('reconnecting').hidden=connected||!r;text('offline-message',status);network();
   $('download-app').hidden=!!native;
   if(!r){view.setState(null);text('hello',game.nickname+'，欢迎回来');renderSave();return;}
@@ -51,7 +61,7 @@ function render(){
   if(lastRound!==r.round){selected=-1;boardKey='';lastMove=-1;lastRound=r.round;}
   if(r.status==='waiting'){view.setState(null);renderWaiting();}
   else if(r.game==='chess'){view.setState(null);renderChess();}
-  else renderMine();
+  else if(r.game==='miner')renderMine();else{view.setState(null);watch?.render();}
 }
 function renderSave(){
   const save=storageGet('cyber.miner.save');$('continue-mine').hidden=!save||save.phase==='complete';
@@ -78,24 +88,29 @@ function renderWaiting(){
   text('waiting-guide-title',r.game==='chess'?'一翻一落，皆有机会':'各自淘金，一起冒险');
   text('waiting-guide',r.game==='chess'?'翻开暗棋决定阵营，移动明棋与对手过招。每一步，都有新的可能。':'每人操作一只爪子，抓到的宝物分别计分。每关结束用积分添置装备，共闯 1,000 关。');
 }
+function lobbyVisible(){return game.client.ready&&!game.room&&!game.background&&!document.hidden&&!$('lobby').hidden;}
 async function refresh(){
-  if(!game.client.ready||game.room||listing)return;listing=true;$('refresh').disabled=true;
-  try{rooms=await game.list();renderRooms();}catch(e){fail(e);}finally{listing=false;$('refresh').disabled=false;}
+  if(!lobbyVisible()||listing)return;listing=true;$('refresh').disabled=true;
+  const version=lobbyVersion,generation=game.client.generation;
+  try{const next=await game.list();if(lobbyVisible()&&version===lobbyVersion&&generation===game.client.generation){rooms=next;renderRooms();}}
+  catch(e){if(lobbyVisible()&&version===lobbyVersion&&generation===game.client.generation)fail(e);}
+  finally{listing=false;$('refresh').disabled=false;}
 }
 function renderRooms(){
   $('rooms').replaceChildren();const filter=$('room-filter').value,visible=rooms.filter(r=>filter==='all'||r.game===filter);
   $('empty').hidden=visible.length>0;
   for(const r of visible){
     const b=element('button','room-card'),copy=element('span');
-    b.append(element('span','room-symbol '+r.game,r.game==='chess'?'棋':'◆'));
-    copy.append(element('strong','',r.name),element('small','',GAMES[r.game].name+' · '+r.roomId.slice(0,8)));
+    b.append(element('span','room-symbol '+r.game,r.game==='chess'?'棋':r.game==='watch'?'▶':'◆'));
+    copy.append(element('strong','',(r.locked?'🔒 ':'')+r.name),element('small','',GAMES[r.game].name+' · '+r.roomId.slice(0,8)));
     b.append(copy,element('span','arrow','→'));
-    b.onclick=async()=>{b.disabled=true;try{await game.join(r);}catch(e){fail(e);}finally{b.disabled=false;}};$('rooms').append(b);
+    b.onclick=async()=>{b.disabled=true;try{const password=r.locked?await passwordPrompt(false):'';if(password!==null)await game.join(r,r.game,false,password);}catch(e){fail(e);}finally{b.disabled=false;}};$('rooms').append(b);
   }
 }
 function openCreate(type,load=false){
+  try{game.client.requireCompatible();}catch(e){fail(e);return;}
   $('create-game').value=type;$('load-save').checked=load;$('room-name').value=game.nickname+'的'+GAMES[type].name;
-  text('create-error','');createOptions();$('create-dialog').showModal();
+  $('create-password').value='';text('create-error','');createOptions();$('create-dialog').showModal();
 }
 function createOptions(){
   const mine=$('create-game').value==='miner',save=storageGet('cyber.miner.save');
@@ -110,7 +125,7 @@ $('load-save').onchange=createOptions;
 $('create-form').onsubmit=async e=>{
   e.preventDefault();const name=$('room-name').value.trim();if(!name){text('create-error','给房间起个名字吧');return;}
   $('create-submit').disabled=true;
-  try{await game.create($('create-game').value,name,+$('capacity').value,$('create-game').value==='miner'&&$('load-save').checked);$('create-dialog').close();}
+  try{await game.create($('create-game').value,name,+$('capacity').value,$('create-game').value==='miner'&&$('load-save').checked,$('create-password').value);$('create-dialog').close();}
   catch(e){text('create-error',e.message);}finally{$('create-submit').disabled=false;}
 };
 $('refresh').onclick=refresh;$('room-filter').onchange=renderRooms;$('connect').onclick=()=>game.client.connect();
@@ -206,7 +221,7 @@ function clock(){
   if(game.room.game==='chess'){
     const ms=s.remaining<0?-1:Math.max(0,s.remaining-(game.room.status==='playing'?elapsed:0)),sec=Math.ceil(ms/1000);
     text('clock',ms<0?'不限时':String(Math.floor(sec/60)).padStart(2,'0')+':'+String(sec%60).padStart(2,'0'));
-  }else text('mine-clock',Math.ceil(Math.max(0,s.time-(s.phase==='playing'&&!s.paused?elapsed/1000:0))));
+  }else if(game.room.game==='miner')text('mine-clock',Math.ceil(Math.max(0,s.time-(s.phase==='playing'&&!s.paused?elapsed/1000:0))));
 }
 $('drop').onclick=()=>act({type:'DROP'});$('bomb').onclick=()=>act({type:'BOMB'});
 $('pause').onclick=()=>act({type:'PAUSE'});$('save').onclick=()=>game.saveMine();
@@ -239,7 +254,7 @@ $('settings-save').onclick=async()=>{
     if(!next.host||next.host.length>253||/[\/\\\s?#]/.test(next.host)||!Number.isInteger(next.port)||next.port<1||next.port>65535){toast('请填写有效地址和端口');return;}
     const old=settings();changed=next.host!==old.host||next.port!==old.port||next.transport!==old.transport;
     if(changed&&game.room){if(!await confirm('切换服务器？','当前房间将退出；房主退出会解散房间，矿工进度会保存。','保存并切换'))return;try{await game.leave();}catch(e){fail(e);return;}}
-    if(changed)game.client.disconnect();native.configure(JSON.stringify(next));
+    if(changed)game.client.disconnect();await nativeCall('configure',JSON.stringify(next));
   }
   storageSet('cyber.nickname',next.nickname);storageSet('cyber.sound',next.sound);storageSet('cyber.motion',next.motion);
   sound.enabled=next.sound;view.motion=next.motion;$('settings-dialog').close();
@@ -247,18 +262,41 @@ $('settings-save').onclick=async()=>{
   if(changed){game.reset();game.client.connect();}render();toast('设置已保存');
 };
 $('check-update').onclick=()=>native?.checkUpdate();$('install-update').onclick=()=>native?.installUpdate();
-function nativeEvent(e){if(e.type==='update'){text('update-status',e.status);text('version',e.version||'0.7.2');$('check-update').disabled=e.busy;$('install-update').hidden=!e.ready;}}
+function nativeEvent(e){if(e.type==='update'){text('update-status',e.status);text('version',e.version||'0.8.1');$('check-update').disabled=e.busy;$('install-update').hidden=!e.ready;}}
 window.cyberBack=async()=>{
   const dialog=document.querySelector('dialog[open]');if(dialog){if(dialog.id==='confirm-dialog')finishConfirm(false);else dialog.close();return;}
   if(game.room)await leave();else if(native)native.exitApp();
 };
 window.cyberDisconnect=async()=>{try{if(game.room)await game.leave();}catch{game.checkpoint();}game.client.disconnect();render();};
 document.addEventListener('visibilitychange',()=>{
+  if(document.hidden)lobbyVersion++;
+  game.background=document.hidden;watch.event({type:document.hidden?'background':'foreground'}).catch(fail);
   if(document.hidden&&game.host&&game.room?.game==='miner'&&game.engine){game.engine.paused=true;game.saveMine(false);game.publish();}
   else if(!document.hidden){render();if(game.room&&!game.host&&game.client.ready)act({type:'SYNC'});else refresh();}
 });
 window.addEventListener('pagehide',()=>{if(game.host&&game.room?.game==='miner')game.saveMine(false);game.checkpoint();});
 document.addEventListener('pointerdown',()=>sound.unlock(),{once:true});
-$('download-app').hidden=!!native;text('version',initial.version||'0.7.2');
-setInterval(clock,200);setInterval(()=>{if(!document.hidden)refresh();},10000);
-render();game.client.connect();
+$('download-app').hidden=!!native;text('version',initial.version||'0.8.1');
+window.addEventListener('native-room',event=>{if(event.detail.type==='background')lobbyVersion++;});
+setInterval(clock,200);setInterval(refresh,5000);
+let passwordResolve;
+function passwordPrompt(edit){
+  passwordContext=edit?game.context():'';
+  if(passwordResolve)passwordResolve(null);text('password-title',edit?'设置房间密码':'输入房间密码');text('password-hint',edit?'留空取消密码，修改不影响现有成员。':'房主确认密码后即可加入。');$('password-value').value='';$('password-dialog').showModal();return new Promise(resolve=>passwordResolve=resolve);
+}
+$('password-form').onsubmit=e=>{e.preventDefault();const resolve=passwordResolve;passwordResolve=null;const value=$('password-value').value;$('password-dialog').close();resolve?.(value);};
+$('password-dialog').addEventListener('close',()=>{passwordResolve?.(null);passwordResolve=null;passwordContext='';$('password-value').value='';});
+document.querySelectorAll('.room-password').forEach(b=>b.onclick=async()=>{const context=game.context(),password=await passwordPrompt(true);if(password!==null&&game.current(context))game.setPassword(password).catch(fail);});
+$('watch-join').onclick=async()=>{try{if(!watch.nativePlayer&&watch.url)watch.video.play().catch(()=>{});await watch.voice.listen();await watch.follow(true);if(!game.host)await watch.send('watch.sync',{},game.room.hostId);}catch(e){fail(e);}};
+$('watch-mic').onclick=()=>watch.voice.microphoneToggle().catch(fail);
+$('watch-play').onclick=()=>watch.control(!game.room?.playback?.playing).catch(fail);
+$('watch-seek').onchange=()=>watch.control(!!game.room?.playback?.playing,+$('watch-seek').value).catch(fail);
+$('watch-fullscreen').onclick=()=>{const stage=$('watch-stage');if(document.fullscreenElement)document.exitFullscreen?.();else stage.requestFullscreen?.().catch(fail);};
+$('danmaku-form').onsubmit=e=>{e.preventDefault();watch.sendChat($('danmaku-text').value).catch(fail);$('danmaku-text').value='';};
+$('watch-source').onclick=()=>{if(!watch.active||!game.host)return;embyContext=game.context();$('emby-base').value=storageGet('cyber.emby.base','');$('emby-dialog').showModal();};
+function showMovies(items){const context=embyContext;$('emby-items').replaceChildren();for(const item of items){const b=element('button','room-card',item.Name+(item.ProductionYear?' · '+item.ProductionYear:''));b.onclick=async()=>{if(!game.current(context))return;b.disabled=true;try{await watch.select(item);if(game.current(context))$('emby-dialog').close();}catch(e){if(game.current(context))text('emby-error',e.message);}finally{b.disabled=false;}};$('emby-items').append(b);}if(!items.length)text('emby-error','没有找到电影或剧集');}
+$('emby-form').onsubmit=async e=>{e.preventDefault();const context=embyContext,request=++embyRequest;if(!game.current(context)||!game.host)return;$('emby-connect').disabled=true;text('emby-error','正在连接…');try{const items=await watch.login($('emby-base').value.trim(),$('emby-user').value.trim(),$('emby-password').value,$('emby-share').checked);if(!game.current(context)||request!==embyRequest)return;showMovies(items);$('emby-password').value='';text('emby-error','已连接，选择一部电影。');}catch(e){if(game.current(context)&&request===embyRequest)text('emby-error',e.message);}finally{if(request===embyRequest)$('emby-connect').disabled=false;}};
+$('emby-dialog').addEventListener('close',()=>{embyRequest++;watch.loginOperation=(watch.loginOperation||0)+1;$('emby-connect').disabled=false;$('emby-password').value='';});
+$('emby-search-form').onsubmit=async e=>{e.preventDefault();if($('emby-connect').disabled)return;const context=embyContext,request=++embyRequest;text('emby-error','');try{const items=await watch.search($('emby-search').value.trim());if(game.current(context)&&request===embyRequest)showMovies(items);}catch(e){if(game.current(context)&&request===embyRequest)text('emby-error',e.message);}};
+if(!native)fetch('/api/desktop/version').then(r=>r.json()).then(v=>{$('download-desktop').hidden=!v.available;}).catch(()=>{});
+installChoices();render();game.client.connect();

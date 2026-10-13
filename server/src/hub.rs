@@ -1,4 +1,4 @@
-//! 通用房间目录、会话与原样转发；不保存玩法或正式成员审批。
+//! 通用目录、房主声明的通信授权与原样转发；不解析准入或媒体正文。
 use crate::{json, wire};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use bytes::Bytes;
@@ -28,6 +28,8 @@ pub struct Output {
     pub kind: u8,
     pub header: Bytes,
     pub body: Bytes,
+    pub expires: Option<Instant>,
+    pub route: Option<(String, String, String, String, String)>,
 }
 pub struct Peer {
     pub tx: mpsc::Sender<Output>,
@@ -35,6 +37,10 @@ pub struct Peer {
 }
 impl Peer {
     fn send(&self, output: Output) -> Result<(), String> {
+        // 可丢弃流量不能耗尽控制消息的保留队列。
+        if output.expires.is_some() && self.tx.capacity() <= 8 {
+            return Err("DROPPED".into());
+        }
         self.tx.try_send(output).map_err(|_| {
             let _ = self.close.send(true);
             "TARGET_UNAVAILABLE".into()
@@ -57,12 +63,16 @@ struct User {
     memo: VecDeque<Memo>,
     rate_at: Instant,
     rate_count: usize,
+    rate_bytes: usize,
 }
 struct Room {
     name: String,
     room_type: String,
     host: String,
     routes: HashSet<String>,
+    authorized: BTreeMap<String, String>,
+    version: u64,
+    locked: bool,
 }
 pub struct Hub {
     users: HashMap<String, User>,
@@ -76,6 +86,20 @@ fn ensure(ok: bool, error: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(error.into())
+    }
+}
+fn delivery_deadline(f: &BTreeMap<&str, &str>) -> Result<Option<Instant>, String> {
+    match f.get("discard") {
+        Some(&"1") => {
+            let ms = f
+                .get("maxAgeMs")
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or("INVALID_ARGUMENT")?;
+            ensure((1..=2000).contains(&ms), "INVALID_ARGUMENT")?;
+            Ok(Some(Instant::now() + Duration::from_millis(ms)))
+        }
+        Some(&"0") | None if !f.contains_key("maxAgeMs") => Ok(None),
+        _ => Err("INVALID_ARGUMENT".into()),
     }
 }
 impl Hub {
@@ -109,6 +133,7 @@ impl Hub {
                     memo: VecDeque::new(),
                     rate_at: Instant::now(),
                     rate_count: 0,
+                    rate_bytes: 0,
                 },
             );
             user
@@ -133,7 +158,7 @@ impl Hub {
         Ok((
             user.clone(),
             u.generation,
-            json!({"clientId":user,"token":u.token}),
+            json!({"clientId":user,"token":u.token,"serverVersion":env!("CARGO_PKG_VERSION"),"capabilities":["room-sync","room-broadcast","host-grant"]}),
         ))
     }
     pub fn active(&self, user: &str, generation: u64) -> bool {
@@ -158,7 +183,13 @@ impl Hub {
             .get(user)
             .and_then(|u| u.peer.as_ref())
             .ok_or("TARGET_UNAVAILABLE")?
-            .send(Output { kind, header, body })
+            .send(Output {
+                kind,
+                header,
+                body,
+                expires: None,
+                route: None,
+            })
     }
     fn result(&self, user: &str, op: &str, request: &str, result: Result<Value, String>) -> Output {
         let (suffix, body) = match result {
@@ -169,6 +200,8 @@ impl Hub {
             kind: 18,
             header: Bytes::from(format!("op:{op}\nrequestId:{request}\n{suffix}")),
             body: encoded(&body),
+            expires: None,
+            route: None,
         };
         let _ = self.send(
             user,
@@ -201,7 +234,7 @@ impl Hub {
         let op = fields.get("op").copied().ok_or("INVALID_ARGUMENT")?;
         let request = fields.get("requestId").copied().unwrap_or("");
         ensure(
-            (op == "200" && request.is_empty()) || json::hex_id(request),
+            (matches!(op, "200" | "201") && request.is_empty()) || json::hex_id(request),
             "INVALID_ARGUMENT",
         )?;
         ensure(
@@ -212,18 +245,40 @@ impl Hub {
         if u.rate_at.elapsed() >= Duration::from_secs(1) {
             u.rate_at = Instant::now();
             u.rate_count = 0;
+            u.rate_bytes = 0;
         }
         u.rate_count += 1;
-        ensure(u.rate_count <= 1000, "LIMIT_EXCEEDED")?;
+        let fanout = if op == "201" {
+            fields
+                .get("to")
+                .map(|s| s.split(',').count())
+                .unwrap_or(16)
+                .min(16)
+        } else {
+            1
+        };
+        u.rate_bytes = u
+            .rate_bytes
+            .saturating_add((body.len() + c.len() + 17) * fanout);
+        if u.rate_count > 1000 || u.rate_bytes > 4 * 1024 * 1024 {
+            if !request.is_empty() {
+                self.result(user, op, request, Err("LIMIT_EXCEEDED".into()));
+            }
+            return Ok(());
+        }
         let result = match (kind, op) {
             (16, "200") => self.relay(user, &fields, c, body).map(|_| Some(json!({}))),
+            (16, "201") => self.broadcast(user, &fields, c, body).map(Some),
             (16, "102") => self.join(user, &fields, c, body).map(|_| None),
             (18, "102") => {
                 self.join_reply(user, &fields, c, body)?;
                 return Ok(());
             }
             (16, _) => {
-                let hash: [u8; 32] = Sha256::digest([op.as_bytes(), body.as_ref()].concat()).into();
+                let mut digest = Sha256::new();
+                digest.update(op.as_bytes());
+                digest.update(&body);
+                let hash: [u8; 32] = digest.finalize().into();
                 if let Some(m) = self.users[user]
                     .memo
                     .iter()
@@ -239,7 +294,7 @@ impl Hub {
                 }
                 let result = json::object(&body).and_then(|q| self.command(user, op, &q));
                 let output = self.result(user, op, request, result);
-                if matches!(op, "100" | "104" | "105") {
+                if matches!(op, "100" | "103" | "104" | "105") {
                     let memo = &mut self.users.get_mut(user).unwrap().memo;
                     if memo.len() >= 32 {
                         memo.pop_front();
@@ -287,6 +342,9 @@ impl Hub {
                         room_type: room_type.to_owned(),
                         host: user.to_owned(),
                         routes,
+                        authorized: BTreeMap::from([(user.to_owned(), id())]),
+                        version: 1,
+                        locked: q["locked"].as_bool().unwrap_or(false),
                     },
                 );
                 self.users.get_mut(user).unwrap().rooms.insert(rid.clone());
@@ -303,7 +361,7 @@ impl Hub {
                 let rooms: Vec<_> = iter
                     .by_ref()
                     .take(64)
-                    .map(|(id, r)| json!({"roomId":id,"name":r.name,"hostId":r.host}))
+                    .map(|(id, r)| json!({"roomId":id,"name":r.name,"hostId":r.host,"locked":r.locked}))
                     .collect();
                 let next = if iter.next().is_some() {
                     rooms.last().unwrap()["roomId"].clone()
@@ -311,6 +369,49 @@ impl Hub {
                     Value::Null
                 };
                 Ok(json!({"rooms":rooms,"next":next}))
+            }
+            "103" => {
+                let rid = json::field(q, "roomId", 32)?;
+                let room = self.rooms.get(rid).ok_or("ROOM_NOT_FOUND")?;
+                ensure(room.authorized.contains_key(user), "NOT_MEMBER")?;
+                if q.get("locked").is_some() || q.get("revoke").is_some() {
+                    ensure(room.host == user, "NOT_HOST")?;
+                    if let Some(locked) = q.get("locked") {
+                        ensure(locked.is_boolean(), "INVALID_ARGUMENT")?;
+                    }
+                    if let Some(revoke) = q.get("revoke") {
+                        let targets = revoke.as_array().ok_or("INVALID_ARGUMENT")?;
+                        ensure(targets.len() <= 16, "LIMIT_EXCEEDED")?;
+                        let ids: Vec<String> = targets
+                            .iter()
+                            .map(|v| {
+                                v.as_str()
+                                    .filter(|v| json::hex_id(v) && *v != user)
+                                    .map(str::to_owned)
+                                    .ok_or("INVALID_ARGUMENT".to_owned())
+                            })
+                            .collect::<Result<_, _>>()?;
+                        for target in ids {
+                            self.leave(&target, rid);
+                            self.event(
+                                &target,
+                                104,
+                                json!({"roomId":rid,"clientId":target,"revoked":true}),
+                            );
+                        }
+                    }
+                    if let Some(locked) = q.get("locked") {
+                        let locked = locked.as_bool().ok_or("INVALID_ARGUMENT")?;
+                        let room = self.rooms.get_mut(rid).unwrap();
+                        room.locked = locked;
+                        room.version += 1;
+                    }
+                }
+                let room = &self.rooms[rid];
+                let members: Vec<_> = room.authorized.iter().map(|(id, association)| json!({"clientId":id,"association":association,"online":self.users.get(id).is_some_and(|u|u.peer.is_some())})).collect();
+                Ok(
+                    json!({"roomId":rid,"hostId":room.host,"version":room.version,"locked":room.locked,"members":members}),
+                )
             }
             "104" => {
                 let rid = json::field(q, "roomId", 32)?;
@@ -379,7 +480,25 @@ impl Hub {
             return Ok(());
         };
         if at.elapsed() < Duration::from_secs(30) {
-            self.forward(user, target, 18, c, body)?;
+            let granted = f.get("grant") == Some(&"1");
+            ensure(
+                matches!(f.get("grant"), Some(&"0" | &"1")),
+                "INVALID_ARGUMENT",
+            )?;
+            if granted {
+                let room = self.rooms.get_mut(rid).unwrap();
+                if !room.authorized.contains_key(target) {
+                    ensure(room.authorized.len() < 16, "LIMIT_EXCEEDED")?;
+                    room.authorized.insert(target.into(), id());
+                    room.version += 1;
+                }
+            }
+            // The applicant may disconnect while the host is deciding. Its slow
+            // socket cannot invalidate the host connection or other members.
+            let _ = self.forward(user, target, 18, c, body);
+            if !granted && !self.rooms[rid].authorized.contains_key(target) {
+                self.leave(target, rid);
+            }
         }
         self.pending.remove(&key);
         Ok(())
@@ -395,10 +514,100 @@ impl Hub {
         let to = *f.get("to").ok_or("INVALID_ARGUMENT")?;
         let room = self.rooms.get(rid).ok_or("ROOM_NOT_FOUND")?;
         ensure(
-            room.routes.contains(user) && room.routes.contains(to),
+            room.authorized.contains_key(user) && room.authorized.contains_key(to),
             "TARGET_UNAVAILABLE",
         )?;
-        self.forward(user, to, 64, c, body)
+        self.deliver(user, to, rid, delivery_deadline(f)?, c, body)
+    }
+    fn deliver(
+        &self,
+        user: &str,
+        target: &str,
+        rid: &str,
+        expires: Option<Instant>,
+        c: &[u8],
+        body: Bytes,
+    ) -> Result<(), String> {
+        ensure(c.len() <= 4058, "LIMIT_EXCEEDED")?;
+        let room = &self.rooms[rid];
+        let mut header = Vec::with_capacity(c.len() + 38);
+        header.extend_from_slice(c);
+        header.extend_from_slice(format!("from:{user}\n").as_bytes());
+        let output = Output {
+            kind: 64,
+            header: header.into(),
+            body,
+            expires,
+            route: Some((
+                rid.into(),
+                user.into(),
+                room.authorized[user].clone(),
+                target.into(),
+                room.authorized[target].clone(),
+            )),
+        };
+        self.users
+            .get(target)
+            .and_then(|u| u.peer.as_ref())
+            .ok_or("TARGET_UNAVAILABLE")?
+            .send(output)
+    }
+    fn broadcast(
+        &self,
+        user: &str,
+        f: &BTreeMap<&str, &str>,
+        c: &[u8],
+        body: Bytes,
+    ) -> Result<Value, String> {
+        let rid = *f.get("roomId").ok_or("INVALID_ARGUMENT")?;
+        let room = self.rooms.get(rid).ok_or("ROOM_NOT_FOUND")?;
+        ensure(room.authorized.contains_key(user), "NOT_MEMBER")?;
+        let expires = delivery_deadline(f)?;
+        ensure(c.len() <= 4058, "LIMIT_EXCEEDED")?;
+        let targets: HashSet<&str> = match f.get("to") {
+            Some(&"") => HashSet::new(),
+            Some(list) => {
+                ensure(list.len() <= 16 * 33, "LIMIT_EXCEEDED")?;
+                list.split(',').collect()
+            }
+            None => room
+                .authorized
+                .keys()
+                .map(String::as_str)
+                .filter(|id| *id != user)
+                .collect(),
+        };
+        ensure(
+            targets.len() <= 16
+                && targets
+                    .iter()
+                    .all(|id| json::hex_id(id) && *id != user && room.authorized.contains_key(*id)),
+            "INVALID_ARGUMENT",
+        )?;
+        // A slow/offline target must not interrupt delivery to healthy room members.
+        let mut delivered = 0;
+        let mut dropped = 0;
+        for target in targets {
+            if self
+                .deliver(user, target, rid, expires, c, body.clone())
+                .is_ok()
+            {
+                delivered += 1
+            } else {
+                dropped += 1
+            }
+        }
+        Ok(json!({"delivered":delivered,"dropped":dropped}))
+    }
+    pub fn output_valid(&self, output: &Output) -> bool {
+        if output.expires.is_some_and(|at| Instant::now() >= at) {
+            return false;
+        }
+        output.route.as_ref().is_none_or(|(rid, from, fa, to, ta)| {
+            self.rooms.get(rid).is_some_and(|r| {
+                r.authorized.get(from) == Some(fa) && r.authorized.get(to) == Some(ta)
+            })
+        })
     }
     fn leave(&mut self, user: &str, rid: &str) {
         if self.rooms.get(rid).is_some_and(|r| r.host == user) {
@@ -410,6 +619,9 @@ impl Hub {
             u.rooms.remove(rid);
         }
         if let Some(r) = self.rooms.get_mut(rid) {
+            if r.authorized.remove(user).is_some() {
+                r.version += 1;
+            }
             if r.routes.remove(user) {
                 let host = r.host.clone();
                 self.event(&host, 104, json!({"roomId":rid,"clientId":user}));
@@ -506,6 +718,13 @@ impl Hub {
         for key in old {
             self.pending.remove(&key);
             self.result(&key.1, "102", &key.2, Err("TIMEOUT".into()));
+            if self
+                .rooms
+                .get(&key.0)
+                .is_some_and(|r| !r.authorized.contains_key(&key.1))
+            {
+                self.leave(&key.1, &key.0);
+            }
         }
         for u in self.users.values_mut() {
             if u.ticket
@@ -535,6 +754,148 @@ mod tests {
         let (id, generation, identity) = h.register(&json!({}), Peer { tx, close }).unwrap();
         (id, generation, identity, rx, closed)
     }
+    fn admit(h: &mut Hub, host: &str, guest: &str, rid: &str) {
+        let request = id();
+        h.handle(
+            guest,
+            16,
+            format!("op:102\nrequestId:{request}\nroomId:{rid}\n").as_bytes(),
+            Bytes::from_static(b"opaque request"),
+        )
+        .unwrap();
+        h.handle(
+            host,
+            18,
+            format!("op:102\nrequestId:{request}\nroomId:{rid}\nto:{guest}\ngrant:1\nok:1\n")
+                .as_bytes(),
+            Bytes::from_static(b"opaque approval"),
+        )
+        .unwrap();
+    }
+    #[test]
+    fn ready_declares_required_generic_capabilities() {
+        let shared = Hub::new(8888);
+        let mut h = shared.lock().unwrap();
+        let (_, _, identity, _, _) = peer(&mut h);
+        assert_eq!(identity["serverVersion"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            identity["capabilities"],
+            json!(["room-sync", "room-broadcast", "host-grant"])
+        );
+    }
+    #[test]
+    fn broadcast_authorization_targets_expiry_and_rejoin_generation() {
+        let shared = Hub::new(8888);
+        let mut h = shared.lock().unwrap();
+        let (host, _, _, mut hr, _) = peer(&mut h);
+        let (a, _, _, mut ar, _) = peer(&mut h);
+        let (b, _, _, mut br, _) = peer(&mut h);
+        let rid = h
+            .command(
+                &host,
+                "100",
+                &json!({"name":"room","roomType":"x","locked":true}),
+            )
+            .unwrap()["roomId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        admit(&mut h, &host, &a, &rid);
+        admit(&mut h, &host, &b, &rid);
+        while hr.try_recv().is_ok() {}
+        while ar.try_recv().is_ok() {}
+        while br.try_recv().is_ok() {}
+        let c = format!("op:201\nroomId:{rid}\nto:{b},{b}\ndiscard:1\nmaxAgeMs:200\ncustom:a:b\n");
+        let fields = wire::control(c.as_bytes()).unwrap();
+        assert_eq!(
+            h.broadcast(&a, &fields, c.as_bytes(), Bytes::from_static(&[0, 255]))
+                .unwrap()["delivered"],
+            1
+        );
+        let old = br.try_recv().unwrap();
+        assert!(h.output_valid(&old));
+        assert_eq!(old.body.as_ref(), &[0, 255]);
+        assert!(old.header.ends_with(format!("from:{a}\n").as_bytes()));
+        assert!(hr.try_recv().is_err());
+        let empty = format!("op:201\nroomId:{rid}\nto:\n");
+        assert_eq!(
+            h.broadcast(
+                &a,
+                &wire::control(empty.as_bytes()).unwrap(),
+                empty.as_bytes(),
+                Bytes::new()
+            )
+            .unwrap()["delivered"],
+            0
+        );
+        let bad = format!("op:201\nroomId:{rid}\ndiscard:1\nmaxAgeMs:no\n");
+        assert!(h
+            .broadcast(
+                &a,
+                &wire::control(bad.as_bytes()).unwrap(),
+                bad.as_bytes(),
+                Bytes::new()
+            )
+            .is_err());
+        assert!(br.try_recv().is_err());
+        assert!(h
+            .command(
+                &host,
+                "103",
+                &json!({"roomId":rid,"revoke":[b],"locked":"invalid"})
+            )
+            .is_err());
+        assert!(h.rooms[&rid].authorized.contains_key(&b));
+        h.leave(&b, &rid);
+        assert!(!h.output_valid(&old));
+        admit(&mut h, &host, &b, &rid);
+        assert!(!h.output_valid(&old));
+        let mut expired = old.clone();
+        expired.expires = Some(Instant::now() - Duration::from_millis(1));
+        assert!(!h.output_valid(&expired));
+        let membership = h.command(&host, "103", &json!({"roomId":rid})).unwrap();
+        assert_eq!(membership["members"].as_array().unwrap().len(), 3);
+    }
+    #[test]
+    fn pending_join_cannot_broadcast_or_survive_leave() {
+        let shared = Hub::new(8888);
+        let mut h = shared.lock().unwrap();
+        let (host, _, _, _hr, _) = peer(&mut h);
+        let (g, _, _, mut gr, _) = peer(&mut h);
+        let rid = h
+            .command(&host, "100", &json!({"name":"room","roomType":"x"}))
+            .unwrap()["roomId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let request = id();
+        h.handle(
+            &g,
+            16,
+            format!("op:102\nrequestId:{request}\nroomId:{rid}\n").as_bytes(),
+            Bytes::new(),
+        )
+        .unwrap();
+        let c = format!("op:201\nroomId:{rid}\n");
+        assert!(h
+            .broadcast(
+                &g,
+                &wire::control(c.as_bytes()).unwrap(),
+                c.as_bytes(),
+                Bytes::new()
+            )
+            .is_err());
+        h.leave(&g, &rid);
+        h.handle(
+            &host,
+            18,
+            format!("op:102\nrequestId:{request}\nroomId:{rid}\nto:{g}\ngrant:1\n").as_bytes(),
+            Bytes::new(),
+        )
+        .unwrap();
+        assert!(!h.rooms[&rid].authorized.contains_key(&g));
+        assert!(gr.try_recv().is_err());
+    }
     #[test]
     fn opaque_admission_many_routes_and_host_leave() {
         let shared = Hub::new(8888);
@@ -563,7 +924,8 @@ mod tests {
             h.handle(
                 &host,
                 18,
-                format!("op:102\nrequestId:{req}\nroomId:{rid}\nto:{user}\nok:1\n").as_bytes(),
+                format!("op:102\nrequestId:{req}\nroomId:{rid}\nto:{user}\nok:1\ngrant:1\n")
+                    .as_bytes(),
                 Bytes::from_static(b"opaque decision"),
             )
             .unwrap();
@@ -657,8 +1019,8 @@ mod tests {
             wire::control(&rx.try_recv().unwrap().header).unwrap()["error"],
             "TIMEOUT"
         );
-        // Timeout cannot decide logical membership; a caller releases its own route.
-        assert!(h.rooms[&rid].routes.contains(&guest));
+        // Timed-out transport associations never become approved members.
+        assert!(!h.rooms[&rid].routes.contains(&guest));
         let info = h.command(&guest, "210", &json!({})).unwrap();
         let body = encoded(&json!({"clientId":guest,"ticket":info["ticket"]}));
         let frame = wire::plain(16, b"op:210\n", &body).unwrap();

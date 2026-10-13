@@ -11,6 +11,7 @@ COPY --from=build --chown=10001:10001 /workspace/target/release/chess-server /ap
 # 网页和 APK 在编译阶段之后复制，资源变更可直接复用已缓存的 Rust 程序。
 COPY --chown=10001:10001 src/main/resources/web /app/src/main/resources/web
 COPY --chown=10001:10001 app-update /app/app-update
+COPY --chown=10001:10001 desktop-update /app/desktop-update
 USER 10001:10001
 ENV CHESS_RESOURCE_DIR=/app TCP_PORT=8888 HTTP_PORT=80 UDP_PORT=8888 TCP_WORKER_THREADS=4
 EXPOSE 8888/tcp 80/tcp 8888/udp

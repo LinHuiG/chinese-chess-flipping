@@ -141,7 +141,7 @@ pub async fn tcp(mut stream: TcpStream, hub: Shared, key: Arc<SecretKey>) {
     else {
         return;
     };
-    let (tx, mut out) = mpsc::channel(32);
+    let (tx, mut out) = mpsc::channel(64);
     let (close, mut closed) = watch::channel(false);
     let registration = hub.lock().unwrap().register(&meta, Peer { tx, close });
     let (user, generation, identity) = match registration {
@@ -180,7 +180,6 @@ pub async fn tcp(mut stream: TcpStream, hub: Shared, key: Arc<SecretKey>) {
     });
     loop {
         tokio::select! {
-            biased;
             _=closed.changed()=>break,
             value=input.recv()=>{
                 let Some(Ok((kind,bytes,x)))=value else{break};
@@ -193,6 +192,7 @@ pub async fn tcp(mut stream: TcpStream, hub: Shared, key: Arc<SecretKey>) {
             value=out.recv()=>{
                 let Some(output)=value else{break};
                 if !hub.lock().unwrap().active(&user,generation){break;}
+                if !hub.lock().unwrap().output_valid(&output){continue;}
                 let Ok(frame)=send.encrypt(output.kind,&output.header,&output.body)else{break};
                 if write_tcp(&mut writer,&frame).await.is_err(){break;}
             }
@@ -251,7 +251,7 @@ async fn ws(mut socket: WebSocket, hub: Shared) {
         return;
     }
     let Ok(meta) = json::object(b) else { return };
-    let (tx, mut out) = mpsc::channel(32);
+    let (tx, mut out) = mpsc::channel(64);
     let (close, mut closed) = watch::channel(false);
     let registration = hub.lock().unwrap().register(&meta, Peer { tx, close });
     let (user, generation, identity) = match registration {
@@ -280,7 +280,6 @@ async fn ws(mut socket: WebSocket, hub: Shared) {
     }
     loop {
         tokio::select! {
-            biased;
             _=closed.changed()=>break,
             value=socket.recv()=>{
                 let bytes=match value{Some(Ok(Message::Binary(bytes)))=>bytes,Some(Ok(Message::Ping(_)|Message::Pong(_)))=>continue,_=>break};
@@ -293,6 +292,7 @@ async fn ws(mut socket: WebSocket, hub: Shared) {
             value=out.recv()=>{
                 let Some(output)=value else{break};
                 if !hub.lock().unwrap().active(&user,generation){break;}
+                if !hub.lock().unwrap().output_valid(&output){continue;}
                 if ws_send(&mut socket,output.kind,&output.header,&output.body).await.is_err(){break;}
             }
         }
@@ -301,6 +301,46 @@ async fn ws(mut socket: WebSocket, hub: Shared) {
 // 通用静态资源目录，不把游戏文件名编译进 Rust；拒绝目录穿越及根目录之外的链接。
 pub fn init_assets() -> std::io::Result<()> {
     std::fs::metadata(crate::resource_root().join("src/main/resources/web/index.html")).map(|_| ())
+}
+pub async fn desktop_version() -> Response {
+    let root = crate::resource_root().join("desktop-update");
+    let info = tokio::fs::read(root.join("latest.json"))
+        .await
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    match (info, tokio::fs::metadata(root.join("latest.exe")).await) {
+        (Some(mut info), Ok(meta))
+            if info["size"].as_u64() == Some(meta.len()) && info["versionName"].is_string() =>
+        {
+            info["available"] = json!(true);
+            info["url"] = json!("/api/desktop/latest.exe");
+            (
+                [
+                    ("content-type", "application/json"),
+                    ("cache-control", "no-cache"),
+                ],
+                info.to_string(),
+            )
+                .into_response()
+        }
+        _ => (
+            [("content-type", "application/json")],
+            "{\"available\":false}",
+        )
+            .into_response(),
+    }
+}
+pub async fn desktop_download() -> Response {
+    match tokio::fs::read(crate::resource_root().join("desktop-update/latest.exe")).await {
+        Ok(bytes) => Response::builder()
+            .header("content-type", "application/octet-stream")
+            .header("content-disposition", "attachment; filename=CyberRoom.exe")
+            .header("content-length", bytes.len())
+            .header("cache-control", "no-cache")
+            .body(Body::from(bytes))
+            .unwrap(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 pub async fn asset(uri: Uri, method: Method) -> Response {
     if method != Method::GET && method != Method::HEAD {
@@ -344,6 +384,6 @@ pub async fn asset(uri: Uri, method: Method) -> Response {
     };
     Response::builder().header("content-type",mime).header("content-length",bytes.len()).header("cache-control","no-cache")
         .header("x-content-type-options","nosniff").header("referrer-policy","same-origin")
-        .header("content-security-policy","default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+        .header("content-security-policy","default-src 'self'; connect-src 'self' ws: wss: https: http:; media-src 'self' blob: https: http:; img-src 'self' data: https: http:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
         .body(if method==Method::HEAD{Body::empty()}else{Body::from(bytes)}).unwrap()
 }

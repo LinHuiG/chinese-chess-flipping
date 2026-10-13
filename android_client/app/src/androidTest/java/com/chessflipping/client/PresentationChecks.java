@@ -25,21 +25,28 @@ public final class PresentationChecks extends Instrumentation{
         throw new AssertionError(condition+"; "+js("document.querySelector('#offline-message')?.textContent"));
     }
     private void select(String selector,String label)throws Exception{
-        JSONArray point=(JSONArray)js("(()=>{const r=document.querySelector('"+selector+"').getBoundingClientRect();return [(r.left+r.right)/2,(r.top+r.bottom)/2,innerWidth]})()");
+        JSONArray point=(JSONArray)js("(()=>{const s=document.querySelector('"+selector+"'),r=(s.nextElementSibling?.matches('.choice-trigger')?s.nextElementSibling:s).getBoundingClientRect();return [(r.left+r.right)/2,(r.top+r.bottom)/2,innerWidth]})()");
         int[] origin=new int[3];runOnMainSync(()->{service.web.getLocationOnScreen(origin);origin[2]=service.web.getWidth();});
         float scale=(float)(origin[2]/point.getDouble(2)),x=origin[0]+(float)point.getDouble(0)*scale,y=origin[1]+(float)point.getDouble(1)*scale;
         tap(x,y);
         long end=SystemClock.elapsedRealtime()+5000;
         while(SystemClock.elapsedRealtime()<end){
+            // Input injection can return before WebView dispatches the click. Recheck both
+            // presentation types on every pass instead of committing to the first snapshot.
+            Object option=js("(()=>{const b=[...document.querySelectorAll('dialog.choice-sheet[open] button.choice-option')].find(x=>!x.disabled&&x.textContent.replace(/\\s*✓\\s*$/,'').trim()==="+JSONObject.quote(label)+");if(!b)return null;const r=b.getBoundingClientRect(),s=getComputedStyle(b);if(r.width<=0||r.height<=0||s.visibility!=='visible')return null;return [(r.left+r.right)/2,(r.top+r.bottom)/2]})()");
+            if(option instanceof JSONArray){
+                JSONArray bounds=(JSONArray)option;
+                tap(origin[0]+(float)bounds.getDouble(0)*scale,origin[1]+(float)bounds.getDouble(1)*scale);return;
+            }
             AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();
             if(root!=null)for(AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText(label)){
-                if(label.contentEquals(node.getText()==null?"":node.getText())&&"android.widget.CheckedTextView".contentEquals(node.getClassName())){
+                if(node.isVisibleToUser()&&node.isEnabled()&&label.contentEquals(node.getText()==null?"":node.getText())&&"android.widget.CheckedTextView".contentEquals(node.getClassName())){
                     android.graphics.Rect bounds=new android.graphics.Rect();node.getBoundsInScreen(bounds);tap(bounds.centerX(),bounds.centerY());return;
                 }
             }
             SystemClock.sleep(100);
         }
-        throw new AssertionError("Native select popup missing: "+selector+" / "+label);
+        throw new AssertionError("Selection popup missing (custom/native): "+selector+" / "+label);
     }
     private void tap(float x,float y){
         long now=SystemClock.uptimeMillis();
@@ -71,9 +78,9 @@ public final class PresentationChecks extends Instrumentation{
             until("document.querySelector('#waiting')?.hidden===false");
             if(!String.valueOf(js("document.querySelector('#waiting-id').textContent")).contains("1/3"))throw new AssertionError("capacity");
             if(!Boolean.TRUE.equals(js("typeof NativeRoom.sendPeer==='function'")))throw new AssertionError("bridge");
-            runOnMainSync(()->getTargetContext().startService(new Intent(getTargetContext(),GameService.class).setAction("STOP")));
+            js("window.cyberDisconnect()");
             until("document.querySelector('#offline')?.hidden===false");
-            success=true;result.putString("stream","PASS: bundled WebView modules, native game/capacity select popups before and after Activity recreation, TCP handshake, 3-player room creation, leave and disconnect\n");
+            success=true;result.putString("stream","PASS: bundled WebView modules, shared choice sheets before and after Activity recreation, TCP handshake, 3-player room creation, leave and disconnect\n");
         }catch(Throwable e){result.putString("stream","FAIL: "+e+"\n");}
         finally{
             prefs.edit().putString("host",oldHost).putInt("port",oldPort).putString("transport",oldMode).commit();

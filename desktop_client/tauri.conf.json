@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "赛博房间",
+  "version": "0.8.1",
+  "identifier": "tech.tdcode.cyberroom",
+  "build": { "frontendDist": "../server/src/main/resources/web" },
+  "app": {
+    "windows": [],
+    "security": { "csp": "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; connect-src ipc: http://ipc.localhost https: http:; media-src 'self' blob: https: http:; object-src 'none'; frame-src 'none'; base-uri 'self'" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "shortDescription": "跨端游戏与同步观影",
+    "windows": { "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true } }
+  }
+}

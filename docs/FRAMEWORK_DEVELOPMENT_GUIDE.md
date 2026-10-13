@@ -1,18 +1,21 @@
 # 赛博房间客户端开发指南
 
-2026-10-13，协议 v3 / App 0.7.0。以下 API 对应仓库实际实现。逐个功能号、字段与数据流程见 [接入手册](CYBER_ROOM_INTEGRATION_MANUAL.md)。
+2026-10-13，协议 v3 / 客户端 0.8.0。以下 API 对应仓库实际实现。新增 grant/103/201 要求客户端与服务端配套升级。逐个功能号、字段与数据流程见 [接入手册](CYBER_ROOM_INTEGRATION_MANUAL.md)。
 
 ## 1 代码放在哪里
 
 | 文件 | 负责内容 |
 | --- | --- |
 | server/src/main/resources/web/transport.js | 公共帧、连接、请求关联、原样收发、NativeRoom 适配 |
-| server/src/main/resources/web/room.js | 本次两个游戏共用的房主准入、成员、准备、操作确认、恢复和 UDP 协商 |
+| server/src/main/resources/web/room.js | 游戏与观影共用的房主准入、授权同步、密码、成员、恢复和 UDP 协商 |
 | server/src/main/resources/web/game.js | 翻棋规则，暗棋真实身份只在房主 |
 | server/src/main/resources/web/miner.js | 矿工规则、种子地图、商店、存档 |
 | server/src/main/resources/web/miner-view.js | 原创 Canvas 绘制、动画、音效 |
-| server/src/main/resources/web/app.js | 大厅与两种游戏界面 |
+| server/src/main/resources/web/app.js | 大厅、游戏与观影界面 |
+| server/src/main/resources/web/watch.js、voice.js | Emby、播放同步、弹幕及语音控制；网页音频走 AudioWorklet |
 | android_client/.../client/GameService.java | 受限本地 WebView、原生 TCP/WS/UDP、设置与 App 更新 |
+| android_client/.../client/MediaController.java、VoiceEngine.java | 原生播放器、Emby 请求、采集/解码/混音及系统 AEC |
+| desktop_client/src/ | Windows Rust/Tauri 传输、Emby API、原生音频及系统 AEC；内嵌同一网页 |
 
 Android 构建直接把 web 目录作为本地 assets 打包，网页从同一目录提供资源。新增玩法更新这个客户端目录和 APK，不向 Rust 加入玩法分支。App 的包名保持不变，可用原签名覆盖升级。
 
@@ -130,13 +133,15 @@ await client.leaveRoom(roomId);
 await client.request(105, {roomId});
 ~~~
 
-sendTo 默认 path=auto：已建立的 Native UDP 直连优先，否则 SEND 中转。SDK 填路由字段，扩展头不可覆盖 op/requestId/roomId/to/from/ok/error。接收回调提供 kind、control、rawControl、rawBody；control 是便捷索引，重复扩展的所有原始行需从 rawControl 读取。
+sendTo 默认 path=auto：已建立的 Native UDP 直连优先；当前共享 SDK 只对不超过 1100 字节的完整帧尝试直连，大消息走 SEND。扩展头不可覆盖 op/requestId/roomId/to/from/ok/error/grant。接收回调提供 kind、control、rawControl、rawBody；重复扩展的原始行从 rawControl 读取。
+
+`await client.roomSync(roomId, {locked:true})` 更新锁标记并返回授权快照；只读取时省略第二个参数。`client.broadcast(roomId, [id1,id2], headers, bytes)` 一次提交指定目标，targets 为 undefined 表示全体获准者且排除自己，空数组不发送。通用转发正文由模块解释。原生语音直接使用此协议，不经逐帧 JavaScript/Base64，见 [实现契约](WATCH_ROOM_IMPLEMENTATION.md)。
 
 浏览器目前没有 WebRTC 直连适配，始终用 WS/WSS 中转。RoomClient 本身不自动批准对等端、交换密钥或建立 UDP；当前 GameRoom 在确认成员后负责该协商。新的模块可复用其 discover/setupPeers/peerSignal 流程，或实现自己的传输适配。
 
 基础 SEND 不去重也不做业务确认。GameRoom 的操作使用客户端 messageId：先直连，400 ms 未收到房主确认就经服务器重试；房主缓存最近 128 个结果，防止同次操作执行两遍。矿场快照为 10 Hz，seq 用于舍弃旧快照；这些字段只属于游戏模块。
 
-## 5 现有 Android UDP 适配
+## 5 Android 与 Windows UDP 适配
 
 原生桥接提供 udpRegister(clientId,ticket,port)、openPeer(JSON配置)、sendPeer(peerId,Base64明文帧)、closePeers。openPeer 参数：
 
@@ -160,20 +165,22 @@ sendTo 默认 path=auto：已建立的 Native UDP 直连优先，否则 SEND 中
 
 RoomClient 将 peerPacket 中可信来源绑定为 peerId。UDP 密钥是 HKDF-SHA256(master, salt=SHA256(UTF8(context)), info=UTF8("cyber-room/udp/v3")) 输出 72 字节；前 32 为发起方发送密钥，接着 32 为响应方发送密钥，最后两个 4 字节为对应 nonce 前缀。
 
-适配器每数据报最多 1200 字节，64 包防重放窗口。大消息将完整明文帧拆为至多 900 字节片段，每片仍是统一 kind=64 加密帧；扩展头 transport:chunk、message、part（从 0 开始）、count。接收端最多保留 8 份重组、每份 80 片、2 秒超时。单对端发送预算 256 KB/s，超出后走服务器。
+适配器每数据报最多 1200 字节，256 包防重放窗口。原生适配器将完整明文帧拆为至多 900 字节片段，每片仍是统一 kind=64 加密帧；扩展头 transport:chunk、message、part（从 0 开始）、count。每帧最多 32 片，超出后返回失败供调用方中转；共享 SDK 的可靠大消息已更早回退。保留有界重组、过期和单对端发送预算。路径只有在匹配本机探测与地址的回应后才设为可用，任意认证入包不能替换出站地址。
 
 这些分片是客户端实现，不是基础服务器功能。没有逐片可靠 ACK；当前实时快照允许丢失，操作依赖房主确认和服务器重试。文件模块需要自己加入分块确认、校验、恢复和流控，不能仅凭 sendTo 返回 true 就删除源文件。
 
 ## 6 继续开发
+
+六人 Emby 直取、实时弹幕、语音与 Windows 已有 0.8.0 实现；需求见 [观影房方案](WATCH_ROOM_PLAN.md)，验证边界见 [执行记录](../PROJECT_STATUS.md)。[早期电影厅草案](CINEMA_ROOM_PLAN.md) 仅作历史参考。
 
 | 模块 | 客户端需要定义 |
 | --- | --- |
 | 新游戏 | 房间选项、规则、输入和状态同步；是否房主裁判自行决定 |
 | P2P 文件共享 | 房主的文件元数据目录、持有者 ID、下载请求、块编号、校验、进度与取消 |
 | 直播／同步观影 | 媒体封装、播放器缓冲、时钟同步、弹幕、码率和拥塞处理 |
-| Emby | 房主保存凭据和取流，客户端分发媒体与同步播放 |
+| Emby | 房主选片并提供播放授权，各端直接从 Emby 取流，客户端同步播放状态 |
 | 踢人／加密房间 | 房主更新获准集合、撤销接收权限；需要保密时轮换只发给获准者的密钥 |
 
-文件正文、编码视频块或密文都能直接放进同一帧，单帧正文不超过 64 KiB；更大对象由客户端分块。以上未来模块尚未实现。现有翻棋／矿工自动按模块标识、人数和开局状态准入，没有新增手动踢人 UI 或密码房 UI。
+文件正文、编码视频块或密文都能直接放进同一帧，单帧正文不超过 64 KiB；更大对象由客户端分块。文件、直播、端到端加密房间和手动踢人 UI 尚未实现。密码房与观影已接入；翻棋／矿工继续由房主按模块、人数和开局状态准入。
 
 网页静态目录运行时读取，新 JS/CSS/素材不改 Rust。APK 仍在服务启动时加载，经新包替换和重启可刷新更新资源；无需修改或重新编译 Rust 源码。当前 Actions 镜像把资源与程序分层，网页/Android 输入变化会重建 APK，未改 Rust 时复用已验证程序。

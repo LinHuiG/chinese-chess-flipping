@@ -1,6 +1,10 @@
 # 观影房与 Windows 客户端实施方案
 
-2026-10-13，讨论定稿，功能尚未实施。用户已授权整理方案、提交并推送，后续另开线程处理业务代码。本文件以本轮最新确认覆盖此前的 WebRTC 优先、弹幕绑定片源和后台常驻通知建议。通用重连、传输和简化事项见 [客户端与传输优化待办](CLIENT_TRANSPORT_REVIEW.md)。
+2026-10-13，需求定稿，后续已按用户“执行”指令实施 0.8.0。本文保留设计依据，实际接口和组件以 [实现契约](WATCH_ROOM_IMPLEMENTATION.md) 为准，测试及待验收边界见 [执行记录](../PROJECT_STATUS.md)。本文件覆盖此前 WebRTC 优先、弹幕绑定片源和后台常驻通知建议。
+
+指定目标广播、成员 UDP 单播互连、说话者独立发送及中转补足已接入。房主不代转其他成员声音。细节与容量分析见 [广播与成员互连方案](ROOM_BROADCAST_PLAN.md)。
+
+“先定稿归档”的历史范围已被后续执行授权覆盖；提交、推送、发布和部署状态单独以执行记录为准。首版采用 IMA ADPCM 与平台 AEC，未引入 SpeexDSP；系统回声处理存在不代表真实外放效果已验收。下文组件候选不能视为全部已安装或验证。
 
 ## 用户已确认的需求
 
@@ -10,12 +14,13 @@
 - 新增观影房。房主一个人也能播放，没有准备或开始游戏阶段，成员中途加入即可跟随观看。
 - 房主提供可配置片源，先支持 Emby；成员免登录 Emby。既考虑自建、可管理的 Emby，也考虑房主只有第三方账号的情况。
 - 仅房主控制选片、播放、暂停和进度。
-- 房间成员可以发送弹幕、开麦说话，成员与房主通过 P2P 或服务端通信，同步语音、弹幕和进度。
+- 房间成员可以发送弹幕、开麦说话，获准成员之间可相互 UDP 单播直连；语音由说话者向各接收者分发，未走直连的目标由通用服务端广播。播放进度仍由房主决定。
 - 电影视频由每位成员直接向 Emby 获取，不由房主转发。
 - 首版最多 6 人，按包含房主设计；不沿用矿工最多 3 人的限制。
 - 服务端尽量轻量，沿用自有统一协议。支持的客户端优先 UDP P2P，失败复用 TCP/WS 中转；语音使用自定义压缩音频包，不采用此前建议的 WebRTC/TURN 路线，不把新增 UDP 服务端中转作为前置条件。
 - 房主短暂不可用时暂停等待，超过恢复期限结束房间；房主主动退出直接解散。单个成员缓冲只影响自己，恢复后追上房主，房主可手动暂停等待。
 - 默认闭麦，点击后持续开麦，再点关闭；允许多人同时说话，不设置轮流上麦审批。
+- 按丢包、抖动和发送积压选择 P2P/中转，弱上行可以减少直连目标；限制音频积压并丢弃过期帧，处理换网与前后台恢复。音频能力不足、无麦克风或拒绝权限时仍能观看和发弹幕。
 - 弹幕属于房间，不绑定电影或进度，换片不清空、不隔离，不保留历史。
 - 增加 Rust PC 客户端，仅支持 Windows，复用现有界面与玩法并支持 P2P；网页提供 Windows `.exe` 安装包或运行包下载。
 
@@ -29,7 +34,7 @@
 | 2 界面与生命周期 | 苹果风格选择控件、移除常驻通知、前后台弱网恢复 | 选择可用，后台不误发 LEAVE，回前台恢复，主动断开不重连 |
 | 3 密码与目录 | 房主密码裁决、锁标识、密码修改与恢复 | 错误密码不入房，修改不影响现有成员，列表标识与房主设置一致 |
 | 4 观影 | Emby 单人播放、六人同步、实时弹幕 | 无准备流程，中途可加入，只有房主控制，视频直接取自 Emby |
-| 5 语音 | 自有协议音频、多人分发、客户端音频处理 | 六人可互听，默认闭麦，直连和现有中转均可用 |
+| 5 语音 | 自有协议音频、指定目标广播、质量选路、有界积压与客户端回声处理 | 六人可互听，默认闭麦，直连和中转均可用；音频不可用仍可观影和发弹幕 |
 | 6 Windows | Rust 桌面端、共享 UI、跨端 P2P、网页下载 | 安装或运行包可用，PC 与 Android/网页互通；可在共享接口稳定后并行安排功能开发 |
 | 7 精简与验收 | 去重复快照、存储、编解码和复制，完成跨端验收 | 优化基于测量，开发中仅做必要定向检查，功能完成后统一验收 |
 
@@ -44,7 +49,7 @@
 | 密码标识与正式成员 | LIST 需增加公开的有密码标记，并提供房主修改标记的最小接口；恢复所需的成员状态另按 R1 定义。Rust 不验证密码、不保存媒体业务状态 |
 | 播放与弹幕同步 | 可复用 SEND 与客户端模块消息，Rust 无须识别电影或弹幕 |
 | 直接取流与播放器 | App 目前拦截外部资源，没有视频模块；WebView 网络策略、播放器、媒体兼容和生命周期需要调整 |
-| 语音 | 压缩音频正文复用统一帧与 SEND/原生 UDP；Rust 只校验通用路由和资源限制，不解码、混音或保存音频 |
+| 语音 | 压缩音频正文复用统一帧与原生 UDP，新增通用指定目标广播；Rust 只校验通用路由、资源和可丢弃消息的排队期限，不解码、混音或保存音频 |
 | Emby 免登录 | 取决于 Emby 可提供的播放授权。自建可增加受限授权能力，第三方账号不能假定有单片、短期、离房即撤销的票据 |
 | Windows | 新增独立桌面工程，复用共享 Web 与必要的协议逻辑；下载入口提供真实 Windows 产物，不改 APK 的既有身份与更新逻辑 |
 
@@ -152,17 +157,53 @@ Emby 原始直传和转码的跳转处理不同；转码方案可能需要以 St
 | 路径 | 用途 | 处理边界 |
 | --- | --- | --- |
 | Android/Windows 的原生 UDP P2P | 双方支持且直连成功时优先使用 | 复用地址发现、加密与统一帧，落实 R3–R5；本地入队不代表对端收到 |
-| TCP/WS 经 Rust 中转 | 直连失败、普通网页参与时使用 | 正文不透明转发，服务端保留有界队列和背压；TCP 弱网可能阻塞，不承诺无延迟 |
+| TCP/WS 经 Rust 中转 | 直连失败、普通网页参与时使用 | 说话者通过通用广播一次上传并指定未走直连的目标；正文不透明转发，保留有界队列和背压 |
 
 本轮不采用 WebRTC/TURN，不把新增服务端 UDP 业务转发列为前置条件。当前 Rust UDP 只发现地址，语音可以复用已有 TCP/WS 中转，无需为了“用了语音”另起一个媒体服务。普通网页没有与当前原生 UDP 互通的原始 Socket 能力，网页参与时走中转。[浏览器 Direct Sockets 范围](https://developer.chrome.com/docs/iwa/direct-sockets)
 
-按“成员与房主通信”实现星形分发：房主把成员音频转给其他成员，排除说话者本人；每个接收端独立解码与混音。房主可以复用压缩正文，转发时不必解码再编码，外壳仍按目标连接密钥/nonce 处理。若两段都中转，会经过成员→Rust→房主→Rust→其他成员；评估六人时的房主上行、CPU 与延迟，不默认扩成全互连或服务器混音。
+采用成员之间 UDP 单播互连，每个说话者编码一次自己的声音，向可直连的成员分别发送；其余成员由说话者调用通用广播指定目标，服务端直接投递，房主不再转发他人语音。各接收端独立解码与混音，外壳仍按目标链路的密钥/nonce 处理。现有 setupPeers 已尝试成员互连；新广播、混合目标调度及语音仍待实现。具体授权、去重和限流边界见 [广播方案](ROOM_BROADCAST_PLAN.md)。
 
 客户端负责采集、编码、时间戳、抖动缓冲、播放、丢包处理、回声控制和设备切换。语音使用短小帧，尽量避免大帧分片；不能照搬游戏 action 的 400 ms 重试与完整快照回执。控制命令可靠确认，实时语音过期丢弃；发送前限制积压和速率，已经交给 TCP 的字节不能靠客户端撤回。先验证现有中转表现，再决定是否需要进一步通道隔离，不通过无限扩队列掩盖延迟。
 
 入房默认闭麦，点击后持续说话，再点关闭，允许多人同时开麦，无上麦审批。离房、后台或权限撤销停止采集。电影与语音音量分开控制，显示说话状态，处理外放回声；单独屏蔽/音量等辅助控件可按最小可用界面实现，不扩成新的审批系统。
 
 `room.js message` 当前统一执行 `object(m.rawBody)`，需要先按消息类型区分二进制与 JSON；底层 rawBody 已支持字节。原生端高频音频尽量留在原生层处理，减少逐包穿过 Base64/JSON/UI 回调。网页需要检测音频编码能力并提供确定的兼容范围，不能假设所有浏览器的 AudioEncoder 都可用。[AudioEncoder](https://developer.mozilla.org/en-US/docs/Web/API/AudioEncoder)
+
+### 回声消除与音频能力降级
+
+采用本地声学回声消除（AEC），在编码和网络发送之前处理麦克风。每台设备处理自己扬声器造成的回声；不交房主或 Rust 处理。软件 AEC 的参考必须覆盖实际输出的电影声及其他成员语音，经音量调整、混音后与采集时序对齐。只把收到的语音作为参考，会遗漏电影外放。参考信号只用于消除回声，不混进上传声音，也不把本地麦克风回放到扬声器形成循环。
+
+```mermaid
+flowchart LR
+    Movie[电影解码音频] --> Mix[本地音量与混音]
+    Others[其他成员解码语音] --> Mix
+    Mix --> Speaker[扬声器]
+    Mix -->|播放参考与时序| AEC[本地回声消除]
+    Mic[麦克风采集] --> AEC
+    AEC --> Clean[适度降噪与增益控制]
+    Clean --> Encode[编码自己的语音]
+    Encode --> Send[UDP 单播或指定目标广播]
+```
+
+这张图表达软件处理所需的数据关系；系统 AEC 的参考由系统音频路径提供，不要求应用把 PCM 手工传入系统 API。软件路径要在播放器选择阶段确认能取得播放 PCM、实际音量和时序，处理采样率与设备时钟差异；切设备、seek 或重建音频流后重新对齐。每设备一条采集处理链，播放参考汇总本机实际输出，不按房间人数重复运行一套 AEC。降噪不能替代 AEC，不能靠检测到他人说话就强行关麦来冒充支持多人同时说话。
+
+| 平台 | 接入建议 | 必须验证的限制 |
+| --- | --- | --- |
+| Android | 原生 AudioRecord 使用适合通信的采集配置，先检查并试用系统 AcousticEchoCanceler；在该录音会话上管理效果实例 | 设备存在 AEC 不代表当前播放路径已覆盖电影声；验证电影和语音一起外放、双方同时讲话、音量变化及耳机切换 |
+| Windows | 原生音频层优先使用可用的系统 AEC，并在接口支持时绑定实际播放输出端点作为参考 | IAcousticEchoCancellationControl 最低为 Windows Build 22621，且端点能力不保证存在；动态检测，不能因这一接口把其他系统的观影功能禁用 |
+| 网页 | 通过 getUserMedia 请求浏览器回声消除，检查实际支持及设置；在支持完整输出消回声模式时优先采用 | echoCancellation=true 不保证电影或自有 WS 音频播放一定被消除；不得为触发 AEC 而偷偷改用 RTCPeerConnection 或 TURN |
+
+平台依据：[Android AEC](https://developer.android.com/reference/android/media/audiofx/AcousticEchoCanceler)、[Android 采集来源](https://developer.android.com/reference/android/media/MediaRecorder.AudioSource#VOICE_COMMUNICATION)、[Windows AEC 参考端点](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nn-audioclient-iacousticechocancellationcontrol)、[浏览器回声消除语义](https://www.w3.org/TR/mediacapture-streams/#dom-mediatracksupportedconstraints-echocancellation)。
+
+系统 AEC 不可用或电影参考覆盖不合格时，原生端评估独立软件 DSP 作为后备，候选为 SpeexDSP 的回声消除模块，不要求采用 Speex 编码器，不自研消回声算法，也不改变自有传输。该接口接收麦克风与播放参考，时序对齐影响效果；组件是否满足电影音乐、大音量、双人同时讲话和 CPU 预算，需小范围验证后锁定。系统与软件 AEC 不默认叠加；无法关闭或确认系统处理时，不把重复处理当作质量保证。[Speex 回声消除接口](https://www.speex.org/docs/api/speex-api-reference/group__SpeexEchoState.html)
+
+网页还有具体限制：跨源电影即使能直接播放，也不一定能通过 Web Audio 读取 PCM；缺少允许读取的 CORS 条件时，MediaElementAudioSourceNode 必须输出静音。因此第三方 Emby 不能默认提供软件 AEC 所需参考；不要为绕过这一限制新增房间视频代理。浏览器内置 AEC 或软件参考不可用时提示使用耳机/关闭麦克风，保留观看和弹幕；播放链路仍需自身满足媒体请求条件。[Web Audio 跨源限制](https://www.w3.org/TR/webaudio-1.0/#MediaElementAudioSourceNode-security)
+
+能力分开报告“可发送语音”“可接收语音”和必要的格式参数。无麦克风/拒绝权限只关闭采集；没有共同解码能力才禁用语音接收，不阻止入房、电影和弹幕。发送目标由发送者按获准名单与接收能力过滤。降级原因展示一次并可重新检测，不能反复弹权限窗，也不能在回前台后自动开麦。
+
+另一项设备限制是蓝牙：部分经典蓝牙耳机启用麦克风后切换到通话模式，电影音质会下降；不同系统、设备及 LE Audio 支持有差异，不能承诺开麦前后都维持立体声。提供实际可用的输入/输出选择，在系统允许时可用设备麦克风配耳机输出；路由变化后重建采集与 AEC 参考，不假定所有组合都支持。[Windows 经典蓝牙音频](https://learn.microsoft.com/en-us/windows-hardware/drivers/bluetooth/bluetooth-classic-audio)
+
+后续最小音频验证覆盖：只播电影、只听远端、电影加远端、双方同时讲话、调音量/seek、耳机与外放切换、来电与恢复、权限拒绝和编码不支持。记录实际回声、对本地人声的影响及 CPU/时延，接口调用成功不能代替效果验证；没有通过的设备组合明确降级，不宣称通用真机兼容。
 
 ## 弹幕与播放器交互
 
@@ -172,13 +213,13 @@ Emby 原始直传和转码的跳转处理不同；转码方案可能需要以 St
 
 小屏需要同时容纳视频、房主控制、成员与弹幕输入；横屏/全屏时保证字幕不被按钮挡住。原生全屏视频可能改变 Web 层弹幕覆盖能力，App 与浏览器分别确认，不承诺只加一个 video 标签即可覆盖所有场景。
 
-## 当前 App 的直接阻塞点
+## 实施前 App 阻塞记录与处理
 
-`GameService` 仅放行 `https://appassets.androidplatform.net/web/`，CSP 的 connect-src 为 self，默认资源策略也限制外部媒体。观影需按已配置片源和实际播放链路放行媒体/API 请求，并处理合法的重定向与媒体子域；不能为了播放开放任意远端页面访问 NativeRoom 桥接。
+本地 WebView 继续只放行 `https://appassets.androidplatform.net/web/`；0.8.0 通过原生受限 Emby API 桥和 Media3 播放，未开放远端页面访问 NativeRoom。首版仅支持已配置同源媒体，跨域媒体子域需后续明确授权适配。
 
-Manifest 当前没有 RECORD_AUDIO，也没有 WebChromeClient 的音频权限处理。需要 Android 运行时授权；若采用 WebView 采集，还需处理 `RESOURCE_AUDIO_CAPTURE`，验证可信本地 origin，只授予实际需要的资源。原生采集不额外引入不用的 WebView 麦克风路径。浏览器采集还要求安全上下文。[Android PermissionRequest](https://developer.android.com/reference/android/webkit/PermissionRequest)、[getUserMedia](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
+0.8.0 已加入 RECORD_AUDIO 与 Android 运行时授权，采集在原生层，不开放 WebView 麦克风路径。普通网页采集仍要求安全上下文及浏览器授权。[Android PermissionRequest](https://developer.android.com/reference/android/webkit/PermissionRequest)、[getUserMedia](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
 
-移除 App 自建常驻通知及其“断开连接”动作，应用内保留清晰的断开/退出入口，并清理不再需要的通知权限申请与相关回调。当前 MainActivity 启动 specialUse 前台服务，GameService 的连接/房间更新都会调用 startForeground；这些入口必须一起调整，不能只删 notification 方法后继续启动要求通知的前台服务。[Android 前台服务要求](https://developer.android.com/develop/background-work/services/fgs)
+已移除自建常驻通知、specialUse 前台服务声明、startForeground 调用、通知权限及 WakeLock；应用内保留断开/退出。服务仅尽力保留当前页面与连接，后台按系统限制回收。[Android 前台服务要求](https://developer.android.com/develop/background-work/services/fgs)
 
 后台、锁屏按上面的弱网状态表处理，连接尽力保留但不做无限保活，不承诺后台持续录音。系统正常的麦克风授权与使用指示保留。旋转 Activity 不应被误认为离房或销毁有效会话；同时释放闲置唤醒锁和音频资源，避免移除通知却保留隐性的高耗电循环。来电、耳机切换、进程回收与回前台恢复属于后续定向验收。
 
@@ -218,4 +259,4 @@ PC 默认连接配置沿用 TCP / fqgame.tdcode.tech / 8888，设置可修改且
 
 核心业务规则已确认。余下是实际 Emby 授权/并发与媒体兼容、跨端音频组件、六人性能、Windows 打包和网络互通的技术验证，不再将已定的通知、密码、弹幕、开麦和平台范围列为待确认。
 
-本轮只整理和提交文档，没有实现上述功能，也没有进行 Emby 登录、真实取流、六人联机、语音、Windows 构建或真机测试。既有问题的源码与离线复现证据见优化待办；发布和部署状态以 PROJECT_STATUS.md 为准。
+早期归档阶段仅整理文档；后续 0.8.0 已实施并进行本地跨端检查，实际 Emby、外放回声及设备兼容仍按执行记录列为待验收。发布与部署状态以 PROJECT_STATUS.md 为准。

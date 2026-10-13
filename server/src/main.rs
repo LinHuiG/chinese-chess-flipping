@@ -96,6 +96,14 @@ async fn run(tcp: u16, http: u16, udp: u16) -> io::Result<()> {
             axum::routing::get(update::http_download),
         )
         .route("/ws", axum::routing::get(net::ws_upgrade))
+        .route(
+            "/api/desktop/version",
+            axum::routing::get(net::desktop_version),
+        )
+        .route(
+            "/api/desktop/latest.exe",
+            axum::routing::get(net::desktop_download),
+        )
         .fallback(net::asset)
         .with_state(hub);
     // 任一监听循环异常或收到退出信号即结束进程；不持久化或恢复运行中的房间。

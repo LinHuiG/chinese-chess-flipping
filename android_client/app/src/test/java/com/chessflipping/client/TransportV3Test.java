@@ -46,9 +46,9 @@ public class TransportV3Test {
                 String req=id(),ctrl="op:102\nrequestId:"+req+"\nroomId:"+rid+"\nmodule:x:y\n";byte[] proof={0,42,-1};
                 guest.send(16,ctrl,proof);WireProtocol.Packet join=host.next(16,"102");assertArrayEquals(proof,join.body);assertEquals(guest.clientId,headers(join).get("from"));
                 assertEquals(ctrl+"from:"+guest.clientId+"\n",new String(join.control,StandardCharsets.UTF_8));
-                // Deliberately non-JSON decision: the server cannot inspect or enforce it.
+                // The generic grant flag is separate from the deliberately opaque decision body.
                 byte[] decision={7,0,-1,12};
-                host.send(18,"op:102\nrequestId:"+req+"\nroomId:"+rid+"\nto:"+guest.clientId+"\nok:1\n",decision);
+                host.send(18,"op:102\nrequestId:"+req+"\nroomId:"+rid+"\nto:"+guest.clientId+"\nok:1\ngrant:1\n",decision);
                 WireProtocol.Packet reply=guest.next(18,"102");assertArrayEquals(decision,reply.body);assertEquals(host.clientId,headers(reply).get("from"));
             }
             byte[] payload=new byte[64000];new Random(1).nextBytes(payload);

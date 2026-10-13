@@ -41,7 +41,7 @@ public final class WsClient extends WebSocketListener implements GameConnection 
     @Override public void onClosing(WebSocket ws,int code,String reason){ws.close(code,null);stop("连接已关闭");}
     @Override public void onClosed(WebSocket ws,int code,String reason){stop("连接已关闭");}
     @Override public void onFailure(WebSocket ws,Throwable error,Response response){stop("连接失败，请检查网络或证书");}
-    @Override public synchronized boolean send(WireProtocol.Packet packet){if(!ready||closed)return false;try{return write(packet);}catch(Exception e){stop("消息发送失败");return false;}}
+    @Override public synchronized boolean send(WireProtocol.Packet packet){if(!ready||closed)return false;try{if("1".equals(WireProtocol.control(packet.control).get("discard"))&&socket.queueSize()>2048)return false;return write(packet);}catch(Exception e){stop("消息发送失败");return false;}}
     private boolean write(WireProtocol.Packet packet)throws Exception{return !closed&&socket!=null&&socket.queueSize()<1048576&&socket.send(ByteString.of(WireProtocol.plain(packet)));}
     private synchronized void tick(){
         if(closed)return;long now=System.currentTimeMillis();
