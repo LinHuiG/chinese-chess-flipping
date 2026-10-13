@@ -1,11 +1,16 @@
 # 项目执行记录与交接
 
-## App 下拉选择修复（2026-10-13，本地验证完成，待发布第一台）
+## App 下拉选择与三人座位修复（2026-10-13，已发布、第一台部署验收完成）
 
 - 用户进一步反馈 App 建房时“选择游戏”和“选择人数”无法下拉；原有脚本直接修改 select 值，没有覆盖原生弹窗。已用 Android 37 模拟器实际触摸选择控件复现 `Native select popup missing: #create-game`。
 - 原 WebView 由 Service context 创建，缺少用于选择弹窗的前台 Activity 上下文。改用 MutableContextWrapper，挂载到 Activity 时切换上下文，脱离时恢复 Application context，保留后台页面和连接并避免旧 Activity 引用。
 - 增加原生触摸及选择列表检查，覆盖游戏切换、2/3 人切换、Activity 重建后的再次选择，以及建房/退出流程。assembleDebug / assembleDebugAndroidTest / lintDebug 通过；同一模拟器覆盖安装旧版时真实点击失败，覆盖安装修复版后所有原生菜单选择、Activity 重建及三人建房/退出检查通过，并人工查看实际 adb 弹窗截图。未验证其他厂商真机。
-- 三人座位修复 `3793eff` 的 [Actions 38325509972](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/38325509972) 四个任务成功，但部署线程尚未部署，已按追加反馈等待合并修复版 0.7.2 / versionCode 12。最终仅部署与验收第一台，第二台不处理；未关机。
+- 修复提交 `27fd742` 已推送，0.7.2 / versionCode 12 的 [Actions 38326601021](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/38326601021) APK/检查、AMD64、ARM64、多架构索引四任务均成功；部署线程已仅更新第一台，实际验收通过。
+- 三人座位修复 `3793eff` 的 [Actions 38325509972](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/38325509972) 四个任务成功，但部署线程尚未部署，已按追加反馈等待合并修复版 0.7.2 / versionCode 12。最终仅部署与验收第一台，第二台未操作。
+
+- 第一台 fqgame.tdcode.tech 运行提交 `27fd7427f0674d8c5151f961b7e5e99af4afd90d`，镜像摘要 `sha256:da7ca88e61b635561e5f6495e66924e7794bc9cb63cbe69b1e369307e3743f0d`；公网页面 0.7.2 和新座位缓存键一致。APK 0.7.2 / versionCode 12，2,189,905 字节，完整下载 SHA-256 `98d8b4efd56ff1794570f8272dc5f5fa8989fd198a1412559efac58193e75fd3` 与清单一致。TCP v3 加密握手/心跳、WSS READY/PONG、UDP 发现均通过；原端口、反代、自动更新与相同镜像跳过逻辑保留，已留回滚备份。
+- 开发线程在第一台公网再次运行更新后的浏览器验收：同一房主两人房退出后建三人房立即显示三席，320–1440px 均无座位越界或横向溢出；三人入房/开局/存档/商店/下一关、双人翻棋、刷新恢复和房主解散均通过。验收房间已退出，浏览器、临时本地服务和本轮模拟器均已关闭。
+- 本轮用户指定的两项修复、发布及第一台验收已完成。最终记录推送后按此前授权执行关机；不强制关闭存在未保存内容的应用，当前会话不能确认系统最终断电结果。
 
 ## 三人房座位显示修复（2026-10-13，本地检查通过，待发布第一台）
 
