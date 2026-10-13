@@ -61,7 +61,7 @@ function renderWaiting(){
   const r=game.room,me=r.members.find(p=>p.id===game.self);
   text('waiting-game',GAMES[r.game].name+' / 等候室');text('waiting-name',r.name);
   text('waiting-id','房间 '+r.roomId.slice(0,8)+' · '+r.members.length+'/'+r.capacity+' 人');
-  const key=JSON.stringify(r.members)+game.self;
+  const key=JSON.stringify([r.roomId,r.capacity,r.hostId,r.members,game.self]);
   if($('players').dataset.key!==key){
     $('players').dataset.key=key;$('players').replaceChildren();
     for(let i=0;i<r.capacity;i++){
@@ -247,7 +247,7 @@ $('settings-save').onclick=async()=>{
   if(changed){game.reset();game.client.connect();}render();toast('设置已保存');
 };
 $('check-update').onclick=()=>native?.checkUpdate();$('install-update').onclick=()=>native?.installUpdate();
-function nativeEvent(e){if(e.type==='update'){text('update-status',e.status);text('version',e.version||'0.7.0');$('check-update').disabled=e.busy;$('install-update').hidden=!e.ready;}}
+function nativeEvent(e){if(e.type==='update'){text('update-status',e.status);text('version',e.version||'0.7.1');$('check-update').disabled=e.busy;$('install-update').hidden=!e.ready;}}
 window.cyberBack=async()=>{
   const dialog=document.querySelector('dialog[open]');if(dialog){if(dialog.id==='confirm-dialog')finishConfirm(false);else dialog.close();return;}
   if(game.room)await leave();else if(native)native.exitApp();
@@ -259,6 +259,6 @@ document.addEventListener('visibilitychange',()=>{
 });
 window.addEventListener('pagehide',()=>{if(game.host&&game.room?.game==='miner')game.saveMine(false);game.checkpoint();});
 document.addEventListener('pointerdown',()=>sound.unlock(),{once:true});
-$('download-app').hidden=!!native;text('version',initial.version||'0.7.0');
+$('download-app').hidden=!!native;text('version',initial.version||'0.7.1');
 setInterval(clock,200);setInterval(()=>{if(!document.hidden)refresh();},10000);
 render();game.client.connect();
