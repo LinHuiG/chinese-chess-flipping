@@ -1,6 +1,6 @@
 # 客户端与传输优化待办
 
-2026-10-13，基于代码提交 `c07c047`，续接文档提交 `8e19612`。用户要求只分析、记录并推送，后续另开线程实施。本文件中的问题和优化均未修复，不改变现行 v3 协议。新增界面、密码与观影需求见 [观影房方案](WATCH_ROOM_PLAN.md)。
+2026-10-13，基于代码提交 `c07c047`，续接文档提交 `8e19612`；讨论定稿补充 Windows、语音和生命周期接入事项。用户要求只分析、记录并推送，后续另开线程实施。本文件中的问题和优化均未修复，不改变现行 v3 协议。新增界面、密码、观影与桌面需求见 [观影房与 Windows 客户端实施方案](WATCH_ROOM_PLAN.md)。
 
 处理顺序建议：先保证恢复、退出和操作回执正确，再减少重复传输与复制，最后根据测量决定是否调整协议。不要为了“零拷贝”引入更复杂的通用框架。
 
@@ -18,7 +18,7 @@
 
 `RoomClient.disconnect` 调用 `finish` 时，如果已经处于重连等待窗口，`finish` 提前返回，未清理 retry。旧回调随后调用 `connect`，再次将 enabled 设为 true。应在主动断开时无条件取消 retry，并在重试回调执行前检查允许重连的状态与连接代次。
 
-入口：`server/src/main/resources/web/transport.js` 的 `disconnect`、`finish`、`connect`。已有真实 RoomClient 方法与可控定时器的复现。验收覆盖等待期主动断开、通知栏断开、切换服务器和之后再次主动连接。
+入口：`server/src/main/resources/web/transport.js` 的 `disconnect`、`finish`、`connect`。已有真实 RoomClient 方法与可控定时器的复现。验收覆盖等待期应用内主动断开、切换服务器和之后再次主动连接。最新要求移除 App 常驻通知，其断开动作及前台服务启动入口同步清理，不再将通知栏断开作为保留功能。
 
 ### R3 经中转重试的操作仍通过失效 UDP 返回
 
@@ -85,10 +85,20 @@ Rust 已对 TCP 密文原地解密，再把原始 Vec 转为 Bytes 切片；正�
 
 控制命令、最新状态、语音和下载的排队需求不同。保持已有有界队列与背压；实时状态可在客户端合并为最新值，过期语音可丢弃，可靠命令要确认。不要仅扩大队列，也不要让 Rust 解析玩法 type 来决定丢哪个快照。UDP 的可靠性和拥塞处理边界参考 [RFC 8085](https://www.rfc-editor.org/rfc/rfc8085.html)。
 
+## 观影与 Windows 接入时需同步处理
+
+以下为定稿方案的代码接入检查点，均未实施。继续使用自有协议与现有中转，不再沿用早期 WebRTC/TURN 建议。
+
+- `room.js message` 当前对正文统一调用 `object(m.rawBody)`；音频接入前区分 JSON 模块消息与二进制音频，底层 rawBody 的字节能力可以复用。语音不能照搬游戏动作重试与全量快照回执。
+- `transport.js` 依赖同步 `NativeRoom.settings()` 和 `sendPeer()` 返回值；Windows Tauri 的异步调用需要薄适配层，明确入队与送达的区别。用实际能力协商代替 `!!native` 推断 UDP/音频能力，普通网页仍走 WS 中转。
+- 原生端高频音频尽量在原生层采集、编解码和传输，避免逐包通过 Base64/JSON 与 UI 回调。客户端在发送前丢弃过期音频并限制积压；已经进入 TCP 字节流的内容无法撤回，先实测弱网表现再决定是否增加通道复杂度。
+- `MainActivity` 与 `GameService` 的 startForegroundService/startForeground、通知更新和权限路径需一起调整。移除通知不等于继续使用无通知的前台服务；后台与锁屏按已确认规则暂停、闭麦和恢复，不误发 LEAVE。
+- 密码锁标识属于公开目录元数据；准入与 Emby 播放授权只交给获准成员。R1 恢复流程需保留有效身份，修改密码不能使现有成员的有效恢复失效。
+
 ## 本轮验证范围与接续顺序
 
 本轮扩展分析只有源码阅读、JS 离线模拟和 Java 协议类定向检查。为 R5 单独编译现有 WireProtocol、KeyExchange、SecureSession、UdpSession，并在本机运行分片乱序样例；生成物留在忽略目录 `server/target/review-20261013/`，不是 Android App 编译。R3 与快照/存储样例使用真实 JS 类加模拟传输，没有新增业务源码或正式测试文件。
 
-更早的拉取分析已运行一次 `node scripts/client-test.mjs`，四组既有检查通过；本轮未重复运行。未做 Rust 构建、全量 Android 构建、实际 UDP 弱网、真机、CPU/内存压测或 Emby/WebRTC 联调。R4 仍为待验证的源码风险。
+更早的拉取分析已运行一次 `node scripts/client-test.mjs`，四组既有检查通过；本轮未重复运行。未做 Rust 构建、全量 Android 构建、实际 UDP 弱网、真机、CPU/内存压测、Windows 构建或 Emby/语音联调。R4 仍为待验证的源码风险。讨论定稿只更新文档并核对一致性、链接及 Git 差异，没有增加功能验证结论。
 
 后续建议按 R1/R2/R3、R4/R5、O1–O4、Android 复制、Rust 小范围简化的顺序处理。每个阶段只做相应定向检查；是否开展完整验收由后续实施任务决定，不把本清单作为本轮自动修复授权。

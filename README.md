@@ -17,7 +17,7 @@
 
 翻棋规则见 [棋局规则](docs/GAME_RULES.md)，矿工操作和道具说明在游戏内“?”。基于底座开发新功能见 [赛博房间接入手册](docs/CYBER_ROOM_INTEGRATION_MANUAL.md) 与 [客户端开发指南](docs/FRAMEWORK_DEVELOPMENT_GUIDE.md)。
 
-待实施事项见 [客户端与传输优化待办](docs/CLIENT_TRANSPORT_REVIEW.md) 和 [观影房与房间密码方案](docs/WATCH_ROOM_PLAN.md)。观影、密码和语音尚未实现，当前验证状态见 [执行记录](PROJECT_STATUS.md)。
+待实施事项见 [客户端与传输优化待办](docs/CLIENT_TRANSPORT_REVIEW.md) 和 [观影房与 Windows 客户端实施方案](docs/WATCH_ROOM_PLAN.md)。房间密码与锁标识、六人 Emby 观影/语音/实时弹幕、Windows 客户端与网页下载，以及 App 选择控件优化和常驻通知移除均尚未实现。当前验证状态见 [执行记录](PROJECT_STATUS.md)。
 
 ## 开始游戏
 
