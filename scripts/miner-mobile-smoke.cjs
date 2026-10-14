@@ -23,7 +23,7 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict'),fs=r
     await host.locator('#mine-canvas').tap({position:{x:100,y:200}});await host.waitForFunction(()=>document.querySelector('#drop').disabled);
     await host.click('#save');const save=await host.evaluate(()=>JSON.parse(localStorage.getItem('cyber.miner.save')));
     assert.notEqual(save.players[0].claw.mode,'swing','Canvas tap releases only the local claw');assert.ok(save.players.slice(1).every(p=>p.claw.mode==='swing'));
-    await host.click('#pause');await host.locator('#mine-canvas').tap({position:{x:100,y:200}});assert.equal(await host.textContent('#pause'),'继续冒险');
+    await host.click('#pause');const pausedCanvas=await host.locator('#mine-canvas').boundingBox();await host.touchscreen.tap(pausedCanvas.x+100,pausedCanvas.y+200);assert.equal(await host.textContent('#pause'),'继续冒险');
     await host.click('#mine-fullscreen');await host.waitForFunction(()=>document.fullscreenElement?.id==='miner');
     await host.setViewportSize({width:844,height:390});await host.waitForTimeout(150);assert.equal(await host.evaluate(()=>document.fullscreenElement?.id),'miner');
     await host.click('#mine-fullscreen');await host.waitForFunction(()=>!document.fullscreenElement);assert.equal(await host.locator('#miner').isVisible(),true);
@@ -44,7 +44,7 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict'),fs=r
       const state=new GoldMine(42,[{id:'a'},{id:'b'},{id:'c'}],999).snapshot(),results={};
       const types=[['current',MinerView]];
       if(before)types.unshift(['before',(await import('./miner-baseline.js')).MinerView]);
-      for(const [name,Type] of types){const view=new Type(canvas,{play(){}});view.setState(state,'a');view.sizeDirty=true;
+      for(const [name,Type] of types){const view=new Type(canvas,{play(){}});view.prepare?.();if(view.ready&&!await view.ready)throw Error('Miner artwork failed to load');view.setState(state,'a');view.sizeDirty=true;
         for(let i=0;i<20;i++){view.draw(performance.now());cancelAnimationFrame(view.raf);view.raf=0;}
         const start=performance.now();for(let i=0;i<240;i++){view.draw(start+i*16.67);cancelAnimationFrame(view.raf);view.raf=0;}
         results[name]={meanDrawMs:(performance.now()-start)/240,items:state.items.length};view.setState(null);view.resize?.disconnect();}

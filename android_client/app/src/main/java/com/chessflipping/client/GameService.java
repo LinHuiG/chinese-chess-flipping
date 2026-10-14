@@ -205,7 +205,7 @@ public final class GameService extends Service {
         @JavascriptInterface public void voiceStop(){onMain(()->{pendingMicrophone=false;voice.stop();});}
         @JavascriptInterface public void mediaConfigure(String text){try{JSONObject q=new JSONObject(text);onMain(()->{try{media.configure(q);}catch(Exception ignored){}});}catch(Exception ignored){}}
         @JavascriptInterface public void mediaRequest(String text){try{if(text.length()<1100000){JSONObject q=new JSONObject(text);onMain(()->media.request(q));}}catch(Exception ignored){}}
-        @JavascriptInterface public void playerCommand(String text){try{if(text.length()<65536){JSONObject q=new JSONObject(text);onMain(()->media.command(q));}}catch(Exception ignored){}}
+        @JavascriptInterface public void playerCommand(String text){try{if(text.length()<=4194304){JSONObject q=new JSONObject(text);onMain(()->media.command(q));}}catch(Exception ignored){}}
         @JavascriptInterface public void playerStop(){onMain(media::stop);}
         @JavascriptInterface public void checkUpdate(){onMain(()->updater.check(host(),port(),transport()));}
         @JavascriptInterface public void installUpdate(){onMain(GameService.this::install);}

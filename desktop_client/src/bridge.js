@@ -18,6 +18,9 @@
     voiceStop: () => call('voiceStop'),
     mediaConfigure: config => call('mediaConfigure',config),
     mediaRequest: request => call('mediaRequest',request),
+    playerCapabilities: {engine:'mpv',embeddedTracks:true},
+    playerCommand: command => call('playerCommand',command),
+    playerStop: () => call('playerStop'),
     checkUpdate: () => call('checkUpdate'),
     installUpdate: () => call('checkUpdate'),
     exitApp: () => call('exitApp')

@@ -209,6 +209,9 @@ jobs:
         run: |
           node scripts/client-test.mjs
           node scripts/watch-voice-test.mjs
+          node scripts/subtitles-test.mjs
+          node scripts/watch-player-test.mjs
+          node scripts/watch-native-player-test.mjs
       - name: Record successful validation
         if: steps.scope.outputs.should_check == 'true'
         env:
@@ -249,6 +252,8 @@ jobs:
     needs: build_apk_and_check
     if: needs.build_apk_and_check.outputs.should_check == 'true'
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
       - name: Set up Rust
@@ -259,8 +264,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             desktop_client/target
-          key: windows-client-${{ runner.os }}-${{ hashFiles('desktop_client/Cargo.lock', 'desktop_client/**', 'server/src/main/resources/web/**', 'scripts/fixtures/**', '.github/workflows/publish.yml') }}
+          key: windows-client-${{ runner.os }}-${{ hashFiles('desktop_client/Cargo.lock', 'desktop_client/**', 'server/src/main/resources/web/**', 'scripts/fixtures/**', 'scripts/prepare-desktop-media.py', '.github/workflows/publish.yml') }}
           restore-keys: windows-client-${{ runner.os }}-
+      - name: Prepare pinned native media decoder
+        run: |
+          python scripts/prepare-desktop-media.py --cache-dir "$env:RUNNER_TEMP/cyber-media-cache"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check protocol and build portable executable
         run: |
           cargo +stable test --locked --manifest-path desktop_client/Cargo.toml
@@ -270,6 +279,22 @@ jobs:
           python scripts/package-desktop-update.py --source desktop_client/target/release/cyber-room.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/package-desktop-update.py --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Decoder binaries are not published until their matching sources are
+      # available at the stable address embedded in the runtime NOTICE.
+      - name: Archive corresponding native decoder sources
+        if: needs.build_apk_and_check.outputs.publish_image == 'true'
+        run: |
+          python scripts/archive-desktop-media-sources.py --cache-dir "$env:RUNNER_TEMP/cyber-media-cache" --output "$env:RUNNER_TEMP/cyber-media-source-release"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/publish-desktop-media-sources.py "$env:RUNNER_TEMP/cyber-media-source-release/source-release.json" --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish verified decoder sources
+        if: needs.build_apk_and_check.outputs.publish_image == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/publish-desktop-media-sources.py "$env:RUNNER_TEMP/cyber-media-source-release/source-release.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v6
         with:

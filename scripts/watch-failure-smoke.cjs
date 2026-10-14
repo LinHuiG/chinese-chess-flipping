@@ -1,0 +1,17 @@
+// A decoder failure followed by a broken transcoder must stop, even while host pulses continue.
+const {chromium}=require('playwright'),assert=require('node:assert/strict');
+const {createMockEmby}=require('./mock-emby.cjs');
+(async()=>{
+  const fixture=createMockEmby({playback:true});await new Promise(r=>fixture.server.listen(0,'127.0.0.1',r));
+  const browser=await chromium.launch({channel:'msedge',headless:true}),pages=[],errors=[],name='播放故障隔离 '+Date.now();
+  try{
+    for(let i=0;i<2;i++){const p=await browser.newPage();pages.push(p);p.setDefaultTimeout(30000);p.on('pageerror',e=>errors.push(e.message));await p.goto(process.env.CHESS_WEB_URL||'http://127.0.0.1:18880');await p.locator('#lobby').waitFor();}
+    const [host,guest]=pages;await guest.route('**/Videos/*/stream.mp4?**',r=>r.fulfill({status:200,contentType:'video/mp4',body:'not a video'}));await guest.route('**/fixture-hls/**',r=>r.fulfill({status:500,contentType:'text/plain',body:'test transcoder unavailable'}));
+    await host.click('[data-create=watch]');await host.fill('#room-name',name);await host.click('#create-submit');await host.click('#watch-source');await host.fill('#emby-base','http://127.0.0.1:'+fixture.server.address().port);await host.fill('#emby-user','viewer');await host.fill('#emby-password','local-test');await host.check('#emby-share');await host.click('#emby-connect');await host.locator('.media-card').first().click();await host.click('#library-select');await host.waitForFunction(()=>document.querySelector('#watch-video').readyState>=2);await host.click('#watch-play');await host.waitForFunction(()=>document.querySelector('#watch-video').currentTime>2);
+    await guest.click('#refresh');await guest.locator('.room-card').filter({hasText:name}).click();await guest.locator('#watch').waitFor();await guest.click('#watch-join');await guest.waitForFunction(()=>document.querySelector('#watch-message').textContent.includes('HTTP 500'));
+    const count=()=>fixture.events.filter(e=>e.event==='playbackInfo').length,failedCount=count(),error=await guest.textContent('#watch-message'),start=await host.locator('#watch-video').evaluate(v=>v.currentTime);assert.equal(failedCount,3,'One host load plus one guest direct load and exactly one compatibility fallback');
+    await guest.waitForTimeout(8000);assert.equal(count(),failedCount,'Repeated host state packets must not restart a failed transcoder');assert.equal(await guest.textContent('#watch-message'),error,'Autoplay and state updates do not hide the terminal error');assert.ok(await host.locator('#watch-video').evaluate((v,start)=>v.currentTime>start+5,start));assert.equal(await guest.locator('#watch-retry').isVisible(),true);
+    await guest.click('#watch-retry');await guest.waitForFunction(()=>document.querySelector('#watch-message').textContent.includes('HTTP 500'));assert.equal(count(),failedCount+1,'Only explicit retry starts another negotiation');assert.deepEqual(errors,[]);
+    console.log('PASS playback failure isolation: late direct decoder error, one HLS fallback, persistent HTTP500 diagnostic, no repeated negotiations under 8s host pulses, explicit retry, host keeps playing');
+  }finally{for(const p of pages)await p.evaluate(()=>window.cyberDisconnect?.()).catch(()=>{});await browser.close();fixture.server.closeAllConnections();await new Promise(r=>fixture.server.close(r));}
+})().catch(e=>{console.error(e);process.exitCode=1;});

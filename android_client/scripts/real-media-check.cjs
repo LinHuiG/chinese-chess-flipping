@@ -1,0 +1,32 @@
+// Targeted real-source Android check for item 128223; no account values are saved.
+// Requires an already running debug APK exposed at ANDROID_CDP (default :19222).
+// Set CHESS_REAL_EMBY_BASE, CHESS_REAL_EMBY_USER, CHESS_REAL_EMBY_PASSWORD and ADB
+// only in the caller's process environment; remove them after the command finishes.
+// Saves sanitized codec/player results and a native screenshot under app/build/.
+// Exit 2 means native audio+video were not verified; buffering is not decoder proof.
+const {chromium}=require('playwright'),fs=require('node:fs'),path=require('node:path'),{execFileSync}=require('node:child_process');
+(async()=>{
+ const base=(process.env.CHESS_REAL_EMBY_BASE||'').replace(/\/+$/,''),username=process.env.CHESS_REAL_EMBY_USER,password=process.env.CHESS_REAL_EMBY_PASSWORD,adb=process.env.ADB;
+ if(!base||!username||!password||!adb)throw Error('Required environment missing');
+ const device='cyber-android-audio-'+Date.now(),endpoint=(p,q={})=>{const url=new URL(p,base+'/');for(const[k,v]of Object.entries(q))url.searchParams.set(k,v);return url;};
+ let token='',user='',session,source,browser,page,phase='login';
+ const result={itemId:'128223',platform:'Android API 37 emulator',phases:[]};
+ const headers=()=>({'Content-Type':'application/json','X-Emby-Authorization':`MediaBrowser Client="CyberRoom QA", Device="Android media validation", DeviceId="${device}", Version="0.8.3"`,...(token?{'X-Emby-Token':token}:{})});
+ async function api(p,body,q={}){const r=await fetch(endpoint(p,q),{method:body===undefined?'GET':'POST',headers:headers(),body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(60000),redirect:'error'});if(!r.ok)throw Error('HTTP '+r.status);return r.status===204?{}:r.json();}
+ const output=path.resolve(__dirname,'../app/build/real-android-media-check');fs.mkdirSync(output,{recursive:true});
+ try{
+  const auth=await api('Users/AuthenticateByName',{Username:username,Pw:password});token=auth.AccessToken;user=auth.User.Id;
+  phase='playback-info';const info=await api('Items/128223/PlaybackInfo',{UserId:user,StartTimeTicks:0,EnableDirectPlay:true,EnableDirectStream:true,EnableTranscoding:true,IsPlayback:true,AutoOpenLiveStream:true,MaxStreamingBitrate:40000000,DeviceProfile:{Name:'CyberRoom direct decode verification',MaxStreamingBitrate:40000000,DirectPlayProfiles:[{Container:'mkv,mp4',Type:'Video',VideoCodec:'h264',AudioCodec:'eac3,ac3,aac',AudioChannels:'6'}],TranscodingProfiles:[{Container:'ts',Type:'Video',VideoCodec:'h264',AudioCodec:'aac',Protocol:'hls',Context:'Streaming',MaxAudioChannels:'2',MinSegments:2,SegmentLength:3}]}},{UserId:user,DeviceId:device});
+  source=info.MediaSources?.[0];session=info.PlaySessionId;if(!source)throw Error('No media source');
+  result.source={container:source.Container,directPlay:source.SupportsDirectPlay,directStream:source.SupportsDirectStream,transcodingProvided:!!source.TranscodingUrl,streams:(source.MediaStreams||[]).filter(s=>['Video','Audio'].includes(s.Type)).map(s=>({type:s.Type,codec:s.Codec,channels:s.Channels,sampleRate:s.SampleRate,width:s.Width,height:s.Height,index:s.Index}))};console.log(JSON.stringify({phase:'metadata',source:result.source}));
+  let direct=source.DirectStreamUrl?new URL(source.DirectStreamUrl,base+'/'):endpoint('Videos/128223/stream',{Static:'true',MediaSourceId:source.Id});if(direct.origin!==new URL(base).origin)throw Error('Unexpected initial stream origin');direct.searchParams.set('api_key',token);direct.searchParams.set('DeviceId',device);
+  phase='native-direct';browser=await chromium.connectOverCDP(process.env.ANDROID_CDP||'http://127.0.0.1:19222');page=browser.contexts()[0].pages()[0];await page.waitForFunction(()=>!!globalThis.NativeRoom);await page.evaluate(()=>window.cyberDisconnect?.());await page.waitForTimeout(1000);
+  await page.evaluate(origin=>{window.__actualPlayers=[];window.addEventListener('native-room',e=>{if(e.detail.type==='player'){window.__actualPlayers.push({...e.detail,receivedAt:Date.now()});if(window.__actualPlayers.length>300)window.__actualPlayers.shift();}});NativeRoom.mediaConfigure(JSON.stringify({origin}));},new URL(base).origin);
+  await page.evaluate(url=>NativeRoom.playerCommand(JSON.stringify({url,playing:true,positionMs:0,volume:1,muted:false,rate:1,visible:true,bounds:{x:0,y:100,width:390,height:240}})),direct.href);
+  await api('Sessions/Playing',{ItemId:'128223',MediaSourceId:source.Id,PlaySessionId:session,PositionTicks:0,IsPaused:false,CanSeek:true,PlayMethod:'DirectPlay'}).catch(()=>{});
+  for(let i=0;i<12;i++){await page.waitForTimeout(2500);const status=await page.evaluate(()=>window.__actualPlayers.at(-1)||null);if(status){if(Date.now()-status.receivedAt>2000)throw Error('Player events stopped');result.phases.push({elapsed:(i+1)*2.5,status});console.log(JSON.stringify({phase:'native-status',elapsed:(i+1)*2.5,status}));if(status.error||(status.renderedFirstFrame&&status.audioPresent&&!status.audioSupported)||(status.renderedFirstFrame&&status.audioOutputAdvancing&&status.audioPcmPeak>0&&status.positionMs>3000))break;}}
+  fs.writeFileSync(path.join(output,'direct-native.png'),execFileSync(adb,['-s','emulator-5554','exec-out','screencap','-p'],{maxBuffer:8*1024*1024}));
+  const status=result.phases.at(-1)?.status;result.directVerified=!!(status?.renderedFirstFrame&&status.audioOutputAdvancing&&status.audioPcmPeak>0&&!status.error);result.unsupportedAudio=!!(status?.audioPresent&&!status.audioSupported);result.noPlaybackError=!(status?.error);
+ }catch(error){result.failure={phase,kind:error.name,reason:/^(HTTP \d+|No media source|Unexpected initial stream origin|Player events stopped)$/.test(error.message)?error.message:'Operation failed or timed out'};console.log(JSON.stringify(result.failure));}
+ finally{await page?.evaluate(()=>NativeRoom.playerStop()).catch(()=>{});if(session&&source)await api('Sessions/Playing/Stopped',{ItemId:'128223',MediaSourceId:source.Id,PlaySessionId:session,PositionTicks:0}).catch(()=>{});if(source?.LiveStreamId)await api('LiveStreams/Close',{LiveStreamId:source.LiveStreamId}).catch(()=>{});await browser?.close();fs.writeFileSync(path.join(output,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({phase:'complete',directVerified:result.directVerified,unsupportedAudio:result.unsupportedAudio,failure:result.failure||null}));if(!result.directVerified)process.exitCode=2;}
+})().catch(error=>{console.error(error.name);process.exitCode=1;});

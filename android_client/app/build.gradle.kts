@@ -9,8 +9,8 @@ android {
         applicationId = "com.chessflipping.client"
         minSdk = 26
         targetSdk = 37
-        versionCode = 15
-        versionName = "0.8.2"
+        versionCode = 16
+        versionName = "0.8.3"
         testInstrumentationRunner = "com.chessflipping.client.PresentationChecks"
     }
     compileOptions {
@@ -37,6 +37,7 @@ dependencies {
     implementation("androidx.core:core:1.15.0")
     implementation("androidx.media3:media3-exoplayer:1.8.0")
     implementation("androidx.media3:media3-exoplayer-hls:1.8.0")
+    implementation("androidx.media3:media3-ui:1.8.0")
     implementation("androidx.media3:media3-datasource-okhttp:1.8.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

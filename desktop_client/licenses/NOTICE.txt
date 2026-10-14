@@ -1,0 +1,31 @@
+CyberRoom Windows native media components
+
+This distribution embeds unmodified MSYS2 mingw64 libmpv 0.41.0-6 and the
+runtime libraries identified in msys2-package-lock.json. These components
+are authored by their respective upstream developers, not CyberRoom.
+No standalone mpv or FFmpeg executable is launched.
+
+Pinned source and build material for this exact native distribution:
+https://github.com/LinHuiG/chinese-chess-flipping/releases/tag/media-mpv-msys2-fb232a877695
+The source archive includes the upstream source packages, PKGBUILD recipes
+and patches, binary build records, incorporated static/header dependencies,
+and the checksummed Rust crate sources used by retained Cargo lockfiles.
+The release must be available before this native executable is published.
+
+Upstream binary/source package repositories:
+https://repo.msys2.org/mingw/mingw64/
+https://repo.msys2.org/mingw/sources/
+Application integration source and installation/build scripts:
+https://github.com/LinHuiG/chinese-chess-flipping
+
+This is a GPL-enabled distribution, including FFmpeg under GPL-3.0-or-later;
+it is not an LGPL-only build. CyberRoom is AGPL-3.0-only. Individual
+components retain their own licenses, exceptions and copyright notices.
+See GPL-3.0.txt, GPL-2.0.txt, LGPL-2.1.txt, MSYS2-NOTICES.txt,
+CARGO-NOTICES.txt and the package-specific files under licenses/packages.
+The software is supplied without warranty, as described in those terms.
+
+The library files are extracted beside these notices to a versioned private
+application data directory. Rebuilding CyberRoom with replacement libraries
+is supported by scripts/prepare-desktop-media.py and the package lock;
+update the source/notice materials and checksums when replacing a library.

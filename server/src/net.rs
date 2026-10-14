@@ -17,11 +17,12 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     sync::{mpsc, watch},
     time::timeout,
 };
+use tokio_util::io::ReaderStream;
 
 struct Registered {
     hub: Shared,
@@ -331,16 +332,25 @@ pub async fn desktop_version() -> Response {
     }
 }
 pub async fn desktop_download() -> Response {
-    match tokio::fs::read(crate::resource_root().join("desktop-update/latest.exe")).await {
-        Ok(bytes) => Response::builder()
-            .header("content-type", "application/octet-stream")
-            .header("content-disposition", "attachment; filename=CyberRoom.exe")
-            .header("content-length", bytes.len())
-            .header("cache-control", "no-cache")
-            .body(Body::from(bytes))
-            .unwrap(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
-    }
+    let file = match tokio::fs::File::open(crate::resource_root().join("desktop-update/latest.exe"))
+        .await
+    {
+        Ok(file) => file,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let size = match file.metadata().await {
+        Ok(meta) if meta.is_file() => meta.len(),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    // Pull bounded chunks as HTTP consumes them; keep length tied to this handle.
+    let stream = ReaderStream::with_capacity(file.take(size), 64 * 1024);
+    Response::builder()
+        .header("content-type", "application/octet-stream")
+        .header("content-disposition", "attachment; filename=CyberRoom.exe")
+        .header("content-length", size)
+        .header("cache-control", "no-cache")
+        .body(Body::from_stream(stream))
+        .unwrap()
 }
 pub async fn asset(uri: Uri, method: Method) -> Response {
     if method != Method::GET && method != Method::HEAD {

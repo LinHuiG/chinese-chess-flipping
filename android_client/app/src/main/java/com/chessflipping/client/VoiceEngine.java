@@ -59,7 +59,11 @@ public final class VoiceEngine implements AutoCloseable {
     }
     public VoiceEngine(Context context,Consumer<JSONObject> events,Supplier<GameConnection> relay,Supplier<UdpPeer> udp,BooleanSupplier movieActive,Runnable interrupted){
         this.context=context;this.events=events;this.relay=relay;this.udp=udp;this.movieActive=movieActive;this.interrupted=interrupted;audio=context.getSystemService(AudioManager.class);
-        focus=new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attributes()).setOnAudioFocusChangeListener(change->{if(change<0){microphone(false);interrupted.run();}}).build();
+        focus=new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attributes()).setOnAudioFocusChangeListener(change->{
+            // Starting our movie replaces the standalone microphone's focus request.
+            // While the movie owns focus, its listener handles external interruptions.
+            if(change<0&&!movieActive.getAsBoolean()){microphone(false);interrupted.run();}
+        }).build();
         devices=new AudioDeviceCallback(){@Override public void onAudioDevicesRemoved(AudioDeviceInfo[] removed){if(removed.length>0&&microphone){microphone(false);report("音频设备已切换，请再次开麦");}}};
         audio.registerAudioDeviceCallback(devices,new Handler(Looper.getMainLooper()));
         // Schedule the next block from this run; a cached process must not replay missed ticks.

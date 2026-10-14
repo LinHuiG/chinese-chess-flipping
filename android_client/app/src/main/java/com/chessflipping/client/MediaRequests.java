@@ -10,19 +10,20 @@ import java.util.function.Consumer;
 
 /** Bounded Emby requests. Origin changes and stop invalidate queued work as well as active calls. */
 final class MediaRequests implements AutoCloseable {
-    private final OkHttpClient client,playbackClient;
+    private final OkHttpClient client,playbackClient,imageClient;
     private final ThreadPoolExecutor workers=new ThreadPoolExecutor(2,2,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16));
     private final AtomicInteger generation=new AtomicInteger();
     private final Consumer<Runnable> dispatch;private final Consumer<JSONObject> events;
     private volatile HttpUrl origin;private volatile boolean closed;
     MediaRequests(Consumer<Runnable> dispatch,Consumer<JSONObject> events){
         this.dispatch=dispatch;this.events=events;
-        client=new OkHttpClient.Builder().connectTimeout(10,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).writeTimeout(15,TimeUnit.SECONDS)
+        client=new OkHttpClient.Builder().connectTimeout(10,TimeUnit.SECONDS).readTimeout(60,TimeUnit.SECONDS).writeTimeout(15,TimeUnit.SECONDS)
             .addNetworkInterceptor(chain->{Integer ticket=chain.request().tag(Integer.class);if(!allowed(chain.request().url())||(ticket!=null&&ticket!=generation.get()))throw new IOException("Media request expired or origin is not authorized");return chain.proceed(chain.request());}).build();
+        imageClient=client.newBuilder().followRedirects(false).followSslRedirects(false).build();
         // Media3 may follow an Emby redirect to a CDN, then load HLS segments there.
         // Its client shares cancellation with API calls but never the API origin guard.
         OkHttpClient.Builder playback=client.newBuilder();playback.networkInterceptors().clear();
-        playbackClient=playback.addInterceptor(chain->{Response response=chain.proceed(playbackRequest(chain.request()));try{return response.newBuilder().request(playbackRequest(response.request())).build();}catch(IOException expired){response.close();throw expired;}})
+        playbackClient=playback.readTimeout(20,TimeUnit.SECONDS).addInterceptor(chain->{Response response=chain.proceed(playbackRequest(chain.request()));try{return response.newBuilder().request(playbackRequest(response.request())).build();}catch(IOException expired){response.close();throw expired;}})
             .addNetworkInterceptor(chain->chain.proceed(playbackRequest(chain.request()))).build();
     }
     private static boolean sameOrigin(HttpUrl a,HttpUrl b){return b!=null&&a.scheme().equals(b.scheme())&&a.host().equals(b.host())&&a.port()==b.port();}
@@ -56,21 +57,28 @@ final class MediaRequests implements AutoCloseable {
             try{
                 HttpUrl url=HttpUrl.parse(q.getString("url"));if(url==null||!allowed(url))throw new IOException("Media origin is not authorized");
                 String method=q.optString("method","GET").toUpperCase(Locale.ROOT);if(!method.matches("GET|POST|DELETE"))throw new IOException("Unsupported method");
+                boolean image=q.optString("responseType").equals("image");if(image&&!method.equals("GET"))throw new IOException("Images require GET");
                 String body=q.optString("body","");if(body.length()>1048576)throw new IOException("Request too large");
                 Request.Builder builder=new Request.Builder().url(url).tag(Integer.class,current);JSONObject headers=q.optJSONObject("headers");
                 if(headers!=null){Iterator<String> keys=headers.keys();while(keys.hasNext()){String key=keys.next();if(key.matches("(?i)Accept|Content-Type|X-Emby-Token|X-Emby-Authorization|Authorization"))builder.header(key,headers.getString(key));}}
                 builder.method(method,method.equals("GET")?null:RequestBody.create(body,MediaType.parse("application/json; charset=utf-8")));
                 if(current!=generation.get())return;
-                try(Response response=client.newCall(builder.build()).execute()){
+                Call call=(image?imageClient:client).newCall(builder.build());call.timeout().timeout(Math.max(1000,Math.min(image?20000:60000,q.optLong("timeoutMs",20000))),TimeUnit.MILLISECONDS);
+                try(Response response=call.execute()){
                     ByteArrayOutputStream bytes=new ByteArrayOutputStream();ResponseBody responseBody=response.body();
+                    String mime="";if(image&&response.isSuccessful()){
+                        mime=response.header("Content-Type","").split(";",2)[0].trim().toLowerCase(Locale.ROOT);
+                        if(!mime.matches("image/(jpeg|png|webp|gif)"))throw new IOException("Unsupported image type");
+                    }
                     if(responseBody!=null){byte[] buffer=new byte[8192];int count;try(InputStream input=responseBody.byteStream()){while((count=input.read(buffer))!=-1){if(closed||current!=generation.get())return;if(bytes.size()+count>2097152)throw new IOException("Response too large");bytes.write(buffer,0,count);}}}
-                    reply(id,response.code(),bytes.toString("UTF-8"),"",current);
+                    String dataUrl=image&&response.isSuccessful()?"data:"+mime+";base64,"+Base64.getEncoder().encodeToString(bytes.toByteArray()):"";
+                    reply(id,response.code(),image?"":bytes.toString("UTF-8"),dataUrl,"",current);
                 }
-            }catch(Exception error){reply(id,0,"","Emby 请求失败，请检查地址、授权和网络",current);}
-        });}catch(RejectedExecutionException full){reply(id,0,"","请求过多，请稍后重试",current);}
+            }catch(Exception error){reply(id,0,"","","Emby 请求失败，请检查地址、授权和网络",current);}
+        });}catch(RejectedExecutionException full){reply(id,0,"","","请求过多，请稍后重试",current);}
     }
-    private void reply(String id,int status,String body,String error,int current){
-        dispatch.accept(()->{if(closed||current!=generation.get())return;try{events.accept(new JSONObject().put("type","mediaResponse").put("id",id).put("status",status).put("body",body).put("error",error));}catch(JSONException ignored){}});
+    private void reply(String id,int status,String body,String dataUrl,String error,int current){
+        dispatch.accept(()->{if(closed||current!=generation.get())return;try{events.accept(new JSONObject().put("type","mediaResponse").put("id",id).put("status",status).put("body",body).put("dataUrl",dataUrl).put("error",error));}catch(JSONException ignored){}});
     }
     @Override public void close(){closed=true;invalidate();workers.shutdownNow();}
 }

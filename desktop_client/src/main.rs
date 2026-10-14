@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod audio;
 mod lifecycle;
+mod media;
+mod media_runtime;
 mod network;
 mod udp;
 mod wire;
@@ -53,6 +55,7 @@ pub struct AppState {
     pub network: Arc<network::Network>,
     pub udp: Mutex<Option<Arc<udp::Udp>>>,
     pub voice: Arc<audio::Voice>,
+    player: Arc<media::Media>,
     media_origin: Mutex<Option<reqwest::Url>>,
     http: reqwest::Client,
     visibility: Mutex<lifecycle::Visibility>,
@@ -66,6 +69,7 @@ impl AppState {
         }
     }
     fn shutdown(&self) {
+        self.player.shutdown();
         self.voice.shutdown();
         self.network.disconnect();
         if let Some(u) = self.udp.lock().unwrap().as_ref() {
@@ -83,6 +87,7 @@ impl AppState {
         let change = state.update(minimized, visible, lifecycle::session_locked());
         let background = state.background();
         drop(state);
+        self.player.foreground(!background);
         if background || resumed {
             self.voice.mute();
         }
@@ -252,7 +257,19 @@ async fn native_call(
                 }
                 Some(url)
             };
-            *state.media_origin.lock().unwrap() = origin;
+            let mut current = state.media_origin.lock().unwrap();
+            if current.as_ref().map(|u| u.origin()) != origin.as_ref().map(|u| u.origin()) {
+                state.player.stop();
+            }
+            *current = origin;
+            Ok(json!(true))
+        }
+        "playerCommand" => {
+            state.player.command(parse_arg(&args, 0)?)?;
+            Ok(json!(true))
+        }
+        "playerStop" => {
+            state.player.stop();
             Ok(json!(true))
         }
         "mediaRequest" => {
@@ -260,8 +277,12 @@ async fn native_call(
             let id = request.get("id").cloned().unwrap_or(Value::Null);
             let result = media_request(&state, request).await;
             let event = match result {
-                Ok((status, body)) => {
-                    json!({"type":"mediaResponse","id":id,"status":status,"body":body})
+                Ok((status, body, image)) => {
+                    if image {
+                        json!({"type":"mediaResponse","id":id,"status":status,"body":"","dataUrl":body})
+                    } else {
+                        json!({"type":"mediaResponse","id":id,"status":status,"body":body})
+                    }
                 }
                 Err(error) => json!({"type":"mediaResponse","id":id,"status":0,"error":error}),
             };
@@ -280,7 +301,22 @@ async fn native_call(
         _ => Err("未知本地接口".into()),
     }
 }
-async fn media_request(state: &AppState, value: Value) -> Result<(u16, String), String> {
+fn media_image_data_url(content_type: &str, bytes: &[u8]) -> Result<String, String> {
+    let mime = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(
+        mime.as_str(),
+        "image/jpeg" | "image/png" | "image/webp" | "image/gif"
+    ) {
+        return Err("片源未返回支持的图片格式".into());
+    }
+    Ok(format!("data:{mime};base64,{}", B64.encode(bytes)))
+}
+async fn media_request(state: &AppState, value: Value) -> Result<(u16, String, bool), String> {
     let url = reqwest::Url::parse(
         value
             .get("url")
@@ -296,9 +332,20 @@ async fn media_request(state: &AppState, value: Value) -> Result<(u16, String), 
     if !matches!(method, "GET" | "POST" | "DELETE") {
         return Err("媒体请求方式不支持".into());
     }
+    let image = value.get("responseType").and_then(Value::as_str) == Some("image");
+    if image && method != "GET" {
+        return Err("图片请求必须使用 GET".into());
+    }
     let mut request = state
         .http
-        .request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), url);
+        .request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), url)
+        .timeout(Duration::from_millis(
+            value
+                .get("timeoutMs")
+                .and_then(Value::as_u64)
+                .unwrap_or(20000)
+                .clamp(1000, if image { 20000 } else { 60000 }),
+        ));
     if let Some(headers) = value.get("headers").and_then(Value::as_object) {
         if headers.len() > 16 {
             return Err("媒体请求头过大".into());
@@ -330,6 +377,12 @@ async fn media_request(state: &AppState, value: Value) -> Result<(u16, String), 
         .await
         .map_err(|_| "无法连接片源，请检查地址、网络或证书")?;
     let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
     if response.content_length().is_some_and(|n| n > 2097152) {
         return Err("片源响应过大".into());
     }
@@ -342,15 +395,33 @@ async fn media_request(state: &AppState, value: Value) -> Result<(u16, String), 
         }
         bytes.extend(chunk);
     }
-    Ok((
-        status,
-        String::from_utf8(bytes).map_err(|_| "片源应返回文本信息".to_string())?,
-    ))
+    let body = if image {
+        if (200..300).contains(&status) {
+            media_image_data_url(&content_type, &bytes)?
+        } else {
+            String::new()
+        }
+    } else {
+        String::from_utf8(bytes).map_err(|_| "片源应返回文本信息".to_string())?
+    };
+    Ok((status, body, image))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn poster_response_keeps_binary_bytes_and_rejects_html_svg() {
+        let bytes = b"\x89PNG\r\n\x1a\n\xff\0";
+        let encoded = media_image_data_url("IMAGE/PNG; charset=binary", bytes).unwrap();
+        assert_eq!(
+            B64.decode(encoded.split_once(',').unwrap().1).unwrap(),
+            bytes
+        );
+        for mime in ["text/html", "image/svg+xml", "application/json", ""] {
+            assert!(media_image_data_url(mime, bytes).is_err());
+        }
+    }
     #[test]
     fn native_bridge_is_restricted_to_embedded_origin() {
         for s in [
@@ -451,6 +522,7 @@ fn main() {
                 network: Arc::new(network::Network::new()),
                 udp: Mutex::new(None),
                 voice: audio::Voice::new(weak.clone()),
+                player: media::Media::new(weak.clone(), path.clone()),
                 media_origin: Mutex::new(None),
                 http,
                 visibility: Mutex::new(lifecycle::Visibility::default()),

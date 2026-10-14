@@ -1,0 +1,14 @@
+Evidence excerpt from the public MSYS2 librsvg build log.
+Source: https://github.com/msys2/msys2-autobuild/actions/runs/35444080246/job/105899902767
+Full log SHA256: d4652c28cc1d0ad2c715be9374e26741ed22ce9398013d0ebdb686f3c3a7f9cb
+
+2026-09-19T13:12:38.3079888Z  Downgrading windows-sys v0.61.2 -> v0.60.2
+2026-09-19T13:12:38.3080698Z       Adding windows-targets v0.53.5
+2026-09-19T13:12:38.3083019Z       Adding windows_aarch64_gnullvm v0.53.1
+2026-09-19T13:12:38.3083630Z       Adding windows_aarch64_msvc v0.53.1
+2026-09-19T13:12:38.3084436Z       Adding windows_i686_gnu v0.53.1
+2026-09-19T13:12:38.3085101Z       Adding windows_i686_gnullvm v0.53.1
+2026-09-19T13:12:38.3085502Z       Adding windows_i686_msvc v0.53.1
+2026-09-19T13:12:38.3085867Z       Adding windows_x86_64_gnu v0.53.1
+2026-09-19T13:12:38.3086244Z       Adding windows_x86_64_gnullvm v0.53.1
+2026-09-19T13:12:38.3086628Z       Adding windows_x86_64_msvc v0.53.1

@@ -1,0 +1,971 @@
+{
+  "schema": 1,
+  "status": "incomplete-evidence-only",
+  "completeCorrespondingSource": false,
+  "binarySha256": "6a48faecb5ffe14a7be2f1fcf8b193bf3d51837cfb36e8d3527d82089de563d9",
+  "upstreamRun": "https://github.com/shinchiro/mpv-winbuild-cmake/actions/runs/38487586640",
+  "buildImage": "ghcr.io/shinchiro/archlinux@sha256:c7dffe77b57d98b10e327dde12d3977faf4cb90aa7cb4f5eeac4e9d68d724239",
+  "scope": "Recipe inventory is a superset, not a proven static-link closure. A library version is not an exact source commit. Primary archives do not imply recursive submodules/dependencies are included.",
+  "sources": [
+    {
+      "name": "recipes",
+      "file": "recipes.tar.gz",
+      "url": "https://codeload.github.com/shinchiro/mpv-winbuild-cmake/tar.gz/refs/tags/20261014",
+      "commit": "1f8d2e76255abc48f0456d9be99b4cab9c6566e6",
+      "bytes": 82260,
+      "sha256": "1c4bba0752e03d829493c92da844971fa506d3b6c159e5d603905646edd6a846"
+    },
+    {
+      "name": "mpv",
+      "file": "mpv-source.tar.gz",
+      "url": "https://codeload.github.com/mpv-player/mpv/tar.gz/ec38361c56",
+      "commit": "ec38361c56b2d91e417c4c3e58184535d1a1aa2e",
+      "bytes": 7480574,
+      "sha256": "ac82e1a9a1ecf2aa26b4c11a49252fc40723296587f22eaed14548da87c58b25"
+    },
+    {
+      "name": "ffmpeg",
+      "file": "ffmpeg-source.tar.gz",
+      "url": "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/2ec8998c3",
+      "commit": "2ec8998c3daf6aa31a4afec963bff9b5ecbfdee7",
+      "bytes": 17864441,
+      "sha256": "cae89788491722293bebde26b06a859d1d09e9a5ae49f1193886c1af3193db0c"
+    }
+  ],
+  "evidence": [
+    {
+      "file": "artifacts.json",
+      "bytes": 10650,
+      "sha256": "b0854e4b640f9533e99c9a08a13b4f8968a4d75124161c0258a01774a820f4f2"
+    },
+    {
+      "file": "mpv-x86_64-logs.zip",
+      "bytes": 217587,
+      "sha256": "e24a4d3b2924e74c551d043f513b9792e2df9e554c075ea5b5911421eee69a13"
+    },
+    {
+      "file": "run-logs.zip",
+      "bytes": 99180,
+      "sha256": "8fdb5f4c963f1e45b7e17d74651db620a9cea5cfc6b3cf316930238f4f0635c0"
+    }
+  ],
+  "missing": [
+    "Exact upstream HEAD of every incorporated dependency, including unchanged cached repositories; fetch output alone is insufficient.",
+    "Recursive submodule commits, Cargo/vendor sources and lock files, any local changes, generated-source inputs and applied patch order.",
+    "Actual static link/dependency closure, distinguishing target runtime libraries from build tools and disabled recipes.",
+    "Each incorporated component's matching source archive, copyright notices, license text and required modification notices.",
+    "Build configuration/cache and toolchain inputs sufficient to rebuild this DLL; the recorded container digest alone is not a source archive.",
+    "A durable complete corresponding-source download offered with the binary, followed by a manual completeness review."
+  ],
+  "recipes": [
+    {
+      "name": "amf-headers",
+      "recipe": "packages/amf-headers.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git"
+    },
+    {
+      "name": "angle-headers",
+      "recipe": "packages/angle-headers.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/google/angle.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "aom",
+      "recipe": "packages/aom.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://aomedia.googlesource.com/aom",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "avisynth-headers",
+      "recipe": "packages/avisynth-headers.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/AviSynth/AviSynthPlus.git"
+    },
+    {
+      "name": "brotli",
+      "recipe": "packages/brotli.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/google/brotli.git"
+    },
+    {
+      "name": "bzip2",
+      "recipe": "packages/bzip2.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://gitlab.com/bzip2/bzip2.git"
+    },
+    {
+      "name": "c-ares",
+      "recipe": "packages/c-ares.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/c-ares/c-ares.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "cryptopp",
+      "recipe": "packages/cryptopp.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "https://github.com/weidai11/cryptopp/archive/CRYPTOPP_8_2_0.tar.gz",
+      "URL_HASH": "SHA256=e3bcd48a62739ad179ad8064b523346abb53767bcbefc01fe37303412292343e"
+    },
+    {
+      "name": "curl",
+      "recipe": "packages/curl.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/curl/curl.git"
+    },
+    {
+      "name": "dav1d",
+      "recipe": "packages/dav1d.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://code.videolan.org/videolan/dav1d.git"
+    },
+    {
+      "name": "davs2",
+      "recipe": "packages/davs2.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/saindriches/davs2.git"
+    },
+    {
+      "name": "expat",
+      "recipe": "packages/expat.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/libexpat/libexpat.git"
+    },
+    {
+      "name": "fast_float",
+      "recipe": "packages/fast_float.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/fastfloat/fast_float.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "ffmpeg",
+      "recipe": "packages/ffmpeg.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": "2ec8998c3daf6aa31a4afec963bff9b5ecbfdee7",
+      "status": "primary-source-archived",
+      "GIT_REPOSITORY": "https://github.com/FFmpeg/FFmpeg.git"
+    },
+    {
+      "name": "flac",
+      "recipe": "packages/flac.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/xiph/flac.git"
+    },
+    {
+      "name": "fontconfig",
+      "recipe": "packages/fontconfig.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://gitlab.freedesktop.org/fontconfig/fontconfig.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "freetype2",
+      "recipe": "packages/freetype2.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/freetype/freetype.git"
+    },
+    {
+      "name": "fribidi",
+      "recipe": "packages/fribidi.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/fribidi/fribidi.git"
+    },
+    {
+      "name": "game-music-emu",
+      "recipe": "packages/game-music-emu.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://bitbucket.org/mpyne/game-music-emu.git"
+    },
+    {
+      "name": "glad",
+      "recipe": "packages/glad.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/Dav1dde/glad.git",
+      "GIT_TAG": "glad2"
+    },
+    {
+      "name": "glslang",
+      "recipe": "packages/glslang.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/KhronosGroup/glslang.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "gmp",
+      "recipe": "packages/gmp.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz",
+      "URL_HASH": "SHA256=a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898"
+    },
+    {
+      "name": "graphengine",
+      "recipe": "packages/graphengine.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/sekrit-twc/graphengine.git"
+    },
+    {
+      "name": "harfbuzz",
+      "recipe": "packages/harfbuzz.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/harfbuzz/harfbuzz.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "highway",
+      "recipe": "packages/highway.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/google/highway.git"
+    },
+    {
+      "name": "lame",
+      "recipe": "packages/lame.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://gitlab.com/shinchiro/lame.git"
+    },
+    {
+      "name": "lcms2",
+      "recipe": "packages/lcms2.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/mm2/Little-CMS.git"
+    },
+    {
+      "name": "libarchive",
+      "recipe": "packages/libarchive.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/libarchive/libarchive.git"
+    },
+    {
+      "name": "libaribcaption",
+      "recipe": "packages/libaribcaption.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/xqq/libaribcaption.git"
+    },
+    {
+      "name": "libass",
+      "recipe": "packages/libass.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/libass/libass.git"
+    },
+    {
+      "name": "libbluray",
+      "recipe": "packages/libbluray.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://code.videolan.org/videolan/libbluray.git"
+    },
+    {
+      "name": "libbs2b",
+      "recipe": "packages/libbs2b.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/alexmarsev/libbs2b.git"
+    },
+    {
+      "name": "libdvdcss",
+      "recipe": "packages/libdvdcss.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://code.videolan.org/videolan/libdvdcss.git"
+    },
+    {
+      "name": "libdvdnav",
+      "recipe": "packages/libdvdnav.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://code.videolan.org/videolan/libdvdnav.git"
+    },
+    {
+      "name": "libdvdread",
+      "recipe": "packages/libdvdread.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://code.videolan.org/videolan/libdvdread.git"
+    },
+    {
+      "name": "libiconv",
+      "recipe": "packages/libiconv.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.18.tar.gz",
+      "URL_HASH": "SHA256=3B08F5F4F9B4EB82F151A7040BFD6FE6C6FB922EFE4B1659C66EA933276965E8"
+    },
+    {
+      "name": "libjpeg",
+      "recipe": "packages/libjpeg.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/libjpeg-turbo/libjpeg-turbo.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "libjxl",
+      "recipe": "packages/libjxl.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/libjxl/libjxl.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "libmfx",
+      "recipe": "packages/libmfx.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/lu-zero/mfx_dispatch.git"
+    },
+    {
+      "name": "libmodplug",
+      "recipe": "packages/libmodplug.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/Konstanty/libmodplug.git"
+    },
+    {
+      "name": "libmysofa",
+      "recipe": "packages/libmysofa.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/hoene/libmysofa.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "libopenmpt",
+      "recipe": "packages/libopenmpt.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "https://lib.openmpt.org/files/libopenmpt/src/libopenmpt-0.7.12+release.autotools.tar.gz",
+      "URL_HASH": "SHA256=79AB3CE3672601E525B5CC944F026C80C03032F37D39CAA84C8CA3FDD75E0C98"
+    },
+    {
+      "name": "libopusenc",
+      "recipe": "packages/libopusenc.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/xiph/libopusenc.git"
+    },
+    {
+      "name": "libplacebo",
+      "recipe": "packages/libplacebo.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/haasn/libplacebo.git"
+    },
+    {
+      "name": "libpng",
+      "recipe": "packages/libpng.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/glennrp/libpng.git"
+    },
+    {
+      "name": "libpsl",
+      "recipe": "packages/libpsl.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/rockdaboot/libpsl.git"
+    },
+    {
+      "name": "libressl",
+      "recipe": "packages/libressl.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/libressl-3.1.5.tar.gz",
+      "URL_HASH": "SHA256=2c13ddcec5081c0e7ba7f93d8370a91911173090f1922007e1d90de274500494"
+    },
+    {
+      "name": "libsamplerate",
+      "recipe": "packages/libsamplerate.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/libsndfile/libsamplerate.git"
+    },
+    {
+      "name": "libsdl2",
+      "recipe": "packages/libsdl2.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/libsdl-org/SDL.git",
+      "GIT_TAG": "SDL2"
+    },
+    {
+      "name": "libsixel",
+      "recipe": "packages/libsixel.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/saitoha/libsixel.git"
+    },
+    {
+      "name": "libsodium",
+      "recipe": "packages/libsodium.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "https://github.com/jedisct1/libsodium/archive/1.0.18.tar.gz",
+      "URL_HASH": "SHA256=d59323c6b712a1519a5daf710b68f5e7fde57040845ffec53850911f10a5d4f4"
+    },
+    {
+      "name": "libsoxr",
+      "recipe": "packages/libsoxr.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://gitlab.com/shinchiro/soxr.git"
+    },
+    {
+      "name": "libsrt",
+      "recipe": "packages/libsrt.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/Haivision/srt.git"
+    },
+    {
+      "name": "libssh",
+      "recipe": "packages/libssh.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://gitlab.com/libssh/libssh-mirror.git"
+    },
+    {
+      "name": "libudfread",
+      "recipe": "packages/libudfread.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://code.videolan.org/videolan/libudfread.git"
+    },
+    {
+      "name": "libunibreak",
+      "recipe": "packages/libunibreak.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/adah1972/libunibreak.git"
+    },
+    {
+      "name": "libuv",
+      "recipe": "packages/libuv.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "https://github.com/libuv/libuv/archive/v1.40.0.tar.gz",
+      "URL_HASH": "SHA256=70fe1c9ba4f2c509e8166c0ca2351000237da573bb6c82092339207a9715ba6b"
+    },
+    {
+      "name": "libva",
+      "recipe": "packages/libva.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/intel/libva.git"
+    },
+    {
+      "name": "libvpl",
+      "recipe": "packages/libvpl.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/intel/libvpl.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "libvpx",
+      "recipe": "packages/libvpx.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://chromium.googlesource.com/webm/libvpx.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "libwebp",
+      "recipe": "packages/libwebp.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://chromium.googlesource.com/webm/libwebp.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "libxml2",
+      "recipe": "packages/libxml2.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/GNOME/libxml2.git"
+    },
+    {
+      "name": "libzimg",
+      "recipe": "packages/libzimg.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/sekrit-twc/zimg.git"
+    },
+    {
+      "name": "libzvbi",
+      "recipe": "packages/libzvbi.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/zapping-vbi/zvbi.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "luajit",
+      "recipe": "packages/luajit.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/openresty/luajit2.git",
+      "GIT_TAG": "v2.1-agentzh"
+    },
+    {
+      "name": "lzo",
+      "recipe": "packages/lzo.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "https://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz",
+      "URL_HASH": "SHA1=4924676a9bae5db58ef129dc1cebce3baa3c4b5d"
+    },
+    {
+      "name": "mbedtls",
+      "recipe": "packages/mbedtls.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/Mbed-TLS/mbedtls.git",
+      "GIT_TAG": "master"
+    },
+    {
+      "name": "megasdk",
+      "recipe": "packages/megasdk.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/meganz/sdk.git"
+    },
+    {
+      "name": "mpv",
+      "recipe": "packages/mpv.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": "ec38361c56b2d91e417c4c3e58184535d1a1aa2e",
+      "status": "primary-source-archived",
+      "GIT_REPOSITORY": "https://github.com/mpv-player/mpv.git"
+    },
+    {
+      "name": "mpv-packaging",
+      "recipe": "packages/mpv-packaging.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/shinchiro/mpv-packaging.git"
+    },
+    {
+      "name": "mpv-release",
+      "recipe": "packages/mpv-release.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "${LINK}"
+    },
+    {
+      "name": "mujs",
+      "recipe": "packages/mujs.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://codeberg.org/ccxvii/mujs.git"
+    },
+    {
+      "name": "nettle",
+      "recipe": "packages/nettle.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://gitlab.com/shinchiro/nettle.git"
+    },
+    {
+      "name": "nghttp2",
+      "recipe": "packages/nghttp2.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/nghttp2/nghttp2.git"
+    },
+    {
+      "name": "nghttp3",
+      "recipe": "packages/nghttp3.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/ngtcp2/nghttp3.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "ngtcp2",
+      "recipe": "packages/ngtcp2.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/ngtcp2/ngtcp2.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "nvcodec-headers",
+      "recipe": "packages/nvcodec-headers.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/FFmpeg/nv-codec-headers.git"
+    },
+    {
+      "name": "ogg",
+      "recipe": "packages/ogg.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/xiph/ogg.git"
+    },
+    {
+      "name": "openal-soft",
+      "recipe": "packages/openal-soft.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/kcat/openal-soft.git"
+    },
+    {
+      "name": "openssl",
+      "recipe": "packages/openssl.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/openssl/openssl.git"
+    },
+    {
+      "name": "opus",
+      "recipe": "packages/opus.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/xiph/opus.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "opus-dnn",
+      "recipe": "packages/opus-dnn.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "https://media.xiph.org/opus/models/opus_data-8a07d57c4fce6fb30f23b3e0d264004e04f1d7b421f5392ef61543d021a439af.tar.gz",
+      "URL_HASH": "SHA256=8a07d57c4fce6fb30f23b3e0d264004e04f1d7b421f5392ef61543d021a439af"
+    },
+    {
+      "name": "opus-tools",
+      "recipe": "packages/opus-tools.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/xiph/opus-tools.git"
+    },
+    {
+      "name": "opusfile",
+      "recipe": "packages/opusfile.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/xiph/opusfile.git"
+    },
+    {
+      "name": "readline",
+      "recipe": "packages/readline.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://git.sailfishos.org/mirror/readline.git"
+    },
+    {
+      "name": "rubberband",
+      "recipe": "packages/rubberband.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/breakfastquay/rubberband.git",
+      "GIT_TAG": "default"
+    },
+    {
+      "name": "shaderc",
+      "recipe": "packages/shaderc.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/google/shaderc.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "speex",
+      "recipe": "packages/speex.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/xiph/speex.git"
+    },
+    {
+      "name": "spirv-cross",
+      "recipe": "packages/spirv-cross.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/KhronosGroup/SPIRV-Cross.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "spirv-headers",
+      "recipe": "packages/spirv-headers.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/KhronosGroup/SPIRV-Headers.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "spirv-tools",
+      "recipe": "packages/spirv-tools.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/KhronosGroup/SPIRV-Tools.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "sqlite",
+      "recipe": "packages/sqlite.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "https://www.sqlite.org/2020/sqlite-autoconf-3330000.tar.gz",
+      "URL_HASH": "SHA3_256=6e94e9453cedf8f2023e3923f856741d1e28a2271e9f93d24d95fa48870edaad"
+    },
+    {
+      "name": "subrandr",
+      "recipe": "packages/subrandr.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/afishhh/subrandr.git",
+      "GIT_TAG": "master"
+    },
+    {
+      "name": "svtav1",
+      "recipe": "packages/svtav1.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://gitlab.com/AOMediaCodec/SVT-AV1.git"
+    },
+    {
+      "name": "termcap",
+      "recipe": "packages/termcap.cmake",
+      "observedBuildLogs": false,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "https://ftp.gnu.org/gnu/termcap/termcap-1.3.1.tar.gz",
+      "URL_HASH": "SHA256=91a0e22e5387ca4467b5bcb18edf1c51b930262fd466d5fda396dd9d26719100"
+    },
+    {
+      "name": "uavs3d",
+      "recipe": "packages/uavs3d.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/uavs3/uavs3d.git"
+    },
+    {
+      "name": "uchardet",
+      "recipe": "packages/uchardet.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://gitlab.freedesktop.org/uchardet/uchardet.git"
+    },
+    {
+      "name": "vapoursynth",
+      "recipe": "packages/vapoursynth.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/vapoursynth/vapoursynth.git",
+      "GIT_TAG": "master"
+    },
+    {
+      "name": "vorbis",
+      "recipe": "packages/vorbis.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/xiph/vorbis.git"
+    },
+    {
+      "name": "vulkan",
+      "recipe": "packages/vulkan.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/KhronosGroup/Vulkan-Loader.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "vulkan-header",
+      "recipe": "packages/vulkan-header.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/KhronosGroup/Vulkan-Headers.git",
+      "GIT_TAG": "main"
+    },
+    {
+      "name": "x264",
+      "recipe": "packages/x264.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://code.videolan.org/videolan/x264.git"
+    },
+    {
+      "name": "x265",
+      "recipe": "packages/x265.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/Multicorewareinc/x265.git"
+    },
+    {
+      "name": "xvidcore",
+      "recipe": "packages/xvidcore.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "URL": "\"https://downloads.xvid.com/downloads/xvidcore-1.3.7.tar.bz2\"",
+      "URL_HASH": "SHA256=aeeaae952d4db395249839a3bd03841d6844843f5a4f84c271ff88f7aa1acff7"
+    },
+    {
+      "name": "xxhash",
+      "recipe": "packages/xxhash.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/Cyan4973/xxHash.git",
+      "GIT_TAG": "dev"
+    },
+    {
+      "name": "xz",
+      "recipe": "packages/xz.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/tukaani-project/xz.git"
+    },
+    {
+      "name": "zlib",
+      "recipe": "packages/zlib.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/zlib-ng/zlib-ng.git",
+      "GIT_TAG": "develop"
+    },
+    {
+      "name": "zstd",
+      "recipe": "packages/zstd.cmake",
+      "observedBuildLogs": true,
+      "sourceCommit": null,
+      "status": "unresolved",
+      "GIT_REPOSITORY": "https://github.com/facebook/zstd.git",
+      "GIT_TAG": "dev"
+    }
+  ]
+}

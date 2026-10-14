@@ -1,0 +1,34 @@
+// Read-only playback diagnosis; optional media test fetches at most two manifests and one segment.
+// EMBY_MODE=metadata (default): match Emby Web's query/body placement without fetching media.
+// EMBY_MODE=audio-only: preserve H.264 video and request AAC stereo, then test one bounded TS response.
+const {randomUUID}=require('node:crypto');
+(async()=>{
+  const base=new URL(process.env.EMBY_BASE||'https://invalid.invalid'),item=process.env.EMBY_ITEM;
+  const mode=process.env.EMBY_MODE||'metadata',device='cyberroom-diagnosis-'+randomUUID();
+  if(!process.env.EMBY_BASE||!item||!process.env.EMBY_USER||!process.env.EMBY_PASSWORD||!['metadata','audio-only'].includes(mode))throw Error('Provide EMBY_BASE / EMBY_ITEM / EMBY_USER / EMBY_PASSWORD and optional EMBY_MODE');
+  if(!['http:','https:'].includes(base.protocol)||base.username||base.password||base.search||base.hash)throw Error('Invalid source base');
+  const report={item,mode,manifests:[],segmentRequests:0,cleanup:{}},headers={'Content-Type':'application/json','X-Emby-Authorization':`MediaBrowser Client="CyberRoom", Device="Bounded compatibility diagnostic", DeviceId="${device}", Version="0.8.3"`};
+  let session,source,stage='authenticate',encodingStarted=false;
+  const endpoint=(p,q={})=>{const u=new URL(base.href.replace(/\/$/,'')+'/'+p.replace(/^\//,''));for(const[k,v]of Object.entries(q))if(v!==undefined)u.searchParams.set(k,String(v));return u;};
+  async function bytes(response,limit){const reader=response.body?.getReader();if(!reader)return Buffer.alloc(0);const chunks=[];let size=0;try{while(true){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>limit)throw Error('response limit');chunks.push(value);}return Buffer.concat(chunks,size);}finally{await reader.cancel().catch(()=>{});}}
+  async function request(url,method='GET',body,limit=1048576,timeout=18000){if(url.origin!==base.origin||url.username||url.password)throw Error('Cross-origin URL rejected');const r=await fetch(url,{method,headers,body:body===undefined?undefined:JSON.stringify(body),redirect:'manual',signal:AbortSignal.timeout(timeout)});return {status:r.status,mime:(r.headers.get('content-type')||'').split(';')[0],bytes:await bytes(r,limit)};}
+  async function json(p,method,body,q){const r=await request(endpoint(p,q),method,body);if(r.status<200||r.status>=300)throw Object.assign(Error('request failed'),{status:r.status});return r.bytes.length?JSON.parse(r.bytes):{};}
+  async function cleanup(p,method,body,q){try{const r=await request(endpoint(p,q),method,body,65536,5000);return {status:r.status,ok:r.status>=200&&r.status<300};}catch(e){return {error:e.name};}}
+  async function manifest(url){const r=await request(url,'GET',undefined,65536),text=r.bytes.toString('utf8'),lines=text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);report.manifests.push({status:r.status,mime:r.mime,bytes:r.bytes.length,valid:text.startsWith('#EXTM3U'),codecs:[...text.matchAll(/CODECS="([a-zA-Z0-9.,_-]+)"/g)].map(m=>m[1]),segmentCount:lines.filter(s=>s.startsWith('#EXTINF:')).length});if(r.status!==200||!text.startsWith('#EXTM3U'))return {};const master=lines.findIndex(s=>s.startsWith('#EXT-X-STREAM-INF:')),segment=lines.findIndex(s=>s.startsWith('#EXTINF:'));const next=n=>n<0?undefined:lines.slice(n+1).find(s=>!s.startsWith('#'));return {variant:next(master),segment:next(segment)};}
+  try{
+    const auth=await json('Users/AuthenticateByName','POST',{Username:process.env.EMBY_USER,Pw:process.env.EMBY_PASSWORD});headers['X-Emby-Token']=auth.AccessToken;
+    report.policy=Object.fromEntries(['EnableMediaPlayback','EnableAudioPlaybackTranscoding','EnableVideoPlaybackTranscoding'].map(k=>[k,auth.User?.Policy?.[k]]));
+    if(Object.values(report.policy).some(v=>v!==true))throw Error('Playback/transcoding permissions are not explicitly allowed');
+    stage='playback-info';const audioOnly=mode==='audio-only',bitrate=audioOnly?30000000:2200000;
+    const query={UserId:auth.User.Id,DeviceId:device,IsPlayback:true,AutoOpenLiveStream:true,StartTimeTicks:0,MaxStreamingBitrate:bitrate,MaxAudioChannels:2,EnableDirectPlay:false,EnableDirectStream:false,EnableTranscoding:true,AllowAudioStreamCopy:false,AllowVideoStreamCopy:audioOnly,SubtitleStreamIndex:-1};
+    const info=await json('Items/'+encodeURIComponent(item)+'/PlaybackInfo','POST',{DeviceProfile:{Name:'CyberRoom diagnostic',MaxStreamingBitrate:bitrate,DirectPlayProfiles:[],TranscodingProfiles:[{Container:'ts',Type:'Video',VideoCodec:'h264',AudioCodec:'aac',Protocol:'hls',Context:'Streaming',MaxAudioChannels:'2',MinSegments:1,SegmentLength:3}]}},query);
+    session=info.PlaySessionId;source=info.MediaSources?.[0];report.negotiation={direct:source?.SupportsDirectPlay,stream:source?.SupportsDirectStream,transcode:source?.SupportsTranscoding,hasTranscodingUrl:!!source?.TranscodingUrl,isRemote:source?.IsRemote,requiredHeaderNames:Object.keys(source?.RequiredHttpHeaders||{}),audio:source?.MediaStreams?.filter(t=>t.Type==='Audio').map(t=>({codec:t.Codec,channels:t.Channels})),errorCode:info.ErrorCode};
+    if(!audioOnly)return;if(!session||!source?.Id||info.ErrorCode)throw Error('No authorized playback source/session');
+    stage='master-manifest';encodingStarted=true;
+    const master=endpoint('Videos/'+encodeURIComponent(item)+'/master.m3u8',{MediaSourceId:source.Id,DeviceId:device,PlaySessionId:session,Container:'ts',AudioCodec:'aac',AudioBitRate:128000,AudioChannels:2,MaxAudioChannels:2,AudioSampleRate:48000,VideoCodec:'h264',VideoBitRate:29872000,AudioStreamIndex:source.DefaultAudioStreamIndex??source.MediaStreams?.find(t=>t.Type==='Audio')?.Index,SubtitleStreamIndex:-1,Static:false,EnableAutoStreamCopy:true,AllowAudioStreamCopy:false,AllowVideoStreamCopy:true,StartTimeTicks:0});
+    const first=await manifest(master);if(!first.variant)throw Error('No HLS variant');stage='variant-manifest';const variant=new URL(first.variant,master),second=await manifest(variant);if(!second.segment)throw Error('No HLS segment');stage='sample-segment';report.segmentRequests++;
+    const segment=await request(new URL(second.segment,variant),'GET',undefined,8388608);report.segment={status:segment.status,mime:segment.mime,bytes:segment.bytes.length,transportStream:segment.bytes[0]===0x47&&segment.bytes[188]===0x47&&segment.bytes[376]===0x47};
+    report.note='A successful TS response alone does not verify decoder or speaker output.';
+  }catch(e){report.failure={stage,type:e.name,status:e.status};process.exitCode=1;}
+  finally{if(session&&headers['X-Emby-Token']){report.cleanup.stopped=await cleanup('Sessions/Playing/Stopped','POST',{ItemId:item,MediaSourceId:source?.Id,PlaySessionId:session,PositionTicks:0});if(encodingStarted)report.cleanup.activeEncodings=await cleanup('Videos/ActiveEncodings','DELETE',undefined,{DeviceId:device,PlaySessionId:session});}console.log(JSON.stringify(report,null,2));}
+})().catch(e=>{console.error(e.message);process.exitCode=1;});
