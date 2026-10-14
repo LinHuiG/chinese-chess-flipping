@@ -35,7 +35,9 @@ python scripts/publish-desktop-media-sources.py server/target/native-media-sourc
 
 本机已生成 `media-mpv-msys2-fb232a877695-source.zip`：**1,802,805,647 字节**，SHA-256 `5f1888bd7275ba97412cde195c7d2f6f1c0abe8149ae87ff6abd78716fe42932`。ZIP 全文件 CRC、发布脚本 `--check`、741 个 crate 的离线 vendor 恢复、损坏缓存拒绝、Python 语法均通过；重复生成运行 tar.gz 得到相同 SHA-256。
 
-固定源码发布标识是对规范化 JSON 清单做 SHA-256 后取前 12 位：`media-mpv-msys2-fb232a877695`。随包 NOTICE 指向该稳定 Release 地址；**发布流程必须先成功创建或验证这个源码 Release，再分发包含 DLL 的 EXE/镜像**。文档中出现该地址不代表它已经发布。根线程负责实际上传与发布结果。发布脚本不覆盖内容不一致的已有附件。
+固定源码发布标识是对规范化 JSON 清单做 SHA-256 后取前 12 位：`media-mpv-msys2-fb232a877695`。随包 NOTICE 指向该稳定 Release 地址；**发布流程必须先成功创建或验证这个源码 Release，再分发包含 DLL 的 EXE/镜像**。[源码 Release](https://github.com/LinHuiG/chinese-chess-flipping/releases/tag/media-mpv-msys2-fb232a877695) 已由 Actions 38615519118 成功公开，GitHub 核对大小和 SHA-256 后才放行运行包分发。发布脚本不覆盖内容不一致的已有附件。
+
+正式上传 ZIP 与本地同为 1,802,805,647 字节，GitHub SHA-256 为 `321e3be3d2fe6839d498ca00d7c025adbb406af92160f2001731b4bb909c1574`。只读 Range 核对 1118 项名称、大小、CRC、偏移均一致；862 个源包/crate 的 ZIP64 版本与大小标记不同，共 9464 字节容器元数据。仅替换本地这些字段、保持所有载荷不变即可算出上述远端整包散列；固定清单、README、恢复脚本、日志节选和 NOTICE 的实际散列也相同。因此源码内容没有改变，不把 ZIP 容器差异当作来源变更。云端运行 tar.gz 与本地 SHA-256 完全一致。
 
 已核对的来源边界：
 

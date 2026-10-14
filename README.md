@@ -59,7 +59,7 @@
 
 ## Docker 部署
 
-发布工作流将服务端、网页、Android 安装包及 Windows 运行包放进镜像；服务端支持 `linux/amd64` 与 `linux/arm64`，无需另外安装 Java 或配置数据库。0.8.2 的 [Actions 构建与双架构发布](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/38553293765) 已成功，默认第一台服务器已部署，并完成矿工与无片源语音/弹幕的公网复验，详见执行记录。
+发布工作流将服务端、网页、Android 安装包及 Windows 运行包放进镜像；服务端支持 `linux/amd64` 与 `linux/arm64`，无需另外安装 Java 或配置数据库。0.8.3 的 [Actions 构建与双架构发布](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/38615519118) 已成功，默认第一台服务器已部署；连接、完整安装包下载、房主权限和无片源弹幕公网复验通过，已知片源限制与测试边界见执行记录。
 
 安装 Docker 和 Docker Compose 后，下载 [compose.yaml](server/compose.yaml)，放入一个新目录。在同一目录创建 `.env` 文件：
 
