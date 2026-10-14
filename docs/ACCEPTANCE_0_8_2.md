@@ -24,7 +24,7 @@
 | Android 矿工 | `android_client/scripts/miner-mobile-smoke.cjs`：Android 房主加两名网页成员，392×781 竖屏、829×344 横屏、全屏横竖屏均无控件溢出；画面点击只放自己的爪、暂停保护、转屏保持及两种全屏退出通过。原生截图已查看 |
 | 冷启动语音 | `scripts/watch-voice-test.mjs` 通过：首次同步解锁、worklet 延迟时再次手势、退出/重入旧初始化隔离、挂起音频时钟和重复状态不再触发重配；已加入 CI |
 | 无片源跨端社交 | `scripts/watch-social-smoke.cjs` 三轮通过，覆盖首次、重入、网页重载与两种房主；Web 合成麦克风经服务器传入 Android AudioTrack，均有非零 PCM 写入；Android AudioRecord 帧到 Web 解码且音频图运行。无片源双向弹幕、离房清理通过，截图确认原生弹幕可见；每轮状态通知 10/5/6 条，无反馈循环 |
-| Windows | 15 项原生测试通过；共享网页改动随 Windows 包构建，最终三端影片回归与发布结果在执行记录更新 |
+| Windows 与影片回归 | 15 项原生测试通过；冻结资源后以最终 Windows TCP、Android TCP 和网页再次通过 `native-watch-smoke.cjs`：各端取片、Android 实际首帧、全屏、暂停/跳转、弹幕、双向认证 UDP、房主解散与三端结束通知 |
 
 本地证据在被忽略的 `server/target/miner-mobile-checks/`、`server/target/watch-social-checks/` 及 `android_client/app/build/miner-mobile-checks/`。探索阶段发现脚本重复购买一次性道具、失败后测试房未及时清理、基准代码受 CSP 限制，均修正测试流程后完整复跑，没有放宽生产权限或绕过断言。
 
@@ -32,4 +32,4 @@
 
 API 37 模拟器的实际采集声音很弱，已证明采集/传输/解码/输出路径与非零 PCM 写入，未宣称真人听感、外放回声、蓝牙、多厂商 Android 或复杂公网 NAT 全部验证。浏览器仍需要手势授权播放声音，不能绕过其自动播放策略。
 
-交付版本为 0.8.2 / Android versionCode 15。正式 APK 使用既有发布签名。最终包校验、Actions 和第一台部署结果以根 `PROJECT_STATUS.md` 的本版本记录为准。
+交付版本为 0.8.2 / Android versionCode 15。正式 APK 使用既有发布签名。[Actions 38553293765](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/38553293765) 五项任务全部成功，第一台已更新；两个正式下载包的完整大小与散列均通过。主线程实际运行正式 Windows EXE 与线上网页复测矿工通过；最终 Android 调试包加线上网页的三轮语音/弹幕也通过，正式 APK 内嵌共享资源另与源码核对一致。具体数据与安装包测试边界见根 `PROJECT_STATUS.md` 的本版本记录及 [部署记录](DEPLOYMENT_0_8_2.md)。

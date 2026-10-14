@@ -21,7 +21,7 @@
 
 翻棋规则见 [棋局规则](docs/GAME_RULES.md)，矿工操作和道具说明在游戏内“?”。基于底座开发新功能见 [赛博房间接入手册](docs/CYBER_ROOM_INTEGRATION_MANUAL.md) 与 [客户端开发指南](docs/FRAMEWORK_DEVELOPMENT_GUIDE.md)。
 
-0.8.1 已实现电影厅、密码、指定广播、Windows 运行包、选择面板及 App 常驻通知移除。接口见 [实现契约](docs/WATCH_ROOM_IMPLEMENTATION.md)，逐项检查及实机边界见 [0.8.1 验收记录](docs/ACCEPTANCE_0_8_1.md)，发布进度见 [执行记录](PROJECT_STATUS.md)。优化待办中未实施的性能建议继续保留，不以编译通过代替真机验证。
+0.8.2 改进手机矿场的速度、绘制、全屏和触控，修复电影厅偶发语音初始化及无片源弹幕显示。电影厅、密码、指定广播和 Windows 客户端的接口见 [实现契约](docs/WATCH_ROOM_IMPLEMENTATION.md)，检查与设备边界见 [0.8.2 验收记录](docs/ACCEPTANCE_0_8_2.md) 和 [0.8.1 全功能验收](docs/ACCEPTANCE_0_8_1.md)，发布进度见 [执行记录](PROJECT_STATUS.md)。优化待办中未实施的性能建议继续保留，不以编译通过代替真机验证。
 
 ## 开始游戏
 
@@ -57,7 +57,7 @@
 
 ## Docker 部署
 
-发布工作流将服务端、网页、Android 安装包及 Windows 运行包放进镜像；服务端支持 `linux/amd64` 与 `linux/arm64`，无需另外安装 Java 或配置数据库。0.8.1 的 [Actions 构建与双架构发布](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/38443429352) 已成功，默认第一台服务器已部署并通过公网验收，详见执行记录。
+发布工作流将服务端、网页、Android 安装包及 Windows 运行包放进镜像；服务端支持 `linux/amd64` 与 `linux/arm64`，无需另外安装 Java 或配置数据库。0.8.2 的 [Actions 构建与双架构发布](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/38553293765) 已成功，默认第一台服务器已部署，并完成矿工与无片源语音/弹幕的公网复验，详见执行记录。
 
 安装 Docker 和 Docker Compose 后，下载 [compose.yaml](server/compose.yaml)，放入一个新目录。在同一目录创建 `.env` 文件：
 
