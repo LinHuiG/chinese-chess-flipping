@@ -206,7 +206,9 @@ jobs:
           node-version: '24'
       - name: Check browser game recovery and protocol
         if: steps.scope.outputs.should_check == 'true'
-        run: node scripts/client-test.mjs
+        run: |
+          node scripts/client-test.mjs
+          node scripts/watch-voice-test.mjs
       - name: Record successful validation
         if: steps.scope.outputs.should_check == 'true'
         env:

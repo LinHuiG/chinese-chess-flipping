@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "cyber-room"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",

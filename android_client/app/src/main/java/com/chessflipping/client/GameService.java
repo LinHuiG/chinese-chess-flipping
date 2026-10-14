@@ -57,9 +57,14 @@ public final class GameService extends Service {
                 // The video is rendered by Media3, so keep its texture and danmaku above
                 // Chromium's full-screen view; shared fullscreenchange supplies new bounds.
                 media.attach(webParent);
-                android.widget.Button exit=new android.widget.Button(webActivity);exit.setText("退出全屏");exit.setTextColor(android.graphics.Color.WHITE);exit.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xcc333333));exit.setOnClickListener(v->back());
-                float density=getResources().getDisplayMetrics().density;exit.setElevation(16*density);
-                FrameLayout.LayoutParams button=new FrameLayout.LayoutParams(-2,-2,android.view.Gravity.TOP|android.view.Gravity.END);button.topMargin=button.rightMargin=Math.round(12*density);webParent.addView(exit,button);fullscreenExit=exit;
+                // DOM games keep their own controls. Only the native movie texture needs
+                // an Android exit button above it; do not cover a game's full-screen HUD.
+                web.evaluateJavascript("document.fullscreenElement?.id",target->{
+                    if(fullscreenView!=view||!"\"watch-stage\"".equals(target)||webActivity==null)return;
+                    android.widget.Button exit=new android.widget.Button(webActivity);exit.setText("退出全屏");exit.setTextColor(android.graphics.Color.WHITE);exit.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xcc333333));exit.setOnClickListener(v->back());
+                    float density=getResources().getDisplayMetrics().density;exit.setElevation(16*density);
+                    FrameLayout.LayoutParams button=new FrameLayout.LayoutParams(-2,-2,android.view.Gravity.TOP|android.view.Gravity.END);button.topMargin=button.rightMargin=Math.round(12*density);webParent.addView(exit,button);fullscreenExit=exit;
+                });
             }
             @Override public void onHideCustomView(){leaveFullscreen();}
         });

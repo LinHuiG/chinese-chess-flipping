@@ -22,11 +22,14 @@ export class WatchRoom {
     this.timer=setInterval(()=>this.pulse(),1000);this.resize=new ResizeObserver(()=>this.bounds());this.resize.observe($('watch-stage'));
     window.addEventListener('scroll',()=>this.bounds(),{passive:true});document.addEventListener('fullscreenchange',()=>this.bounds());
     new MutationObserver(()=>this.bounds()).observe(document.body,{subtree:true,attributes:true,attributeFilter:['open']});
+    // Listening is a room action, independent of starting a film or opening the mic.
+    // A later gesture also recovers an AudioContext suspended by the browser.
+    for(const event of ['pointerdown','keydown'])document.addEventListener(event,()=>{if(this.active&&!native&&this.voice.context?.state!=='running')this.voice.listen().catch(e=>{this.voice.status=e.message;this.render();});},{capture:true});
   }
   get active(){return this.room.room?.game==='watch';}
   get nativePlayer(){return !!native?.playerCommand;}
   endpoint(path,query={},access=this.access){const url=new URL(access.base.replace(/\/$/,'')+'/'+path.replace(/^\//,''));for(const [k,v] of Object.entries(query))if(v!==undefined&&v!==null)url.searchParams.set(k,String(v));return url.toString();}
-  headers(access=this.access){return {'Content-Type':'application/json','X-Emby-Token':access?.token||'','X-Emby-Authorization':`MediaBrowser Client="CyberRoom", Device="${native?'Native':'Web'}", DeviceId="${this.room.self}", Version="0.8.1"`};}
+  headers(access=this.access){return {'Content-Type':'application/json','X-Emby-Token':access?.token||'','X-Emby-Authorization':`MediaBrowser Client="CyberRoom", Device="${native?'Native':'Web'}", DeviceId="${this.room.self}", Version="0.8.2"`};}
   validContext(context,generation){return this.active&&this.room.current(context)&&(generation===undefined||generation===this.generation);}
   async login(base,username,password,share){
     if(!this.active||!this.room.host)throw Error('只有房主可以配置片源');if(!share)throw Error('请确认将专用账号的播放权限共享给房间成员');
@@ -103,7 +106,7 @@ export class WatchRoom {
     if(!/^[a-f0-9]{32}$/.test(messageId))return;this.chatRate??=new Map();const now=performance.now();if(now-(this.chatRate.get(from)||-1000)<400)return;this.chatRate.set(from,now);
     this.chatSeen??=new Set();if(this.chatSeen.has(messageId))return;this.chatSeen.add(messageId);if(this.chatSeen.size>128)this.chatSeen.delete(this.chatSeen.values().next().value);
     const name=this.room.room.members.find(p=>p.id===from)?.name||'朋友',span=document.createElement('span');span.textContent=name+'：'+text;span.style.top=(10+(this.chatLane=(this.chatLane||0)+1)%5*15)+'%';while($('danmaku').childElementCount>=30)$('danmaku').firstElementChild.remove();$('danmaku').append(span);setTimeout(()=>span.remove(),8000);
-    if(this.nativePlayer)nativeCall('playerCommand',JSON.stringify({danmaku:{id:messageId,text:name+'：'+text}}));
+    if(this.nativePlayer)nativeCall('playerCommand',JSON.stringify({visible:!document.querySelector('dialog[open]')&&!this.room.background,bounds:this.rectangle(),danmaku:{id:messageId,text:name+'：'+text}}));
   }
   async sendChat(text){text=text.trim().slice(0,200);if(!text||performance.now()-(this.lastChat||-1000)<500)return;this.lastChat=performance.now();const message={id:id(),text};this.chat(message.id,text,this.room.self);await this.send('watch.chat',message);}
   async pulse(){
@@ -130,7 +133,7 @@ export class WatchRoom {
     this.stopping=stopping;try{await stopping;}finally{if(this.stopping===stopping)this.stopping=null;}
   }
   rectangle(){const r=$('watch-stage').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}
-  bounds(){if(this.active&&this.nativePlayer&&this.url)nativeCall('playerCommand',JSON.stringify({visible:!document.querySelector('dialog[open]')&&!this.room.background,bounds:this.rectangle()}));}
+  bounds(){if(this.active&&this.nativePlayer)nativeCall('playerCommand',JSON.stringify({visible:!document.querySelector('dialog[open]')&&!this.room.background,bounds:this.rectangle()}));}
   showError(message){this.error=message;this.render();}
   render(){
     const r=this.room.room;if(r?.game!=='watch')return;
@@ -138,12 +141,14 @@ export class WatchRoom {
     $('watch-name').textContent=r.name;$('watch-title').textContent=r.playback?.title||'挑一部电影，朋友随时入座';$('watch-count').textContent=r.members.length+'/6 人';
     $('watch-source').hidden=!this.room.host;$('watch-play').hidden=!this.room.host;$('watch-seek').disabled=!this.room.host||!r.playback;
     $('watch-play').textContent=r.playback?.playing?'暂停':'播放';$('watch-play').disabled=!r.playback||this.loading||!this.url;
+    $('watch-join').textContent=r.playback?'加入观影 / 开启声音':'开启语音收听';$('danmaku-text').placeholder=r.playback?'说说这个镜头…':'发条弹幕，和朋友聊聊…';
     $('watch-seek').max=String(r.playback?.duration||this.duration||1);if(document.activeElement!==$('watch-seek'))$('watch-seek').value=String(this.current());
     const seconds=Math.floor(this.current());$('watch-time').textContent=Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0');
-    $('watch-message').textContent=this.error||(!this.access&&r.playback?'等待房主提供片源授权':this.waiting?'房主暂时不可用，暂停等待恢复':this.loading?'正在连接片源…':this.autoplay?'点击「加入观影」开启声音':this.buffering?'正在缓冲，仅影响当前设备':'只有房主控制电影，弹幕实时展示');
+    $('watch-message').textContent=this.error||(!this.access&&r.playback?'等待房主提供片源授权':this.waiting?'房主暂时不可用，暂停等待恢复':this.loading?'正在连接片源…':this.autoplay?'点击「加入观影」开启声音':this.buffering?'正在缓冲，仅影响当前设备':!r.playback?'等待房主选片，现在可以语音聊天和发弹幕':'只有房主控制电影，弹幕实时展示');
     $('watch-mic').textContent=this.voice.microphone?'关闭麦克风':'开启麦克风';$('watch-mic').classList.toggle('recording',this.voice.microphone);$('voice-status').textContent=this.voice.status;
     $('watch-members').replaceChildren(...r.members.map(p=>{const b=document.createElement('button');b.className='secondary';b.textContent=p.name+(p.id===r.hostId?' · 房主':'');b.disabled=!this.room.host||p.id===this.room.self;b.onclick=()=>this.room.events.kick?.(p);return b;}));
     if(r.playback&&this.access&&this.epoch!==r.playback.epoch&&!this.loading){this.receivedAt=performance.now();this.load(r.playback);}
+    this.voice.configure().catch(e=>{this.voice.status=e.message;});
     this.video.hidden=this.nativePlayer;this.bounds();
   }
 }

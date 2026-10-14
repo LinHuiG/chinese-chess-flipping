@@ -44,13 +44,16 @@ public final class MediaController implements AutoCloseable {
     public void attach(FrameLayout parent){this.parent=parent;if(container!=null){if(container.getParent() instanceof ViewGroup)((ViewGroup)container.getParent()).removeView(container);parent.addView(container,layout());}}
     public void detach(){if(container!=null&&container.getParent() instanceof ViewGroup)((ViewGroup)container.getParent()).removeView(container);parent=null;}
     private FrameLayout.LayoutParams layout(){FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(width,height);p.leftMargin=x;p.topMargin=y;return p;}
-    private void ensure(){
-        if(player!=null)return;
+    private void ensureOverlay(){
         if(container==null){
             container=new FrameLayout(context);container.setClipChildren(true);container.setBackgroundColor(Color.BLACK);
             video=new TextureView(context);container.addView(video,new FrameLayout.LayoutParams(-1,-1));danmaku=new Danmaku(context);container.addView(danmaku,new FrameLayout.LayoutParams(-1,-1));
             if(parent!=null)parent.addView(container,layout());
         }
+    }
+    private void ensure(){
+        if(player!=null)return;
+        ensureOverlay();
         DefaultRenderersFactory renderers=new DefaultRenderersFactory(context).setEnableDecoderFallback(true);
         if(softwareDecoder){
             // Initialization fallback alone does not recover a decoder which fails after starting.
@@ -122,12 +125,15 @@ public final class MediaController implements AutoCloseable {
     public void command(JSONObject q){
         if(closed)return;
         try{
+            // Room chat remains visible before a source or a player exists.
+            JSONObject bounds=q.optJSONObject("bounds");
+            if(bounds!=null){ensureOverlay();float density=context.getResources().getDisplayMetrics().density;x=Math.max(0,Math.round((float)bounds.optDouble("x")*density));y=Math.max(0,Math.round((float)bounds.optDouble("y")*density));width=Math.max(1,Math.round((float)bounds.optDouble("width",1)*density));height=Math.max(1,Math.round((float)bounds.optDouble("height",1)*density));container.setLayoutParams(layout());if(player!=null)resizeVideo(player.getVideoSize());}
             JSONObject bullet=q.optJSONObject("danmaku");if(bullet!=null&&danmaku!=null)danmaku.add(bullet.optString("id"),bullet.optString("text"));
             if(q.has("visible")){visible=q.optBoolean("visible");if(container!=null)container.setVisibility(visible&&foreground?View.VISIBLE:View.GONE);}
-            boolean hasPlayback=q.has("url")||q.has("bounds")||q.has("positionMs")||q.has("playing");if(!hasPlayback)return;
+            boolean hasPlayback=q.has("url")||q.has("positionMs")||q.has("playing");if(!hasPlayback)return;
             if(!q.has("url")&&currentUrl.isEmpty())return;
             String url=q.optString("url",currentUrl);HttpUrl parsed=HttpUrl.parse(url);if(parsed==null||!allowed(parsed))throw new IOException("未授权的电影地址");
-            ensure();JSONObject bounds=q.optJSONObject("bounds");if(bounds!=null){float density=context.getResources().getDisplayMetrics().density;x=Math.max(0,Math.round((float)bounds.optDouble("x")*density));y=Math.max(0,Math.round((float)bounds.optDouble("y")*density));width=Math.max(1,Math.round((float)bounds.optDouble("width",1)*density));height=Math.max(1,Math.round((float)bounds.optDouble("height",1)*density));container.setLayoutParams(layout());resizeVideo(player.getVideoSize());}
+            ensure();if(bounds!=null)resizeVideo(player.getVideoSize());
             visible=q.optBoolean("visible",visible);container.setVisibility(visible&&foreground?View.VISIBLE:View.GONE);
             if(!url.equals(currentUrl)){currentUrl=url;hasMedia=true;renderedFirstFrame=false;recovering=false;playbackError="";videoMime="";player.setMediaItem(MediaItem.fromUri(url));player.prepare();}
             if(q.has("positionMs")){long position=Math.max(0,q.optLong("positionMs"));if(Math.abs(player.getCurrentPosition()-position)>250)player.seekTo(position);}
@@ -147,7 +153,7 @@ public final class MediaController implements AutoCloseable {
         final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);final List<Bullet> bullets=new ArrayList<>();final Set<String> ids=new LinkedHashSet<>();
         static class Bullet{String text;long start;int lane;float width;}
         Danmaku(Context context){super(context);setLayerType(View.LAYER_TYPE_SOFTWARE,null);paint.setColor(Color.WHITE);paint.setTextSize(17*getResources().getDisplayMetrics().scaledDensity);paint.setShadowLayer(3,1,1,Color.BLACK);}
-        void add(String id,String text){if(text.isEmpty()||text.length()>200||ids.contains(id))return;ids.add(id);if(ids.size()>128)ids.remove(ids.iterator().next());if(bullets.size()>=12)bullets.remove(0);Bullet bullet=new Bullet();bullet.text=text;bullet.start=SystemClock.uptimeMillis();bullet.lane=bullets.size()%4;bullet.width=paint.measureText(text);bullets.add(bullet);invalidate();}
+        void add(String id,String text){if(text.isEmpty()||text.length()>256||ids.contains(id))return;ids.add(id);if(ids.size()>128)ids.remove(ids.iterator().next());if(bullets.size()>=12)bullets.remove(0);Bullet bullet=new Bullet();bullet.text=text;bullet.start=SystemClock.uptimeMillis();bullet.lane=bullets.size()%4;bullet.width=paint.measureText(text);bullets.add(bullet);invalidate();}
         @Override protected void onDraw(Canvas canvas){super.onDraw(canvas);long now=SystemClock.uptimeMillis();Iterator<Bullet> items=bullets.iterator();while(items.hasNext()){Bullet bullet=items.next();float progress=(now-bullet.start)/6000f;if(progress>=1){items.remove();continue;}canvas.drawText(bullet.text,getWidth()-(getWidth()+bullet.width)*progress,(bullet.lane+1)*(paint.getTextSize()+8),paint);}if(!bullets.isEmpty())postInvalidateOnAnimation();}
     }
 }

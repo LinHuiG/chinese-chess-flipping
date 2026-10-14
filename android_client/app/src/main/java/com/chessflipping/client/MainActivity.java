@@ -37,6 +37,7 @@ public final class MainActivity extends Activity {
         content.requestApplyInsets();
     }
     @Override protected void onResume(){super.onResume();resumed=true;if(service!=null){service.foreground();if(service.updater.installPending&&getPackageManager().canRequestPackageInstalls())service.install();}}
+    @Override public void onConfigurationChanged(android.content.res.Configuration configuration){super.onConfigurationChanged(configuration);content.requestApplyInsets();}
     @Override protected void onStop(){resumed=false;if(service!=null&&!isChangingConfigurations())service.background();super.onStop();}
     @Override public boolean dispatchKeyEvent(KeyEvent event){
         if(event.getKeyCode()==KeyEvent.KEYCODE_BACK&&service!=null&&service.isFullscreen()){if(event.getAction()==KeyEvent.ACTION_UP)service.back();return true;}

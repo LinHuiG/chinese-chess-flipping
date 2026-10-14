@@ -34,6 +34,9 @@ export class RoomVoice{
   async listen(){
     if(this.room.room?.game!=='watch'||this.room.background)return;
     if(native?.voiceConfigure){await this.configure();return;}
+    // Resume in the gesture's stack, including when the worklet is still loading.
+    // Awaiting addModule first can lose browser activation on a cold first visit.
+    if(this.context)this.context.resume().catch(()=>{});
     if(this.listening)return this.listening;
     const opening=this.openAudio();this.listening=opening;try{await opening;}finally{if(this.listening===opening)this.listening=null;}
   }
@@ -41,11 +44,12 @@ export class RoomVoice{
     if(this.context){await this.context.resume();return;}
     const Audio=globalThis.AudioContext||globalThis.webkitAudioContext;if(!Audio)throw Error('此设备暂不支持语音，仍可观看和发弹幕');
     const context=this.room.context(),audio=this.context=new Audio();
+    const resumed=audio.resume();resumed.catch(()=>{});
     try{await audio.audioWorklet.addModule('./voice-worklet.js');
       if(this.context!==audio||!this.room.current(context)){if(this.context===audio)this.context=null;await audio.close();return;}
       this.node=new AudioWorkletNode(audio,'room-voice');this.node.connect(audio.destination);
       this.node.port.onmessage=e=>{const seq=this.sequence++;if(this.context!==audio||!this.microphone||!this.room.client.ready||this.room.room?.game!=='watch'||audio.currentTime-e.data.at>.2)return;const result=encodeVoice(e.data.samples,this.stream,seq,this.index);this.index=result.index;this.room.client.broadcast(this.room.room.roomId,undefined,{type:'voice',codec:VOICE_CODEC,discard:1,maxAgeMs:200},result.bytes);};
-      await audio.resume();if(this.context!==audio)return;this.status='语音已开启 · 外放开麦建议佩戴耳机';this.changed();
+      await resumed;if(this.context!==audio)return;this.status='语音已开启 · 外放开麦建议佩戴耳机';this.changed();
     }catch(e){if(this.context===audio){this.node?.disconnect();this.node=this.context=null;}await audio.close().catch(()=>{});throw e;}
   }
   async microphoneToggle(){
@@ -62,7 +66,7 @@ export class RoomVoice{
   }
   async mute(){this.micGeneration++;this.openingMic=false;this.microphone=false;this.media?.getTracks().forEach(t=>t.stop());this.source?.disconnect();this.media=this.source=null;this.node?.port.postMessage({capture:false});await nativeCall('voiceMicrophone',false);this.changed();}
   receive(from,bytes){
-    if(native||!this.node||this.room.background)return;
+    if(native||!this.node||this.context?.state!=='running'||this.room.background)return;
     try{const frame=decodeVoice(bytes),now=performance.now();let old=this.received.get(from);
       if(!old||old.stream!==frame.stream){if(old?.retired.has(frame.stream))return;const retired=old?.retired||new Set();if(old)retired.add(old.stream);if(retired.size>8)retired.delete(retired.values().next().value);old={stream:frame.stream,seq:(frame.seq-1)>>>0,anchorClock:frame.clock,anchorAt:now,retired};this.received.set(from,old);}
       const delta=(frame.seq-old.seq)>>>0;if(!delta||delta>0x7fffffff)return;old.seq=frame.seq;
@@ -72,6 +76,6 @@ export class RoomVoice{
       this.node.port.postMessage({from,samples:frame.samples},[frame.samples.buffer]);
     }catch{}
   }
-  event(e){if(e.type!=='voiceStatus')return;if(typeof e.microphone==='boolean')this.microphone=e.microphone;if(Number.isInteger(e.suggestedDirectLimit)){this.directLimit=clamp(e.suggestedDirectLimit,0,5);this.key='';this.configure();}this.status=e.error||(!e.available?'此设备语音不可用，仍可观看和发弹幕':e.aec==='headphones'?'耳机语音':e.aec===true||e.aec==='system-unverified'?'系统回声处理已开启，外放效果取决于设备':'未提供回声处理，外放开麦建议佩戴耳机');this.changed();}
-  stop(){this.mute();nativeCall('voiceStop').catch(()=>{});this.node?.disconnect();this.context?.close();this.node=this.context=null;this.listening=null;this.key='';this.received.clear();}
+  event(e){if(e.type!=='voiceStatus')return;if(typeof e.microphone==='boolean')this.microphone=e.microphone;if(Number.isInteger(e.suggestedDirectLimit)&&clamp(e.suggestedDirectLimit,0,5)!==this.directLimit){this.directLimit=clamp(e.suggestedDirectLimit,0,5);this.key='';this.configure();}this.status=e.error||(!e.available?'此设备语音不可用，仍可观看和发弹幕':e.aec==='headphones'?'耳机语音':e.aec===true||e.aec==='system-unverified'?'系统回声处理已开启，外放效果取决于设备':'未提供回声处理，外放开麦建议佩戴耳机');this.changed();}
+  stop(){this.mute();nativeCall('voiceStop').catch(()=>{});this.node?.disconnect();this.context?.close().catch(()=>{});this.node=this.context=null;this.listening=null;this.key='';this.received.clear();this.status='点击开启语音收听';}
 }

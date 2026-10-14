@@ -29,6 +29,7 @@ public final class VoiceEngine implements AutoCloseable {
     private volatile AudioRecord record;private AcousticEchoCanceler aec;private AudioTrack track;
     private volatile int captureGeneration;private volatile String echo="unavailable",error="";
     private int previousMode;private boolean previousSpeaker;private long lastStatus,lastSendFailure;private volatile boolean modeChanged;
+    private volatile long capturedFrames;private long playedFrames;private int outputPeak;
     private final AudioFocusRequest focus;private final AudioDeviceCallback devices;
     static final class Block {final short[] pcm;final double due;Block(short[] pcm,double due){this.pcm=pcm;this.due=due;}}
     static final class Stream {
@@ -79,9 +80,9 @@ public final class VoiceEngine implements AutoCloseable {
     private static Set<String> ids(JSONArray values){Set<String> ids=new LinkedHashSet<>();if(values!=null)for(int i=0;i<values.length()&&ids.size()<6;i++){String id=values.optString(i);if(id.matches("[0-9a-f]{32}"))ids.add(id);}return ids;}
     public synchronized void foreground(boolean value){foreground=value;if(!value){microphone(false);synchronized(streams){streams.clear();}releaseTrack();}report("");}
     public synchronized void microphone(boolean value){
-        if(!value){microphone=false;captureGeneration++;AudioRecord old=record;record=null;if(old!=null){try{old.stop();}catch(Exception ignored){}}
+        if(!value){boolean wasMicrophone=microphone;microphone=false;captureGeneration++;AudioRecord old=record;record=null;if(old!=null){try{old.stop();}catch(Exception ignored){}}
             if(aec!=null){aec.release();aec=null;}if(old!=null)old.release();echo="off";
-            if(modeChanged){audio.setMode(previousMode);audio.setSpeakerphoneOn(previousSpeaker);modeChanged=false;}audio.abandonAudioFocusRequest(focus);report("");return;}
+            if(modeChanged){audio.setMode(previousMode);audio.setSpeakerphoneOn(previousSpeaker);modeChanged=false;}if(wasMicrophone)releaseTrack();audio.abandonAudioFocusRequest(focus);report("");return;}
         if(microphone||closed)return;
         if(!enabled||!foreground){report("请先加入观影房并回到前台");return;}
         if(context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){report("麦克风权限未允许，仍可观影和发弹幕");return;}
@@ -96,7 +97,7 @@ public final class VoiceEngine implements AutoCloseable {
             record=next;if(next.getState()!=AudioRecord.STATE_INITIALIZED)throw new IllegalStateException("capture unavailable");
             echo="unavailable";if(AcousticEchoCanceler.isAvailable()){aec=AcousticEchoCanceler.create(next.getAudioSessionId());if(aec!=null&&aec.setEnabled(true)==0&&aec.getEnabled())echo="system-unverified";}
             if(!"system-unverified".equals(echo))echo=headset?"headphones":"unavailable";
-            next.startRecording();microphone=true;int generation=++captureGeneration;error="";capture.execute(()->capture(next,generation));report("");
+            next.startRecording();microphone=true;releaseTrack();int generation=++captureGeneration;error="";capture.execute(()->capture(next,generation));report("");
         }catch(Exception ex){microphone(false);report("设备暂不支持语音采集，仍可观影和发弹幕");}
     }
     private void capture(AudioRecord source,int generation){
@@ -105,7 +106,7 @@ public final class VoiceEngine implements AutoCloseable {
         try{while(!closed&&microphone&&generation==captureGeneration){
             int offset=0;while(offset<pcm.length&&microphone&&generation==captureGeneration){int read=source.read(pcm,offset,pcm.length-offset,AudioRecord.READ_BLOCKING);if(read<=0)throw new IllegalStateException("capture stopped");offset+=read;}
             if(offset!=pcm.length||generation!=captureGeneration)break;
-            send(VoiceCodec.encode(pcm,stream,seq++,clock),generation);clock+=VoiceCodec.SAMPLES;
+            capturedFrames++;send(VoiceCodec.encode(pcm,stream,seq++,clock),generation);clock+=VoiceCodec.SAMPLES;
         }}catch(Exception ex){if(generation==captureGeneration){microphone(false);report("麦克风已停止，请再次开麦");}}
     }
     private void send(byte[] body,int generation){
@@ -144,10 +145,12 @@ public final class VoiceEngine implements AutoCloseable {
                 Block block=s.poll(now);if(block==null)continue;hasAudio=true;for(int i=0;i<sum.length;i++)sum[i]+=block.pcm[i];
             }}
             if(hasAudio||track!=null){
-                if(track==null){int minimum=AudioTrack.getMinBufferSize(RATE,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT);if(minimum<=0)throw new IllegalStateException();track=new AudioTrack.Builder().setAudioAttributes(attributes()).setAudioFormat(new AudioFormat.Builder().setSampleRate(RATE).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build()).setBufferSizeInBytes(Math.max(minimum,1920)).setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY).setTransferMode(AudioTrack.MODE_STREAM).build();track.play();}
+                // Closed-mic listeners use the media route/volume, rather than a
+                // phone-call earpiece route which may remain quiet on first entry.
+                if(track==null){int minimum=AudioTrack.getMinBufferSize(RATE,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT);if(minimum<=0)throw new IllegalStateException();AudioAttributes output=new AudioAttributes.Builder().setUsage(microphone?AudioAttributes.USAGE_VOICE_COMMUNICATION:AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();track=new AudioTrack.Builder().setAudioAttributes(output).setAudioFormat(new AudioFormat.Builder().setSampleRate(RATE).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build()).setBufferSizeInBytes(Math.max(minimum,1920)).setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY).setTransferMode(AudioTrack.MODE_STREAM).build();track.play();}
                 for(int i=0;i<sum.length;i++)mixed[i]=(short)VoiceCodec.clamp(sum[i]);
                 // Non-blocking writes cap native output accumulation; discarded blocks are never replayed later.
-                int written=track.write(mixed,0,mixed.length,AudioTrack.WRITE_NON_BLOCKING);if(written<0)throw new IllegalStateException();
+                int written=track.write(mixed,0,mixed.length,AudioTrack.WRITE_NON_BLOCKING);if(written<0)throw new IllegalStateException();if(hasAudio&&written>0){playedFrames++;for(int i=0;i<written;i++)outputPeak=Math.max(outputPeak,Math.abs((int)mixed[i]));}
             }
             if(now-lastStatus>=2000){lastStatus=now;report("");}
         }catch(Exception ex){releaseTrack();report("设备暂不支持语音播放，电影与弹幕仍可使用");}
@@ -156,9 +159,9 @@ public final class VoiceEngine implements AutoCloseable {
     public synchronized void report(String message){
         if(!message.isEmpty())error=message;
         try{JSONArray peers=new JSONArray();synchronized(streams){for(Map.Entry<String,Stream> entry:streams.entrySet()){Stream s=entry.getValue();int missing=s.window-Long.bitCount(s.seen);peers.put(new JSONObject().put("peerId",entry.getKey()).put("received",s.received).put("lost",missing).put("loss",s.window==0?0:missing/(double)s.window).put("late",s.late).put("jitter",s.jitter).put("queued",s.blocks.size()));}}
-            events.accept(new JSONObject().put("type","voiceStatus").put("available",true).put("capture",context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_MICROPHONE)).put("playing",track!=null).put("microphone",microphone).put("aec",echo).put("aecVerified",false).put("error",error).put("peers",peers).put("suggestedDirectLimit",SystemClock.elapsedRealtime()-lastSendFailure<5000?0:5));
+            events.accept(new JSONObject().put("type","voiceStatus").put("available",true).put("capture",context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_MICROPHONE)).put("playing",track!=null).put("microphone",microphone).put("capturedFrames",capturedFrames).put("playedFrames",playedFrames).put("outputPeak",outputPeak).put("aec",echo).put("aecVerified",false).put("error",error).put("peers",peers).put("suggestedDirectLimit",SystemClock.elapsedRealtime()-lastSendFailure<5000?0:5));
         }catch(JSONException ignored){}
     }
-    public synchronized void stop(){enabled=false;microphone(false);members=Collections.emptySet();direct=Collections.emptySet();room="";self="";synchronized(streams){streams.clear();}releaseTrack();}
+    public synchronized void stop(){enabled=false;microphone(false);members=Collections.emptySet();direct=Collections.emptySet();room="";self="";capturedFrames=playedFrames=0;outputPeak=0;error="";synchronized(streams){streams.clear();}releaseTrack();}
     @Override public synchronized void close(){closed=true;stop();audio.unregisterAudioDeviceCallback(devices);playback.shutdownNow();capture.shutdownNow();}
 }

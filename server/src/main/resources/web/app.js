@@ -52,6 +52,8 @@ function render(){
   $('waiting').hidden=!r||r.status!=='waiting';
   $('chess').hidden=!r||r.game!=='chess'||r.status==='waiting';
   $('miner').hidden=!r||r.game!=='miner'||r.status==='waiting';
+  document.body.classList.toggle('mine-active',!$('miner').hidden);
+  if($('miner').hidden&&document.fullscreenElement===$('miner'))document.exitFullscreen().catch(()=>{});
   $('watch').hidden=!r||r.game!=='watch';
   document.querySelectorAll('.room-password').forEach(b=>b.hidden=!game.host);
   $('reconnecting').hidden=connected||!r;text('offline-message',status);network();
@@ -176,6 +178,7 @@ $('rematch').onclick=()=>game.rematch();
 function renderMine(){
   const r=game.room,s=game.state;if(!s)return;
   const p=s.players.find(p=>p.id===game.self);if(!p)return;
+  $('miner').dataset.phase=s.phase;
   text('mine-biome',THEMES[Math.floor((s.level-1)/100)].name+' / 黄金矿工');
   text('mine-level','第 '+s.level.toLocaleString()+' / 1,000 关');
   const scoreKey=JSON.stringify(s.players.map(p=>[p.id,p.name,p.score,p.cash,p.round]));
@@ -189,10 +192,11 @@ function renderMine(){
   text('mine-target','团队目标 '+s.target+' · 本关已获 '+s.players.reduce((n,p)=>n+p.round,0));
   text('mine-phase',s.phase==='shop'?'补给时间':s.phase==='complete'?'千关达成':s.paused?'已暂停':'各自淘金');
   $('drop').disabled=!game.client.ready||s.paused||s.phase!=='playing'||p.claw.mode!=='swing'||p.claw.stun>0;
+  $('mine-canvas').setAttribute('aria-disabled',String($('drop').disabled));
   $('bomb').disabled=!game.client.ready||s.paused||s.phase!=='playing'||p.claw.item<0||!p.inventory.dynamite;
   text('bomb-count','×'+(p.inventory.dynamite||0));
   $('pause').hidden=!game.host||s.phase!=='playing';text('pause',s.paused?'继续冒险':'暂停');
-  $('save').hidden=!game.host;text('mine-help',game.host?'每人操作自己的爪子 · 进度每 5 秒自动保存，也可手动保存':'每人操作自己的爪子 · 爆破键 B · 进度由房主保存');
+  $('save').hidden=!game.host;text('mine-help','点击矿场或按空格放爪 · '+(game.host?'进度自动保存':'进度由房主保存')+' · 爆破键 B');
   $('shop').hidden=s.phase!=='shop';$('mine-complete').hidden=s.phase!=='complete';
   if(s.phase==='shop')renderShop(s,p);
   view.setState(s,game.self);clock();
@@ -224,6 +228,20 @@ function clock(){
   }else if(game.room.game==='miner')text('mine-clock',Math.ceil(Math.max(0,s.time-(s.phase==='playing'&&!s.paused?elapsed/1000:0))));
 }
 $('drop').onclick=()=>act({type:'DROP'});$('bomb').onclick=()=>act({type:'BOMB'});
+let dropping=false;
+async function dropFromStage(){
+  if(dropping||$('miner').hidden||$('drop').disabled||document.querySelector('dialog[open]'))return;
+  dropping=true;try{await act({type:'DROP'});}finally{dropping=false;}
+}
+// Only the play surface releases a claw: buttons, scrolling and cancelled touches do not.
+let minePointer;
+$('mine-canvas').addEventListener('pointerdown',e=>{if(e.isPrimary&&e.button===0)minePointer={id:e.pointerId,x:e.clientX,y:e.clientY};});
+$('mine-canvas').addEventListener('pointercancel',()=>minePointer=null);
+$('mine-canvas').addEventListener('pointerup',e=>{const p=minePointer;minePointer=null;if(p?.id===e.pointerId&&Math.hypot(e.clientX-p.x,e.clientY-p.y)<12){e.preventDefault();dropFromStage();}});
+$('mine-canvas').addEventListener('keydown',e=>{if(e.code==='Enter'){e.preventDefault();if(!e.repeat)dropFromStage();}});
+$('mine-canvas').addEventListener('click',e=>{if(e.detail===0)dropFromStage();});
+$('mine-fullscreen').onclick=()=>{if(document.fullscreenElement===$('miner'))document.exitFullscreen().catch(fail);else $('miner').requestFullscreen?.().catch(fail);};
+document.addEventListener('fullscreenchange',()=>{const full=document.fullscreenElement===$('miner');text('mine-fullscreen',full?'退出全屏':'全屏');$('mine-fullscreen').setAttribute('aria-pressed',String(full));});
 $('pause').onclick=()=>act({type:'PAUSE'});$('save').onclick=()=>game.saveMine();
 $('shop-ready').onclick=()=>act({type:'SHOP_READY',ready:!game.state?.players.find(p=>p.id===game.self)?.shopReady});
 $('next-level').onclick=()=>act({type:'NEXT'});
@@ -232,7 +250,7 @@ document.addEventListener('keydown',e=>{
   if(e.code==='Space'){e.preventDefault();if(!$('drop').disabled)$('drop').click();}
   if(e.code==='KeyB'){e.preventDefault();if(!$('bomb').disabled)$('bomb').click();}
 });
-const mineRules='2–3 位玩家，各自操作一只爪子。大家准备后开局。\n\n点「放下爪子」或空格键出钩，抓到物品后自动收钩。每个人抓到的东西单独计分；可用积分用于商店购买，累计分数不会因购物减少。\n\n金块越大越值钱，也越重；钻石、小仓鼠和钱袋各有惊喜。石头比较重，狗屎扣 120 分。抓到地下 TNT 会连锁爆炸，炸毁附近物品。自带炸药可以炸掉爪上重物，按 B 或点爆破按钮使用。\n\n抓完或时间结束后进入商店。团队达到本关目标，每人额外加 150 分。每人买好后点「我买好了」，房主开始下一关。增益道具持续下一关，卷扬机升级永久生效，炸药可保留。\n\n共 1,000 关、10 个主题矿区；地图由种子生成。房主每 5 秒自动保存，可手动保存。房主切到后台会暂停，退出即解散房间。继续存档需凑齐原来的人数，按加入顺序领取原座位的积分和装备。\n\nApp 之间优先 UDP 直连，不通自动由服务器转发。网页使用服务器转发，可与 App 一起玩。';
+const mineRules='2–3 位玩家，各自操作一只爪子。大家准备后开局。\n\n点击矿场、点「放下爪子」或空格键出钩，抓到物品后自动收钩。每个人抓到的东西单独计分；可用积分用于商店购买，累计分数不会因购物减少。\n\n金块越大越值钱，也越重；钻石、小仓鼠和钱袋各有惊喜。石头比较重，狗屎扣 120 分。抓到地下 TNT 会连锁爆炸，炸毁附近物品。自带炸药可以炸掉爪上重物，按 B 或点爆破按钮使用。\n\n抓完或时间结束后进入商店。团队达到本关目标，每人额外加 150 分。每人买好后点「我买好了」，房主开始下一关。增益道具持续下一关，卷扬机升级永久生效，炸药可保留。\n\n共 1,000 关、10 个主题矿区；地图由种子生成。房主每 5 秒自动保存，可手动保存。房主切到后台会暂停，退出即解散房间。继续存档需凑齐原来的人数，按加入顺序领取原座位的积分和装备。\n\nApp 之间优先 UDP 直连，不通自动由服务器转发。网页使用服务器转发，可与 App 一起玩。';
 async function rules(){
   const mine=game.room?.game==='miner';text('rules-title',mine?'黄金矿工 · 怎么玩':'翻棋 · 已确认规则');
   text('rules-body',mine?mineRules:'正在加载…');$('rules-dialog').showModal();
@@ -262,7 +280,7 @@ $('settings-save').onclick=async()=>{
   if(changed){game.reset();game.client.connect();}render();toast('设置已保存');
 };
 $('check-update').onclick=()=>native?.checkUpdate();$('install-update').onclick=()=>native?.installUpdate();
-function nativeEvent(e){if(e.type==='update'){text('update-status',e.status);text('version',e.version||'0.8.1');$('check-update').disabled=e.busy;$('install-update').hidden=!e.ready;}}
+function nativeEvent(e){if(e.type==='update'){text('update-status',e.status);text('version',e.version||'0.8.2');$('check-update').disabled=e.busy;$('install-update').hidden=!e.ready;}}
 window.cyberBack=async()=>{
   const dialog=document.querySelector('dialog[open]');if(dialog){if(dialog.id==='confirm-dialog')finishConfirm(false);else dialog.close();return;}
   if(game.room)await leave();else if(native)native.exitApp();
@@ -276,8 +294,8 @@ document.addEventListener('visibilitychange',()=>{
 });
 window.addEventListener('pagehide',()=>{if(game.host&&game.room?.game==='miner')game.saveMine(false);game.checkpoint();});
 document.addEventListener('pointerdown',()=>sound.unlock(),{once:true});
-$('download-app').hidden=!!native;text('version',initial.version||'0.8.1');
-window.addEventListener('native-room',event=>{if(event.detail.type==='background')lobbyVersion++;});
+$('download-app').hidden=!!native;text('version',initial.version||'0.8.2');
+window.addEventListener('native-room',event=>{const type=event.detail.type;if(type==='background'){lobbyVersion++;view.suspended=true;}else if(type==='foreground'){view.suspended=false;view.wake();}});
 setInterval(clock,200);setInterval(refresh,5000);
 let passwordResolve;
 function passwordPrompt(edit){

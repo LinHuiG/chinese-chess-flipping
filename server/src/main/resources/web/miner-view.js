@@ -11,12 +11,32 @@ export class Sound{
   }
 }
 export class MinerView{
-  constructor(canvas,sound){this.canvas=canvas;this.ctx=canvas.getContext('2d');this.sound=sound;this.particles=[];this.seen=0;this.motion=true;this.previous=new Map();this.background=document.createElement('canvas');this.background.width=960;this.background.height=640;this.last=performance.now();}
+  constructor(canvas,sound){
+    this.canvas=canvas;this.ctx=canvas.getContext('2d',{alpha:false});this.sound=sound;this.particles=[];this.seen=0;this.motion=true;this.previous=new Map();this.sprites=new Map();this.artX=this.artY=1;
+    this.sizeDirty=true;this.background=document.createElement('canvas');this.background.width=960;this.background.height=640;
+    this.terrain=document.createElement('canvas');this.terrain.width=960;this.terrain.height=640;this.last=performance.now();
+    this.resize=new ResizeObserver(()=>{this.sizeDirty=true;this.wake();});this.resize.observe(canvas);
+  }
+  wake(){if(this.state&&!document.hidden&&!this.suspended&&!this.raf)this.raf=requestAnimationFrame(t=>this.draw(t));}
   setState(state,self){
     this.self=self;
-    if(!state){this.state=null;cancelAnimationFrame(this.raf);this.raf=0;this.level=null;return;}
-    if(this.level!==state.level||this.seed!==state.seed){this.seen=state.eventId;this.particles=[];this.level=state.level;this.seed=state.seed;this.paintBackground(state.level,state.seed);this.previous.clear();}
-    this.state=state;this.received=performance.now();
+    if(!state){this.state=this.source=null;cancelAnimationFrame(this.raf);this.raf=0;this.level=null;this.previous.clear();this.sprites.clear();return;}
+    if(state===this.source){this.wake();return;}
+    if(this.level!==state.level||this.seed!==state.seed){this.seen=state.eventId;this.particles=[];this.level=state.level;this.seed=state.seed;this.paintBackground(state.level,state.seed);this.previous.clear();this.sprites.clear();this.terrainKey='';}
+    const now=performance.now(),duration=state.paused||state.phase!=='playing'?0:Math.max(60,Math.min(160,now-(this.received||now-110)));
+    this.source=state;
+    // Host snapshots share mutable engine arrays. Freeze only this small render frame;
+    // intermediate simulation ticks must not change the target during interpolation.
+    this.state={...state,items:state.items.map(o=>({...o})),players:state.players.map(p=>({...p,claw:{...p.claw}}))};
+    const live=new Set();
+    const track=(key,value,fields)=>{live.add(key);let frame=this.previous.get(key);if(!frame){frame={from:{},to:{},value:{},at:now,duration:0};for(const f of fields)frame.value[f]=value[f];this.previous.set(key,frame);}else this.sample(frame,now);
+      frame.at=now;frame.duration=duration;for(const f of fields){frame.from[f]=frame.value[f];frame.to[f]=value[f];}return frame;};
+    for(const o of this.state.items)if(o.type==='hamster'||o.owner>=0)track('i'+o.id,o,['x','y']);
+    for(const p of this.state.players)track('p'+p.slot,p.claw,['angle','length']);
+    for(const key of this.previous.keys())if(!live.has(key))this.previous.delete(key);
+    this.received=now;
+    const terrainKey=this.state.items.filter(o=>o.type!=='hamster'&&o.owner<0).map(o=>o.id).join(',');
+    if(terrainKey!==this.terrainKey){this.terrainKey=terrainKey;this.terrainDirty=true;}
     for(const e of state.events||[])if(e.id>this.seen){
         this.sound.play(e.type==='haul'?e.item:e.type);
         if(this.motion){
@@ -26,7 +46,18 @@ export class MinerView{
         }
       this.seen=e.id;
     }
-    if(!this.raf)this.raf=requestAnimationFrame(t=>this.draw(t));
+    if(this.particles.length>150)this.particles.splice(0,this.particles.length-150);
+    this.wake();
+  }
+  sample(frame,now){const t=frame.duration?Math.max(0,Math.min(1,(now-frame.at)/frame.duration)):1;for(const f in frame.to)frame.value[f]=frame.from[f]+(frame.to[f]-frame.from[f])*t;return frame.value;}
+  sprite(c,o,x=o.x,y=o.y,time=0){
+    const key=o.type+':'+o.r+':'+!!o.gem;let sprite=this.sprites.get(key);
+    if(!sprite){const image=document.createElement('canvas'),size=Math.ceil(Math.max(48,o.r+12)*2);image.width=image.height=size*2;
+      const ink=image.getContext('2d');ink.scale(2,2);ink.translate(size/2,size/2);
+      const motion=this.motion;this.motion=false;this.item(ink,{...o,x:0,y:0,phase:0},0);this.motion=motion;sprite={image,size};this.sprites.set(key,sprite);}
+    const w=sprite.size*this.artX,h=sprite.size*this.artY;
+    if(o.type==='hamster'&&Math.cos(time*1.25+o.phase)<0){c.save();c.translate(x,y);c.scale(-1,1);c.drawImage(sprite.image,-w/2,-h/2,w,h);c.restore();}
+    else c.drawImage(sprite.image,x-w/2,y-h/2,w,h);
   }
   paintBackground(level,seed){
     const c=this.background.getContext('2d'),theme=THEMES[Math.floor((level-1)/100)%10],random=rng(seed^level);
@@ -89,8 +120,9 @@ export class MinerView{
     c.save();c.translate(claw.x,claw.y);
     c.strokeStyle='#332c2c';c.lineWidth=5;c.beginPath();c.moveTo(0,-11);c.lineTo(Math.sin(claw.angle)*claw.length,Math.cos(claw.angle)*claw.length);c.stroke();
     c.strokeStyle='#d8c99a';c.lineWidth=2;c.stroke();
-    c.save();c.translate(Math.sin(claw.angle)*claw.length,Math.cos(claw.angle)*claw.length);c.rotate(-claw.angle);
+    c.save();c.translate(Math.sin(claw.angle)*claw.length,Math.cos(claw.angle)*claw.length);c.scale(this.artX,this.artY);c.rotate(-Math.atan2(Math.sin(claw.angle)/this.artX,Math.cos(claw.angle)/this.artY));
     c.lineCap='round';c.lineJoin='round';c.strokeStyle='#d4d9d0';c.lineWidth=5;c.beginPath();c.moveTo(-5,-6);c.lineTo(-12,8);c.lineTo(-5,16);c.moveTo(5,-6);c.lineTo(12,8);c.lineTo(5,16);c.stroke();this.ellipse(c,0,-5,5,5,'#9ca89f');c.restore();
+    c.scale(this.artX,this.artY);
     c.fillStyle='#77513b';c.fillRect(-46,-9,92,25);c.fillStyle='#b88450';c.fillRect(-48,-13,96,12);
     this.ellipse(c,-31,19,9,9,'#423d3a');this.ellipse(c,31,19,9,9,'#423d3a');
     c.fillStyle=color;c.fillRect(-13,-39,27,29);this.ellipse(c,1,-48,17,17,'#eac3a0');
@@ -103,19 +135,20 @@ export class MinerView{
     c.restore();
   }
   draw(now){
-    this.raf=0;if(!this.state||document.hidden)return;
+    this.raf=0;if(!this.state||document.hidden||this.suspended)return;
     const dt=Math.min(.05,(now-this.last)/1000);this.last=now;
-    const s=this.state,c=this.ctx,ratio=Math.min(2,globalThis.devicePixelRatio||1),width=Math.max(320,this.canvas.clientWidth),height=width*2/3;
-    if(this.canvas.width!==Math.round(width*ratio)){this.canvas.width=Math.round(width*ratio);this.canvas.height=Math.round(height*ratio);}
-    c.setTransform(this.canvas.width/960,0,0,this.canvas.height/640,0,0);c.clearRect(0,0,960,640);c.drawImage(this.background,0,0);
+    const s=this.state,c=this.ctx;
+    if(this.sizeDirty){
+      this.sizeDirty=false;const width=Math.max(1,this.canvas.clientWidth),height=Math.max(1,this.canvas.clientHeight),ratio=Math.min(1.5,globalThis.devicePixelRatio||1,Math.sqrt(1500000/(width*height)));
+      this.canvas.width=Math.round(width*ratio);this.canvas.height=Math.round(height*ratio);
+      const scale=Math.min(width/960,height/640);this.artX=scale/(width/960);this.artY=scale/(height/640);this.terrainDirty=true;
+    }
+    c.setTransform(this.canvas.width/960,0,0,this.canvas.height/640,0,0);c.drawImage(this.background,0,0);
+    if(this.terrainDirty){const terrain=this.terrain.getContext('2d');terrain.clearRect(0,0,960,640);for(const o of s.items)if(o.type!=='hamster'&&o.owner<0)this.sprite(terrain,o);this.terrainDirty=false;}
+    c.drawImage(this.terrain,0,0);
     const time=this.motion?s.elapsed+(s.paused?0:Math.min(.15,(now-this.received)/1000)):0;
-    const smooth=(key,value,fields)=>{
-      const previous=this.previous.get(key)||{...value},factor=1-Math.exp(-dt*24);
-      for(const f of fields)previous[f]+= (value[f]-previous[f])*factor;
-      this.previous.set(key,previous);return {...value,...Object.fromEntries(fields.map(f=>[f,previous[f]]))};
-    };
-    for(const item of s.items)this.item(c,smooth('i'+item.id,item,['x','y']),time);
-    for(const p of s.players)this.player(c,{...p,claw:smooth('p'+p.slot,p.claw,['angle','length'])},time);
+    for(const item of s.items)if(item.type==='hamster'||item.owner>=0){const point=this.sample(this.previous.get('i'+item.id),now);this.sprite(c,item,point.x,point.y,time);}
+    for(const p of s.players){const pose=this.sample(this.previous.get('p'+p.slot),now);p.claw.angle=pose.angle;p.claw.length=pose.length;this.player(c,p,time);}
     for(const p of this.particles){
       p.life-=dt;p.x+=(p.vx||0)*dt;p.y+=(p.vy||-35)*dt;if(p.vy!==undefined)p.vy+=230*dt;
       c.save();c.globalAlpha=Math.max(0,Math.min(1,p.life/p.max));c.fillStyle=p.color;

@@ -65,6 +65,18 @@ assert.deepEqual([...kinds].sort(),['bag','diamond','gold','hamster','poop','roc
 const final=new GoldMine(42,players,1000);final.step(100);assert.equal(final.phase,'complete');
 assert.equal(SHOP.length,9);
 console.log('PASS miner: 2/3 claws, individual score, shop, bomb, saves, 1000 deterministic levels and final completion');
+// A deep heavy load should take time to haul; upgrades still help and timing is
+// independent of the frame rate. This catches accidental return to the old pace.
+function heavyHaul(step,reel=0,strength=false){
+  const mine=new GoldMine(42,players.slice(0,2)),p=mine.players[0];p.claw.angle=0;p.reel=reel;p.effects.strength=strength;
+  mine.items=[{id:1,type:'gold',x:p.claw.x,y:550,r:30,value:500,mass:5,owner:-1}];mine.act(p.id,{type:'DROP'});
+  let seconds=0;while(!p.round&&seconds<20){mine.step(step);seconds+=step;}assert.equal(p.round,500);return seconds;
+}
+const normalHaul=heavyHaul(.01),slowFramesHaul=heavyHaul(.1),upgradedHaul=heavyHaul(.01,5,true);
+assert.ok(normalHaul>5&&normalHaul<7);assert.ok(Math.abs(normalHaul-slowFramesHaul)<.15);assert.ok(upgradedHaul<normalHaul*.7);
+const swingMine=new GoldMine(42,players.slice(0,2)),startAngle=swingMine.players[0].claw.angle;swingMine.step(.2);
+assert.ok(Math.abs(swingMine.players[0].claw.angle-startAngle)<.14);assert.equal(swingMine.time,109.8);
+console.log('PASS miner pace: slower swing and heavy haul, upgrades, frame-rate independence and longer round');
 const room=new GameRoom();clearInterval(room.timer);room.self=players[0].id;room.client.ready=true;room.client.sendTo=()=>true;
 room.room={roomId:id(),hostId:room.self,name:'test',game:'chess',capacity:2,members:players.slice(0,2).map(p=>({...p,ready:false})),status:'waiting',seconds:60,seq:0,round:id(),move:0};
 for(const p of room.room.members)assert.equal(room.perform(p.id,{round:room.room.round,action:{type:'READY',ready:true}}),null);

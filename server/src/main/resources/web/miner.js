@@ -50,7 +50,7 @@ export class GoldMine{
     this.phase='playing';this.paused=false;this.elapsed=0;this.events=[];this.eventId=0;this.prepare();
   }
   prepare(){
-    this.items=levelMap(this.seed,this.level);this.time=80-Math.min(28,Math.floor(this.level/35));
+    this.items=levelMap(this.seed,this.level);this.time=110-Math.min(38,Math.floor(this.level/35));
     this.target=Math.round(this.items.filter(o=>o.value>0).reduce((s,o)=>s+o.value,0)*.48);
     this.roundBonus=false;this.elapsed=0;this.events=[];
     for(const p of this.players){p.round=0;p.shopReady=false;p.purchased={};p.claw=claw(p.slot,this.players.length);if(p.effects.clock)this.time+=12;}
@@ -126,9 +126,9 @@ export class GoldMine{
       for(const item of this.items)if(item.type==='hamster'&&item.owner<0)item.x=Math.max(30,Math.min(930,item.homeX+Math.sin(this.elapsed*1.25+item.phase)*42));
       for(const p of this.players){
         const c=p.claw;c.stun=Math.max(0,c.stun-delta);
-        if(c.mode==='swing'){c.angle+=c.direction*delta*(.84+Math.min(.35,this.level/2500));if(Math.abs(c.angle)>1.25){c.angle=Math.sign(c.angle)*1.25;c.direction*=-1;}continue;}
+        if(c.mode==='swing'){c.angle+=c.direction*delta*(.60+Math.min(.25,this.level/3500));if(Math.abs(c.angle)>1.25){c.angle=Math.sign(c.angle)*1.25;c.direction*=-1;}continue;}
         if(c.mode==='extend'){
-          const before=this.tip(p);c.length+=delta*440;const after=this.tip(p);
+          const before=this.tip(p);c.length+=delta*280;const after=this.tip(p);
           const item=this.items.find(o=>o.owner<0&&distanceToSegment(o.x,o.y,before.x,before.y,after.x,after.y)<o.r+8+(p.effects.magnet?10:0));
           if(item){
             if(item.type==='tnt'){this.blast(item,p);continue;}
@@ -136,7 +136,7 @@ export class GoldMine{
           }else if(after.x<14||after.x>946||after.y>626)c.mode='retract';
         }else{
           const item=this.items.find(o=>o.id===c.item),mass=item?item.mass:0;
-          const speed=(380*(1+p.reel*.12)*(p.effects.strength?1.5:1))/(1+mass*.32);
+          const speed=(240*(1+p.reel*.12)*(p.effects.strength?1.5:1))/(1+mass*.32);
           c.length=Math.max(24,c.length-delta*speed);
           if(item){const tip=this.tip(p);item.x=tip.x;item.y=tip.y+item.r*.35;}
           if(c.length<=24){if(item)this.haul(p,item);c.item=-1;c.mode='swing';}

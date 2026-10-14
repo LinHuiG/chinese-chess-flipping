@@ -53,6 +53,21 @@ public final class PresentationChecks extends Instrumentation{
         MotionEvent down=MotionEvent.obtain(now,now,MotionEvent.ACTION_DOWN,x,y,0),up=MotionEvent.obtain(now,now+50,MotionEvent.ACTION_UP,x,y,0);
         down.setSource(InputDevice.SOURCE_TOUCHSCREEN);up.setSource(InputDevice.SOURCE_TOUCHSCREEN);sendPointerSync(down);sendPointerSync(up);down.recycle();up.recycle();
     }
+    private void fullscreenRotation()throws Exception{
+        int orientation=activity.getRequestedOrientation();MainActivity owner=activity;
+        try{
+            js("(()=>{const b=document.createElement('button');b.id='qa-fullscreen';b.textContent='测试全屏';b.style='position:fixed;left:0;top:0;width:120px;height:60px;z-index:2147483647';b.onclick=()=>document.querySelector('#waiting').requestFullscreen();document.querySelector('#waiting').append(b);})()");
+            int[] origin=new int[3];runOnMainSync(()->{service.web.getLocationOnScreen(origin);origin[2]=service.web.getWidth();});float scale=origin[2]/((Number)js("innerWidth")).floatValue();tap(origin[0]+60*scale,origin[1]+30*scale);
+            until("document.fullscreenElement?.id==='waiting'");
+            AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();
+            if(root!=null)for(AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText("退出全屏"))if("android.widget.Button".contentEquals(node.getClassName()))throw new AssertionError("Native movie exit button covers DOM controls");
+            runOnMainSync(()->owner.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));until("innerWidth>innerHeight");
+            if(owner.isDestroyed()||!Boolean.TRUE.equals(js("document.fullscreenElement?.id==='waiting'")))throw new AssertionError("Rotation recreated the Activity or lost full screen");
+            if(!getUiAutomation().performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK))throw new AssertionError("Back injection");until("document.fullscreenElement===null");
+            until("document.querySelector('#waiting')?.hidden===false");
+            if(!String.valueOf(js("document.querySelector('#waiting-id').textContent")).contains("1/3"))throw new AssertionError("Rotation or full-screen Back left the room");
+        }finally{js("document.querySelector('#qa-fullscreen')?.remove();if(document.fullscreenElement)document.exitFullscreen()");runOnMainSync(()->owner.setRequestedOrientation(orientation));}
+    }
     @Override public void onStart(){
         Bundle result=new Bundle();boolean success=false;var prefs=getTargetContext().getSharedPreferences("connection",0);
         String oldHost=prefs.getString("host",GameService.DEFAULT_HOST),oldMode=prefs.getString("transport","TCP");int oldPort=prefs.getInt("port",8888);
@@ -78,9 +93,10 @@ public final class PresentationChecks extends Instrumentation{
             until("document.querySelector('#waiting')?.hidden===false");
             if(!String.valueOf(js("document.querySelector('#waiting-id').textContent")).contains("1/3"))throw new AssertionError("capacity");
             if(!Boolean.TRUE.equals(js("typeof NativeRoom.sendPeer==='function'")))throw new AssertionError("bridge");
+            fullscreenRotation();
             js("window.cyberDisconnect()");
             until("document.querySelector('#offline')?.hidden===false");
-            success=true;result.putString("stream","PASS: bundled WebView modules, shared choice sheets before and after Activity recreation, TCP handshake, 3-player room creation, leave and disconnect\n");
+            success=true;result.putString("stream","PASS: bundled WebView modules, shared choice sheets before and after Activity recreation, TCP handshake, 3-player room creation, DOM fullscreen/rotation/Back without leaving the room, leave and disconnect\n");
         }catch(Throwable e){result.putString("stream","FAIL: "+e+"\n");}
         finally{
             prefs.edit().putString("host",oldHost).putInt("port",oldPort).putString("transport",oldMode).commit();
