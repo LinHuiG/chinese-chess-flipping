@@ -2,7 +2,7 @@
 
 最新用户授权修复、测试、发布、部署默认第一台后关机。以下最终复验优先于后文历史候选记录。
 
-## 最终候选复验（发布前）
+## 最终候选复验
 
 - 确定根因：实际生产 Rust Player 在 HTTP Range 返回 503 时，mpv 会内部跳到最后一帧并给出 EOF、无读取错误；旧逻辑把目标 80 秒误报成 120 秒正常结束。修复保留请求目标，用 SEEK / RESTART 后可达的位置校验确认结果，并防止稳定播放采样突跳片尾。异常时保留目标、显示重试，不广播正常结束。没有认定用户真实 CDN 必然返回 503。
 - 实际 Player + 同版 DLL：即时和延迟 10 秒 Range 失败均保留 80 秒、不报 ended，原 URL 重载恢复至 83.04；55 次间隔 190ms / 2 倍速跳转最终 40 → 46.16；暂停跳转稳定在 60；正常片尾仍正常结束。该层使用 null 音视频输出。
@@ -13,6 +13,14 @@
 - 最终本地 Windows：94,028,800 字节，SHA-256 `afff5c5b76cd4f7ecd169b012f51fd05e67a86489e6ad47d7dd08f64e234bb83`。Android 调试签名 APK：10,957,779 字节，SHA-256 `c03c9399676714760061c1187550fc83e271bcb87f17757409a5c01caaeb43ec`。正式发布包由 Actions 重建，另记录其散列。
 - 同一真实片源（三体 S01E26，135833）：PC 从 1306 秒恢复、先播放再由 Web 晚加入，12 次真实鼠标跳转后，两端分别继续到 1310.56 / 1310.51 秒，Web readyState=4，PC 无错误、无误报结束。首轮同片 Web 曾进入转码后解码失败，PC 始终继续播放；增加诊断后第二轮通过，原始失败类型未捕获，不能声称第三方片源的间歇失败已完全消失。网络及转码错误仍有显式重试和自动画质入口。
 - 新增复验入口：`scripts/watch-load-race-test.mjs`、`desktop_client/scripts/media-player-fault-test.py`、`scripts/desktop-real-seek-smoke.cjs`。既有声学、真机、显卡及第三方转码服务边界仍有效。
+
+## 正式发布与公网复验
+
+- 发布提交 `cbd3f72af45ce0eccd8c1db3e9fd0b85dd3f892a`，[Actions 38773156362](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/38773156362) 五项全部成功。默认第一台运行 revision 一致，digest `sha256:bd5c1c0b148d97eb4425654ffd7b39c5fd4d6f67901712407692658de7866f78`；配置和回滚信息见 [部署记录](DEPLOYMENT_0_8_4.md)。
+- 正式 APK：0.8.4 / code 17，9,303,496 字节，SHA-256 `2d75a767f0de2acf30a457fa07eca98307d2ad167dd7cfb19c8f9d4554fd9574`；Actions 和公网下载一致，签名 v2 校验成功，15 份共享资源与源码一致。未另做正式 APK 真机安装。
+- 正式 Windows：94,045,696 字节，SHA-256 `759e7ce7553c611afae898a24afa3e767237d01c8178a987aaeb269fd756b5a2`。公网完整下载核对清单后实际启动，通过本地 E-AC-3 首帧、WASAPI 24,576 帧非零 PCM、1.25 倍速、音量 0.35、暂停/跳转/恢复、字幕、DirectComposition 和可见性检查。完整联机和存档重启来自前述同源码本地 release，不混同构建字节。
+- 部署线程通过 TCP/WSS/UDP、三项能力、七项资源匹配及两个包完整下载；主线程另通过公网双网页入房、房主权限、无片源双向弹幕和解散，无页面异常。首次页面导航在大文件并行下载期间超时，下载完成后同脚本通过，保留该观察，不将未捕获的原因写成已确定。
+- 本机交付目录 `server/target/local-0.8.4/` 的 Windows 同名包已更新为上述正式包，正式 Android 文件名为 `CyberRoom-0.8.4-android.apk`。
 
 ## 2026-10-16 连续跳转补修
 
