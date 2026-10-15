@@ -12,8 +12,9 @@ const {createMockEmby}=require('./mock-emby.cjs');
     desktop=await chromium.connectOverCDP('http://127.0.0.1:19224');android=await chromium.connectOverCDP('http://127.0.0.1:19222');
     try{browser=await chromium.launch({headless:true,args:['--autoplay-policy=no-user-gesture-required']});}catch{browser=await chromium.launch({headless:true,channel:'msedge',args:['--autoplay-policy=no-user-gesture-required']});}
     const host=desktop.contexts()[0].pages()[0],guest=android.contexts()[0].pages()[0],web=await browser.newPage({viewport:{width:900,height:1000}}),pages=[host,guest,web];
+    for(const p of [host,guest])if(await p.locator('#connect').isVisible())await p.click('#connect');
     for(const p of pages){p.setDefaultTimeout(25000);p.on('pageerror',e=>errors.push(e.message));}
-    await web.goto('http://127.0.0.1:18880');
+    await web.goto(process.env.CHESS_WEB_URL||'http://127.0.0.1:18880');
     for(const p of [host,guest]){
       await p.evaluate(()=>{window.__qaEvents=[];window.addEventListener('native-room',e=>{const v=e.detail;if(['player','peer','peerPacket','voiceStatus'].includes(v.type)){window.__qaEvents.push(v);if(window.__qaEvents.length>1000)window.__qaEvents.shift();}});});
     }

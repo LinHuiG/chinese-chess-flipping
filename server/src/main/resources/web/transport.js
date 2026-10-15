@@ -70,17 +70,19 @@ export class RoomClient{
     else if(e.type==='closed')this.finish(e.reason||'连接已断开');
     else if(e.type==='status')this.callbacks.status?.(e.message);
     else if(e.type==='peer'){
+      if(this.callbacks.peerValid&&!this.callbacks.peerValid(e.peerId,e.context))return;
       if(e.ready)this.peerReady.add(e.peerId);else this.peerReady.delete(e.peerId);
-      if(e.ready&&Number.isFinite(e.latency))this.peerLatency.set(e.peerId,e.latency);else this.peerLatency.delete(e.peerId);
-      this.peerQuality.set(e.peerId,e);
+      if(e.ready&&Number.isFinite(e.latency)&&e.latency>=0)this.peerLatency.set(e.peerId,e.latency);else this.peerLatency.delete(e.peerId);
+      this.peerQuality.set(e.peerId,{...e,receivedAt:performance.now()});
       this.callbacks.path?.();
     }else if(e.type==='peerPacket'){
-      try{const m=decode(unbase64(e.data));m.control.from=e.peerId;this.callbacks.message?.(m);}catch{}
+      if(this.callbacks.peerValid&&!this.callbacks.peerValid(e.peerId,e.context))return;
+      try{const m=decode(unbase64(e.data));m.control.from=e.peerId;m.path='direct';this.callbacks.message?.(m);}catch{}
     }else this.callbacks.native?.(e);
   }
   receive(bytes){
     try{
-      const m=decode(bytes);
+      const m=decode(bytes);m.path='relay';
       if(m.kind===4){
         if(m.control.ok!=='1'){
           if(m.control.error==='SESSION_EXPIRED')storageSet(this.identityKey(),{});

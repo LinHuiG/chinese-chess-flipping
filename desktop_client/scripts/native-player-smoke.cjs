@@ -21,6 +21,10 @@ const server=http.createServer((request,response)=>{
  await page.evaluate(()=>NativeRoom.playerCommand(JSON.stringify({rate:1.25,volume:0.35,playing:false,positionMs:1000,subtitleCues:[{start:0,end:6,text:'原生字幕 · EAC3 验证'}],subtitleOffsetMs:0,danmaku:{id:'local-probe',text:'原生弹幕验证'}})));
  await page.waitForFunction(()=>window.__nativePlayerStates.some(s=>s.rate===1.25&&s.volume===0.35&&!s.playing&&s.subtitleCues===1),null,{timeout:5000});
  const controlled=await page.evaluate(()=>window.__nativePlayerStates.at(-1));
+ if(process.env.WAIT_FOR_VISUAL==='1'){
+  console.log('Paused video with native danmaku ready for visual inspection');
+  for(let i=0;i<8;i++){await page.evaluate(i=>NativeRoom.playerCommand(JSON.stringify({danmaku:{id:'smooth-'+i,text:'独立动画 · 暂停电影仍平滑移动 '+i}})),i);await page.waitForTimeout(2500);}
+ }
  await page.evaluate(()=>NativeRoom.playerCommand(JSON.stringify({visible:false})));
  await page.evaluate(()=>NativeRoom.playerCommand(JSON.stringify({visible:true,bounds:{x:30,y:-20,width:800,height:450},playing:true})));
  await page.waitForFunction(()=>window.__nativePlayerStates.some(s=>s.rate===1.25&&s.playing&&s.positionMs>1600),null,{timeout:5000});

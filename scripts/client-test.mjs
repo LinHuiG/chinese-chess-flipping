@@ -77,6 +77,14 @@ assert.ok(normalHaul>5&&normalHaul<7);assert.ok(Math.abs(normalHaul-slowFramesHa
 const swingMine=new GoldMine(42,players.slice(0,2)),startAngle=swingMine.players[0].claw.angle;swingMine.step(.2);
 assert.ok(Math.abs(swingMine.players[0].claw.angle-startAngle)<.14);assert.equal(swingMine.time,109.8);
 console.log('PASS miner pace: slower swing and heavy haul, upgrades, frame-rate independence and longer round');
+const supply=new GoldMine(42,players);supply.target=1;supply.players[0].round=1;supply.finishRound();
+assert.equal(supply.shopTime,20);assert.equal(supply.players[0].cash,150);supply.finishRound();assert.equal(supply.players[0].cash,150,'Duplicate round completion cannot award twice');
+supply.step(7.25);assert.equal(supply.shopTime,12.75);supply.paused=true;assert.equal(supply.step(30),false);assert.equal(supply.shopTime,12.75);assert.ok(supply.act(players[0].id,{type:'SHOP_READY',ready:true}));
+const supplySave=supply.save(),supplyRestore=GoldMine.restore(supplySave);assert.ok(supplyRestore.paused);assert.equal(supplyRestore.shopTime,12.75);supplyRestore.step(100);assert.equal(supplyRestore.level,1);
+supplyRestore.rebind(players);supplyRestore.step(12.74);assert.equal(supplyRestore.phase,'shop');supplyRestore.step(.02);assert.equal(supplyRestore.level,2);assert.equal(supplyRestore.phase,'playing');assert.equal(supplyRestore.shopTime,0);assert.equal(supplyRestore.players[0].cash,150);
+supplyRestore.step(.1);assert.equal(supplyRestore.level,2);assert.ok(supplyRestore.next(),'Late next request cannot start another level');
+delete supplySave.shopTime;assert.equal(GoldMine.restore(supplySave).shopTime,20,'Older shop saves receive the new timer');
+console.log('PASS miner supply timer: 20-second expiry, pause, save/rebind remainder, old-save migration and single settlement');
 const room=new GameRoom();clearInterval(room.timer);room.self=players[0].id;room.client.ready=true;room.client.sendTo=()=>true;
 room.room={roomId:id(),hostId:room.self,name:'test',game:'chess',capacity:2,members:players.slice(0,2).map(p=>({...p,ready:false})),status:'waiting',seconds:60,seq:0,round:id(),move:0};
 for(const p of room.room.members)assert.equal(room.perform(p.id,{round:room.room.round,action:{type:'READY',ready:true}}),null);
@@ -306,3 +314,39 @@ const timedOut=watch.stopMedia();for(let i=0;i<8;i++)await Promise.resolve();ass
 for(const [key,timer] of [...timers]){timers.delete(key);timer.fn();}await timedOut;assert.equal(watch.stopping,null,'offline Emby cannot block cleanup indefinitely');
 `],{stdio:'pipe',timeout:5000});
 console.log('PASS native media cleanup: stop before terminal reports, repeated stop shares cleanup, next origin waits, bounded timeout');
+
+await withClock(async()=>{
+  const originalPerformance=globalThis.performance;let now=1000;globalThis.performance={now:()=>now};
+  const host=watchHost(),guest=watchHost(),requests=[],replies=[];host.latency=7;
+  host.room.members.push({id:guest.self,name:'guest',udp:true});guest.room=structuredClone(host.room);guest.room.hostId=host.self;
+  host.client.sendTo=(rid,to,headers,body,path)=>{requests.push({rid,to,headers,body,path});return true;};guest.client.sendTo=(rid,to,headers,body,path)=>{replies.push({rid,to,headers,body,path});return true;};
+  const receive=(game,from,message)=>game.client.receive(packet(64,{roomId:message.rid,from,...message.headers},message.body));
+  try{
+    assert.equal(host.memberConnection(host.self).text,'我');assert.equal(host.memberConnection(guest.self).text,'中转 · 待测');
+    host.presence();assert.equal(requests.length,1);assert.equal(requests[0].path,'relay');receive(guest,host.self,requests[0]);assert.equal(replies.length,1);assert.equal(replies[0].path,'relay','presence echo must remain on the server path');
+    now+=42;receive(host,guest.self,replies[0]);assert.equal(host.memberConnection(guest.self).text,'中转 · 42 ms','measure the full peer round trip, not the 7 ms server ping');
+    now+=20;receive(host,guest.self,replies[0]);assert.equal(host.relayLatency.get(guest.self).ms,42,'a duplicate echo cannot change a completed measurement');
+    const peerContext=id();host.offers.set(guest.self,{context:peerContext});
+    host.client.nativeEvent({type:'peer',peerId:guest.self,context:peerContext,ready:true,latency:13.5});assert.equal(host.memberConnection(guest.self).text,'P2P 可用 · 13.5 ms');
+    host.client.nativeEvent({type:'peer',peerId:guest.self,context:id(),ready:false});assert.equal(host.memberConnection(guest.self).kind,'direct','stale native context cannot override the current peer');
+    now+=6001;assert.equal(host.memberConnection(guest.self).text,'中转 · 42 ms','expired direct probe falls back to a recent relay measurement');now+=4000;assert.equal(host.memberConnection(guest.self).text,'中转 · 待测','expired peer measurement must not remain as a live delay');
+    host.presence();const old=requests.at(-1);host.client.finish('test disconnect');assert.equal(host.memberConnection(guest.self).kind,'offline');host.client.ready=true;receive(host,guest.self,{rid:old.rid,headers:{type:'presence.reply'},body:{probe:old.body.probe}});assert.equal(host.relayLatency.size,0,'echo from a previous connection is discarded');
+    const oldRoom=structuredClone(host.room);host.reset();host.room=oldRoom;host.offers.set(guest.self,{context:id()});host.client.nativeEvent({type:'peer',peerId:guest.self,context:peerContext,ready:true,latency:1});assert.equal(host.memberConnection(guest.self).text,'中转 · 待测','same-ID reentry cannot restore old P2P metrics');
+    let delivered=0;host.events.module=()=>delivered++;const frame=packet(64,{roomId:host.room.roomId,type:'voice'},new Uint8Array([1]));
+    host.client.nativeEvent({type:'peerPacket',peerId:guest.self,context:peerContext,data:Buffer.from(frame).toString('base64')});assert.equal(delivered,0);
+    host.client.nativeEvent({type:'peerPacket',peerId:guest.self,context:host.offers.get(guest.self).context,data:Buffer.from(frame).toString('base64')});assert.equal(delivered,1,'current authenticated peer context still delivers');
+    host.events.module=undefined;host.memberLeft(guest.self);assert.equal(host.memberConnection(guest.self).text,'');assert.equal(host.relayProbes.size,0);
+  }finally{host.reset();guest.reset();clearInterval(host.timer);clearInterval(guest.timer);globalThis.performance=originalPerformance;}
+});
+console.log('PASS member network: real relay RTT, authenticated P2P context, expiry, reconnect/reentry isolation and member departure');
+await withClock(async()=>{
+  const host=watchHost(),guest=id();host.room.game='miner';host.room.status='playing';host.room.capacity=2;host.room.members.push({id:guest,name:'guest'});host.engine=new GoldMine(1,host.room.members);host.engine.finishRound();host.publish();
+  const round=host.room.round,level=host.engine.level,perform=(who,action)=>host.perform(who,{round,level,action});
+  assert.ok(perform(guest,{type:'NEXT'}));assert.ok(perform(guest,{type:'PAUSE'}));
+  assert.equal(perform(host.self,{type:'PAUSE'}),null);const left=host.engine.shopTime;host.lastTick=performance.now()-5000;host.tick();assert.equal(host.engine.shopTime,left);
+  assert.equal(perform(host.self,{type:'PAUSE'}),null);host.client.ready=false;host.lastTick=performance.now()-30000;host.tick();assert.equal(host.engine.shopTime,left,'Disconnected host does not advance shop');host.client.ready=true;
+  host.lastTick=performance.now()-21000;host.tick();assert.equal(host.engine.level,level+1);assert.equal(host.state.phase,'playing');
+  const snapshot=JSON.parse(JSON.stringify(host.snapshot()));assert.equal(snapshot.state.shopTime,0);assert.equal(snapshot.state.level,level+1);
+  assert.ok(perform(host.self,{type:'NEXT'}),'Previous-level action is rejected');assert.ok(perform(guest,{type:'BUY',item:'strength'}));assert.equal(host.engine.level,level+1);host.reset();
+});
+console.log('PASS miner authority: host-only pause/early next, offline freeze, expired shop snapshot and stale-level rejection');

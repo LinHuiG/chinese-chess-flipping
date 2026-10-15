@@ -277,7 +277,7 @@ impl Udp {
                         .is_some_and(|at| at.elapsed() < Duration::from_secs(4));
                     if p.ready != ready || report_now {
                         p.ready = ready;
-                        let mut event = json!({"type":"peer","peerId":p.id,"ready":ready,"latency":p.latency,"queuedMs":0});
+                        let mut event = json!({"type":"peer","peerId":p.id,"context":p.context,"ready":ready,"latency":p.latency,"queuedMs":0});
                         if p.probe_count >= 5 {
                             p.loss =
                                 (1. - p.probe_acked as f64 / p.probe_count as f64).clamp(0., 1.);
@@ -389,21 +389,21 @@ impl Udp {
                     if let Some(frame) = frame {
                         if let Ok(packet) = Packet::parse(&frame) {
                             if packet.kind == 64 {
-                                delivered = Some((p.id.clone(), packet));
+                                delivered = Some((p.id.clone(), p.context.clone(), packet));
                             }
                         }
                     }
                 }
-                None => delivered = Some((p.id.clone(), packet)),
+                None => delivered = Some((p.id.clone(), p.context.clone(), packet)),
                 _ => {}
             }
             break;
         }
         drop(peers);
-        if let (Some((id, p)), Some(s)) = (delivered, self.state.upgrade()) {
+        if let (Some((id, context, p)), Some(s)) = (delivered, self.state.upgrade()) {
             if !s.voice.receive(&p, Some(&id)) {
                 if let Ok(bytes) = p.plain() {
-                    s.event(json!({"type":"peerPacket","peerId":id,"data":B64.encode(bytes)}));
+                    s.event(json!({"type":"peerPacket","peerId":id,"context":context,"data":B64.encode(bytes)}));
                 }
             }
         }

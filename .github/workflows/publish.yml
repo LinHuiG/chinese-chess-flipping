@@ -212,6 +212,12 @@ jobs:
           node scripts/subtitles-test.mjs
           node scripts/watch-player-test.mjs
           node scripts/watch-native-player-test.mjs
+          node scripts/watch-seek-test.mjs
+          node scripts/watch-load-race-test.mjs
+          node scripts/watch-save-test.mjs
+          node scripts/voice-capture-test.mjs
+          node desktop_client/scripts/fullscreen-bridge-test.cjs
+          node desktop_client/scripts/watch-save-bridge-test.cjs
       - name: Record successful validation
         if: steps.scope.outputs.should_check == 'true'
         env:

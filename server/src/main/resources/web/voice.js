@@ -44,13 +44,27 @@ export class RoomVoice{
     if(this.context){await this.context.resume();return;}
     const Audio=globalThis.AudioContext||globalThis.webkitAudioContext;if(!Audio)throw Error('此设备暂不支持语音，仍可观看和发弹幕');
     const context=this.room.context(),audio=this.context=new Audio();
+    audio.onstatechange=()=>{if(this.context!==audio)return;this.captureTiming=null;this.node?.port.postMessage({clear:true});this.status=audio.state==='running'?'语音已开启 · 外放开麦建议佩戴耳机':'语音已暂停，点击页面恢复收听';this.changed();};
     const resumed=audio.resume();resumed.catch(()=>{});
     try{await audio.audioWorklet.addModule('./voice-worklet.js');
       if(this.context!==audio||!this.room.current(context)){if(this.context===audio)this.context=null;await audio.close();return;}
       this.node=new AudioWorkletNode(audio,'room-voice');this.node.connect(audio.destination);
-      this.node.port.onmessage=e=>{const seq=this.sequence++;if(this.context!==audio||!this.microphone||!this.room.client.ready||this.room.room?.game!=='watch'||audio.currentTime-e.data.at>.2)return;const result=encodeVoice(e.data.samples,this.stream,seq,this.index);this.index=result.index;this.room.client.broadcast(this.room.room.roomId,undefined,{type:'voice',codec:VOICE_CODEC,discard:1,maxAgeMs:200},result.bytes);};
+      this.node.port.onmessage=e=>this.captureFrame(audio,e.data);
       await resumed;if(this.context!==audio)return;this.status='语音已开启 · 外放开麦建议佩戴耳机';this.changed();
     }catch(e){if(this.context===audio){this.node?.disconnect();this.node=this.context=null;}await audio.close().catch(()=>{});throw e;}
+  }
+  captureFrame(audio,frame){
+    if(this.context!==audio||!this.microphone||frame.generation!==this.micGeneration||!this.room.client.ready||this.room.room?.game!=='watch'||audio.state!=='running'||!Number.isFinite(frame.at))return;
+    const age=audio.currentTime-frame.at;if(age>.2||age<-.1)return;
+    // The capture clock must include gaps in microphone input. AudioContext time
+    // itself stops during suspension, so a discontinuity starts a new stream;
+    // otherwise receivers correctly discard every later packet as >200ms old.
+    const at=performance.now()-Math.max(0,age)*1000,timing=this.captureTiming;
+    if(!timing||frame.at<timing.audio||Math.abs((at-timing.wall)-(frame.at-timing.audio)*1000)>120){
+      this.captureTiming={audio:frame.at,wall:at};this.stream=crypto.getRandomValues(new Uint32Array(1))[0];this.sequence=0;this.index=0;
+    }
+    const clock=Math.round((frame.at-this.captureTiming.audio)*16000)>>>0,result=encodeVoice(frame.samples,this.stream,this.sequence++,this.index,clock);this.index=result.index;
+    this.room.client.broadcast(this.room.room.roomId,undefined,{type:'voice',codec:VOICE_CODEC,discard:1,maxAgeMs:200},result.bytes);
   }
   async microphoneToggle(){
     if(this.microphone||this.openingMic){await this.mute();return;}
@@ -61,10 +75,10 @@ export class RoomVoice{
       await this.listen();if(!valid()||!this.context||!this.node)return;if(!navigator.mediaDevices?.getUserMedia)throw Error('当前浏览器不能开麦，请使用 HTTPS 或客户端');
       const media=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1},video:false});
       if(!valid()||!this.context||!this.node){media.getTracks().forEach(t=>t.stop());return;}
-      this.media=media;this.source=this.context.createMediaStreamSource(media);this.source.connect(this.node);this.stream=crypto.getRandomValues(new Uint32Array(1))[0];this.sequence=0;this.index=0;this.microphone=true;this.node.port.postMessage({capture:true});this.changed();
+      this.media=media;this.source=this.context.createMediaStreamSource(media);this.source.connect(this.node);this.captureTiming=null;this.microphone=true;this.node.port.postMessage({capture:true,generation});this.changed();
     }finally{if(generation===this.micGeneration)this.openingMic=false;}
   }
-  async mute(){this.micGeneration++;this.openingMic=false;this.microphone=false;this.media?.getTracks().forEach(t=>t.stop());this.source?.disconnect();this.media=this.source=null;this.node?.port.postMessage({capture:false});await nativeCall('voiceMicrophone',false);this.changed();}
+  async mute(){this.micGeneration++;this.openingMic=false;this.microphone=false;this.captureTiming=null;this.media?.getTracks().forEach(t=>t.stop());this.source?.disconnect();this.media=this.source=null;this.node?.port.postMessage({capture:false});await nativeCall('voiceMicrophone',false);this.changed();}
   receive(from,bytes){
     if(native||!this.node||this.context?.state!=='running'||this.room.background)return;
     try{const frame=decodeVoice(bytes),now=performance.now();let old=this.received.get(from);

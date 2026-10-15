@@ -5,6 +5,7 @@ mod media;
 mod media_runtime;
 mod network;
 mod udp;
+mod watch_save;
 mod wire;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use futures_util::StreamExt;
@@ -52,6 +53,7 @@ pub struct AppState {
     handle: tauri::AppHandle,
     settings: Mutex<Settings>,
     settings_path: PathBuf,
+    watch_save: watch_save::WatchSave,
     pub network: Arc<network::Network>,
     pub udp: Mutex<Option<Arc<udp::Udp>>>,
     pub voice: Arc<audio::Voice>,
@@ -129,6 +131,15 @@ async fn native_call(
     }
     let state = state.inner().clone();
     match method.as_str() {
+        "watchSaveRead" => Ok(json!(state.watch_save.read()?)),
+        "watchSaveWrite" => {
+            let text = match args.first() {
+                Some(Value::Null) => None,
+                _ => Some(string(&args, 0)?),
+            };
+            state.watch_save.write(text)?;
+            Ok(json!(true))
+        }
         "configure" => {
             let mut s: Settings = parse_arg(&args, 0)?;
             s.host = s.host.trim().into();
@@ -271,6 +282,25 @@ async fn native_call(
         "playerStop" => {
             state.player.stop();
             Ok(json!(true))
+        }
+        "windowFullscreen" => {
+            let enabled = args
+                .first()
+                .and_then(Value::as_bool)
+                .ok_or("全屏参数无效")?;
+            window
+                .set_fullscreen(enabled)
+                .map_err(|e| format!("切换全屏失败：{e}"))?;
+            Ok(json!(true))
+        }
+        "windowState" if std::env::var("CYBER_ROOM_MEDIA_DIAGNOSTICS").as_deref() == Ok("1") => {
+            let monitor = window.current_monitor().map_err(|e| e.to_string())?;
+            Ok(
+                json!({"fullscreen":window.is_fullscreen().map_err(|e| e.to_string())?,
+                "position":window.outer_position().map_err(|e| e.to_string())?,
+                "size":window.outer_size().map_err(|e| e.to_string())?,
+                "monitor":monitor.map(|m| json!({"position":m.position(),"size":m.size()}))}),
+            )
         }
         "mediaRequest" => {
             let request: Value = parse_arg(&args, 0)?;
@@ -519,6 +549,7 @@ fn main() {
                 handle: handle.clone(),
                 settings: Mutex::new(settings),
                 settings_path,
+                watch_save: watch_save::WatchSave::new(path.clone()),
                 network: Arc::new(network::Network::new()),
                 udp: Mutex::new(None),
                 voice: audio::Voice::new(weak.clone()),

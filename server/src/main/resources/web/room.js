@@ -8,11 +8,12 @@ export const GAMES={
 };
 export class GameRoom{
   constructor(events={}){
-    this.events=events;this.room=null;this.engine=null;this.state=null;this.seq=-1;this.lifecycle=0;this.operation=0;this.recovery=0;this.actions=new Map();this.completed=new Map();this.candidates=[];this.offers=new Map();
+    this.events=events;this.room=null;this.engine=null;this.state=null;this.seq=-1;this.lifecycle=0;this.operation=0;this.recovery=0;this.actions=new Map();this.completed=new Map();this.candidates=[];this.offers=new Map();this.relayProbes=new Map();this.relayLatency=new Map();
     this.client=new RoomClient({
       connected:(identity,resumed)=>this.connected(identity,resumed),
-      status:s=>events.status?.(s),closed:s=>{this.connectedNow=false;this.checkpoint();events.module?.({type:'disconnected'});events.status?.(s);events.changed?.();},
+      status:s=>events.status?.(s),closed:s=>{this.connectedNow=false;this.latency=undefined;this.clearMemberNetwork();this.checkpoint();events.module?.({type:'disconnected'});events.status?.(s);events.changed?.();},
       latency:ms=>{this.latency=ms;events.network?.();},path:()=>events.network?.(),
+      peerValid:(who,context)=>typeof context==='string'&&this.room?.members.some(p=>p.id===who&&p.udp)&&this.offers.get(who)?.context===context,
       message:m=>this.message(m),native:e=>this.nativeEvent(e)
     });
     this.lastTick=performance.now();this.lastPublish=this.lastSave=this.lastPresence=0;
@@ -25,10 +26,25 @@ export class GameRoom{
   context(){return [this.room?.roomId||'',this.self,this.client.generation,this.lifecycle].join(':');}
   current(context){return context===this.context();}
   assertCurrent(context){if(!this.current(context))throw Object.assign(Error('房间已变化，请重新操作'),{code:'STALE_OPERATION'});}
+  clearMemberNetwork(){this.relayProbes.clear();this.relayLatency.clear();this.lastSeen?.clear();}
+  memberConnection(who){
+    if(!this.room?.members.some(p=>p.id===who))return {kind:'',text:'',title:''};
+    if(who===this.self)return {kind:'self',text:'我',title:'当前设备'};
+    if(!this.client.ready)return {kind:'offline',text:'连接恢复中',title:'本机与服务器连接中断，等待恢复'};
+    const now=performance.now(),quality=this.client.peerQuality.get(who),direct=this.client.peerLatency.get(who),relay=this.relayLatency.get(who),ms=value=>(Math.round(value*10)/10)+' ms';
+    if(this.client.peerReady.has(who)&&quality?.ready&&now-quality.receivedAt<6000&&Number.isFinite(direct))return {kind:'direct',text:'P2P 可用 · '+ms(direct),title:'本机与此成员的认证 UDP 往返延迟；控制消息仍走服务器，语音按质量选路'};
+    if(relay&&now-relay.at<10000)return {kind:'relay',text:'中转 · '+ms(relay.ms),title:'本机经服务器到此成员再返回的往返延迟，包含对方处理时间'};
+    return {kind:'relay',text:'中转 · 待测',title:'等待此成员回复测量；不使用本机到服务器的延迟代替'};
+  }
+  presence(){
+    const context=this.context(),now=performance.now();
+    for(const p of this.room.members)if(p.id!==this.self){const probe=id();this.relayProbes.set(p.id,{probe,at:now,context});this.client.sendTo(this.room.roomId,p.id,{type:'presence'},{name:this.nickname,probe},'relay');}
+    this.events.network?.();
+  }
   async connected(identity,resumed){
     const recovery=++this.recovery;clearTimeout(this.rejoinTimer);
     if(this.self&&this.self!==identity.clientId)this.reset();
-    this.self=identity.clientId;this.connectedNow=true;this.client.clearPeers();this.candidates=[];this.offers.clear();
+    this.self=identity.clientId;this.connectedNow=true;this.clearMemberNetwork();this.client.clearPeers();this.candidates=[];this.offers.clear();
     if(this.client.compatibilityError){if(this.room)this.reset();this.events.notice?.(this.client.compatibilityError);this.events.status?.(this.client.compatibilityError);this.events.changed?.();this.events.lobby?.();return;}
     const saved=storageGet(this.activeKey());
     if(!this.room&&saved?.self===this.self){
@@ -41,7 +57,7 @@ export class GameRoom{
         const membership=await this.client.roomSync(this.room.roomId);
         if(!this.current(context)||recovery!==this.recovery)return;
         if(membership.hostId!==this.room.hostId)throw Object.assign(Error('原房间已结束，存档仍保留'),{code:'ROOM_NOT_FOUND'});
-        if(this.host){this.reconcile(membership);this.publish();this.discover();}
+        if(this.host){this.reconcile(membership);this.publish();this.discover();await this.events.module?.({type:'hostReady'});}
         else await this.resumeGuest();
       }catch(e){
         if(!this.current(context)||recovery!==this.recovery)return;
@@ -68,6 +84,7 @@ export class GameRoom{
     this.password=password;this.room={roomId:result.roomId,hostId:this.self,name,game:gameId,capacity:gameId==='watch'?6:gameId==='chess'?2:saved?saved.players.length:Math.max(2,Math.min(3,capacity)),locked:!!password,
       members:[{id:this.self,name:this.nickname,ready:false,udp:!!native}],status:gameId==='watch'?'watching':'waiting',seconds:60,round:id(),seq:0,move:0};
     this.restoreSave=saved;this.engine=null;this.seq=-1;this.publish();this.checkpoint();this.discover();this.events.changed?.();
+    await this.events.module?.({type:'hostReady'});
   }
   async resumeGuest(){
     clearTimeout(this.rejoinTimer);
@@ -97,10 +114,12 @@ export class GameRoom{
   async leave(){
     if(!this.room)return;
     const rid=this.room.roomId,context=this.context();if(this.host&&this.room.game==='miner')this.saveMine(false);
+    await this.events.module?.({type:'leaving'});if(!this.current(context))return;
     await this.client.leaveRoom(rid);if(!this.current(context))return;this.reset();this.events.changed?.();this.events.lobby?.();
   }
   reset(){
-    this.lifecycle++;this.operation++;this.recovery++;clearTimeout(this.rejoinTimer);
+    this.events.module?.({type:'leaving'});
+    this.lifecycle++;this.operation++;this.recovery++;clearTimeout(this.rejoinTimer);this.clearMemberNetwork();
     this.room=this.engine=this.state=this.restoreSave=this.mediaAccess=null;this.seq=-1;this.completed.clear();this.client.clearPeers();this.offers.clear();this.candidates=[];
     for(const a of this.actions.values()){clearTimeout(a.retry);clearTimeout(a.timeout);a.reject(Error('房间已结束'));}this.actions.clear();
     this.password='';this.membershipVersion=0;this.approved=null;this.pendingAdmissions?.clear();this.updateTimer();storageSet(this.activeKey(),null);if(native)nativeCall('roomActive','');this.events.module?.({type:'reset'});
@@ -130,7 +149,11 @@ export class GameRoom{
         if(b.snapshot)this.apply(b.snapshot);if(b.ok)pending.resolve();else pending.reject(Error(b.error||'操作失败'));
       }else if(c.type==='presence'){
         this.lastSeen??=new Map();this.lastSeen.set(c.from,Date.now());
+        if(m.path==='relay'&&/^[a-f0-9]{32}$/.test(b.probe))this.client.sendTo(this.room.roomId,c.from,{type:'presence.reply'},{probe:b.probe},'relay');
         if(this.host&&b.name){const p=this.room.members.find(p=>p.id===c.from);if(p.name!==b.name){p.name=String(b.name).slice(0,24);this.publish();}}
+      }else if(c.type==='presence.reply'){
+        const probe=this.relayProbes.get(c.from),now=performance.now();
+        if(m.path==='relay'&&probe&&probe.probe===b.probe&&this.current(probe.context)&&now-probe.at>=0&&now-probe.at<10000){this.relayProbes.delete(c.from);this.relayLatency.set(c.from,{ms:now-probe.at,at:now});this.events.network?.();}
       }else if(c.type==='peer.offer'||c.type==='peer.answer')this.peerSignal(c.from,c.type,b);
     }catch(e){this.events.notice?.('收到无法识别的客户端消息');}
   }
@@ -156,6 +179,7 @@ export class GameRoom{
   }
   memberLeft(who){
     if(!this.room.members.some(p=>p.id===who))return;
+    this.clearMemberNetwork();
     if(this.room.game==='watch'){this.room.members=this.room.members.filter(p=>p.id!==who);this.client.clearPeers();this.offers.clear();this.publish();this.checkpoint();this.setupPeers();return;}
     if(this.room.game==='miner'&&this.engine){this.engine.paused=true;this.restoreSave=this.engine.save();this.saveMine(false);}
     if(this.room.game==='chess'&&this.room.status==='playing')this.room.result={winnerId:this.self,reason:'对手退出'};
@@ -178,13 +202,13 @@ export class GameRoom{
   apply(snapshot){
     if(!snapshot.room||snapshot.room.roomId!==this.room?.roomId||snapshot.room.hostId!==this.room.hostId||snapshot.room.seq<=this.seq)return;
     const changed=JSON.stringify(this.room.members)!==JSON.stringify(snapshot.room.members);
-    if(changed){this.client.clearPeers();this.offers.clear();}
+    if(changed){this.clearMemberNetwork();this.client.clearPeers();this.offers.clear();}
     this.room=snapshot.room;this.seq=this.room.seq;this.state=snapshot.state;this.stateAt=performance.now();this.events.changed?.();if(changed||performance.now()-(this.lastCheckpoint||0)>3000)this.checkpoint();
     this.updateTimer();if(native)nativeCall('roomActive',this.room.name).catch(()=>{});this.setupPeers();
   }
   action(action){
     if(!this.room)return Promise.reject(Error('尚未加入房间'));
-    const messageId=id(),payload={round:this.room.round,action};
+    const messageId=id(),payload={round:this.room.round,action,...(this.room.game==='miner'&&this.state?{level:this.state.level}:{})};
     if(this.host){const error=this.perform(this.self,payload);this.publish();this.checkpoint();return error?Promise.reject(Error(error)):Promise.resolve();}
     return new Promise((resolve,reject)=>{
       const send=path=>this.client.sendTo(this.room.roomId,this.room.hostId,{type:'action',messageId},payload,path);
@@ -225,7 +249,8 @@ export class GameRoom{
       if(this.engine.winner>=0)this.finishChess();return error;
     }
     if(!this.engine)return '尚未开局';
-    if(a.type==='PAUSE'){if(who!==this.self)return '只有房主可以暂停';this.engine.paused=!this.engine.paused;this.saveMine(false);return null;}
+    if(payload.level!==undefined&&payload.level!==this.engine.level)return '关卡已经更新，请重试';
+    if(a.type==='PAUSE'){if(who!==this.self)return '只有房主可以暂停';if(this.engine.phase==='complete')return '已经完成全部关卡';this.engine.paused=!this.engine.paused;this.saveMine(false);return null;}
     if(a.type==='NEXT'){if(who!==this.self)return '等待房主开始下一关';const error=this.engine.next();if(!error)this.saveMine(false);return error;}
     return this.engine.act(who,a);
   }
@@ -268,7 +293,7 @@ export class GameRoom{
     }
     if(now-this.lastPresence>3000){
       this.lastPresence=now;
-      for(const p of this.room.members)if(p.id!==this.self)this.client.sendTo(this.room.roomId,p.id,{type:'presence'},{name:this.nickname},'relay');
+      this.presence();
       this.setupPeers();
       if(this.host&&!this.syncing){const context=this.context();this.syncing=true;this.client.roomSync(this.room.roomId).then(m=>{if(this.current(context))this.reconcile(m);}).catch(()=>{}).finally(()=>this.syncing=false);}
     }
@@ -280,7 +305,7 @@ export class GameRoom{
   }
   nativeEvent(e){
     if(e.type==='udpLocal'){this.candidates.push(...e.candidates);this.setupPeers();}
-    else if(e.type==='networkChanged'){this.client.clearPeers();this.offers.clear();this.candidates=[];this.discover();this.events.module?.(e);}
+    else if(e.type==='networkChanged'){this.clearMemberNetwork();this.client.clearPeers();this.offers.clear();this.candidates=[];this.discover();this.events.network?.();this.events.module?.(e);}
     else if(e.type==='foreground'||e.type==='background'){this.background=e.type==='background';if(this.background&&this.host&&this.room?.game==='miner'&&this.engine){this.engine.paused=true;this.saveMine(false);this.publish();}this.updateTimer();this.events.module?.(e);if(!this.background){if(this.client.ready)this.connected(this.client.identity,true);else if(this.client.enabled)this.client.connect();}}
     else {this.events.module?.(e);this.events.native?.(e);}
   }

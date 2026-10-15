@@ -8,13 +8,13 @@ import org.json.*;
 import java.util.concurrent.*;
 /** Debug APK check: loads bundled modules, native bridge, and host room lifecycle on a loopback server. */
 public final class PresentationChecks extends Instrumentation{
-    private GameService service;private MainActivity activity;private String host="10.0.2.2";private int port=18888;
+    private GameService service;private MainActivity activity;private String host="10.0.2.2";private int port=18888;private boolean watchSaveSuite;
     private final CountDownLatch bound=new CountDownLatch(1);
     private final ServiceConnection binding=new ServiceConnection(){
         public void onServiceConnected(ComponentName n,IBinder b){service=((GameService.LocalBinder)b).service();bound.countDown();}
         public void onServiceDisconnected(ComponentName n){}
     };
-    @Override public void onCreate(Bundle args){super.onCreate(args);if(args!=null){host=args.getString("host",host);port=Integer.parseInt(args.getString("port","18888"));}start();}
+    @Override public void onCreate(Bundle args){super.onCreate(args);if(args!=null){host=args.getString("host",host);port=Integer.parseInt(args.getString("port","18888"));watchSaveSuite="watchSave".equals(args.getString("suite"));}start();}
     private Object js(String script)throws Exception{
         CompletableFuture<String> result=new CompletableFuture<>();runOnMainSync(()->service.web.evaluateJavascript(script,result::complete));
         return new JSONArray("["+result.get(5,TimeUnit.SECONDS)+"]").get(0);
@@ -69,6 +69,7 @@ public final class PresentationChecks extends Instrumentation{
         }finally{js("document.querySelector('#qa-fullscreen')?.remove();if(document.fullscreenElement)document.exitFullscreen()");runOnMainSync(()->owner.setRequestedOrientation(orientation));}
     }
     @Override public void onStart(){
+        if(watchSaveSuite){Bundle result=new WatchSaveChecks(this).run();finish(result.getBoolean("success")?0:1,result);return;}
         Bundle result=new Bundle();boolean success=false;var prefs=getTargetContext().getSharedPreferences("connection",0);
         String oldHost=prefs.getString("host",GameService.DEFAULT_HOST),oldMode=prefs.getString("transport","TCP");int oldPort=prefs.getInt("port",8888);
         try{

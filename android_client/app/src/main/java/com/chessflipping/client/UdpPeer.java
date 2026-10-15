@@ -109,7 +109,7 @@ public final class UdpPeer implements AutoCloseable {
             boolean ready=now-peer.pongAt<4000;
             if(peer.ready!=ready||now-peer.reportAt>2000){
                 peer.ready=ready;peer.reportAt=now;
-                try{emit(event("peer").put("peerId",peer.id).put("ready",ready).put("latency",peer.latency).put("loss",peer.loss).put("jitter",peer.jitter).put("queued",sender.getQueue().size()).put("queuedMs",sender.getQueue().size()*20));}catch(JSONException ignored){}
+                try{emit(event("peer").put("peerId",peer.id).put("context",peer.context).put("ready",ready).put("latency",peer.latency).put("loss",peer.loss).put("jitter",peer.jitter).put("queued",sender.getQueue().size()).put("queuedMs",sender.getQueue().size()*20));}catch(JSONException ignored){}
             }
             execute(()->{
                 try{
@@ -171,7 +171,7 @@ public final class UdpPeer implements AutoCloseable {
             peer.fragments.remove(id);WireProtocol.Packet packet=WireProtocol.plain(WireProtocol.decode(frame));if(packet.type==64&&!packetHandler.test(peer.id,packet))deliver(peer,frame);
         }
     }
-    private void deliver(Peer peer,byte[] frame)throws JSONException{if(peers.get(peer.id)==peer)emit(event("peerPacket").put("peerId",peer.id).put("data",Base64.getEncoder().encodeToString(frame)));}
+    private void deliver(Peer peer,byte[] frame)throws JSONException{if(peers.get(peer.id)==peer)emit(event("peerPacket").put("peerId",peer.id).put("context",peer.context).put("data",Base64.getEncoder().encodeToString(frame)));}
     public void clear(){synchronized(lifecycle){generation++;sender.getQueue().clear();for(Peer peer:peers.values())peer.session.close();peers.clear();}}
     @Override public void close(){closed=true;socket.close();timer.shutdownNow();sender.shutdownNow();clear();}
 }

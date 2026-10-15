@@ -44,6 +44,10 @@ fn main() {
         "wmcodecdspuuid",
         "wtsapi32",
         "user32",
+        "dcomp",
+        "d3d11",
+        "d2d1",
+        "dwrite",
     ] {
         println!("cargo:rustc-link-lib={lib}");
     }

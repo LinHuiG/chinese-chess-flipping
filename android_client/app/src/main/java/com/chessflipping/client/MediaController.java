@@ -41,6 +41,7 @@ public final class MediaController implements AutoCloseable {
     private boolean softwareDecoder,fallbackTried,recovering,renderedFirstFrame;private String failedDecoder="",playbackError="",videoMime="";
     private float volume=1,rate=1;private boolean muted,communicationAudio,audioOutputAdvancing;private int playbackErrorCode;
     private AudioProbe audioProbe;
+    private String playbackId="",seekId="";private boolean applyingCommand;
     public MediaController(Context context,Consumer<JSONObject> events,Runnable interrupted){
         this.context=context;this.events=events;this.interrupted=interrupted;audio=context.getSystemService(android.media.AudioManager.class);
         focus=new android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN).setAudioAttributes(new android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA).build()).setOnAudioFocusChangeListener(change->{ownsFocus=change>0;if(change<0){if(player!=null)player.pause();interrupted.run();}}).build();
@@ -148,6 +149,7 @@ public final class MediaController implements AutoCloseable {
     private void resizeVideo(VideoSize size){if(video==null||size.width<=0||size.height<=0)return;float aspect=(size.width*size.pixelWidthHeightRatio)/size.height,box=width/(float)height;Matrix transform=new Matrix();if(box>aspect)transform.setScale(aspect/box,1,width/2f,height/2f);else transform.setScale(1,box/aspect,width/2f,height/2f);video.setTransform(transform);}
     public void command(JSONObject q){
         if(closed)return;
+        applyingCommand=true;
         try{
             // Room chat remains visible before a source or a player exists.
             JSONObject bounds=q.optJSONObject("bounds");
@@ -165,6 +167,8 @@ public final class MediaController implements AutoCloseable {
             boolean hasPlayback=q.has("url")||q.has("positionMs")||q.has("playing")||q.has("rate")||q.has("volume")||q.has("muted");if(!hasPlayback)return;
             if(!q.has("url")&&currentUrl.isEmpty())return;
             String url=q.optString("url",currentUrl);HttpUrl parsed=HttpUrl.parse(url);if(parsed==null||!allowed(parsed))throw new IOException("未授权的电影地址");
+            if(q.has("url")){playbackId=q.optString("playbackId");seekId="";}
+            if(q.has("positionMs"))seekId=q.optString("seekId");
             ensure();if(bounds!=null)resizeVideo(player.getVideoSize());
             visible=q.optBoolean("visible",visible);container.setVisibility(visible&&foreground?View.VISIBLE:View.GONE);
             if(!url.equals(currentUrl)){currentUrl=url;hasMedia=true;renderedFirstFrame=false;audioOutputAdvancing=false;recovering=false;playbackError="";playbackErrorCode=0;videoMime="";player.setMediaItem(MediaItem.fromUri(url));player.prepare();}
@@ -173,15 +177,17 @@ public final class MediaController implements AutoCloseable {
             if(q.has("volume")||q.has("muted"))player.setVolume(muted?0:volume);
             if(q.has("playing")){boolean play=foreground&&q.optBoolean("playing");if(play&&!ownsFocus){ownsFocus=audio.requestAudioFocus(focus)==android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;if(!ownsFocus){emitError("其他应用正在使用音频，请稍后继续观影");play=false;}}player.setPlayWhenReady(play);}
         }catch(Exception error){emitError("电影地址或播放参数无效，请重新选择片源");}
+        finally{applyingCommand=false;}
     }
-    private void state(){if(player==null)return;try{
+    private void state(){if(player==null||applyingCommand)return;try{
         boolean audioPresent=false,audioSupported=false,audioSelected=false;for(Tracks.Group group:player.getCurrentTracks().getGroups())if(group.getType()==C.TRACK_TYPE_AUDIO){audioPresent=true;for(int i=0;i<group.length;i++){audioSupported|=group.isTrackSupported(i);audioSelected|=group.isTrackSelected(i);}}
         Format format=player.getAudioFormat();DecoderCounters counters=player.getAudioDecoderCounters();if(counters!=null)counters.ensureUpdated();
         JSONObject event=new JSONObject().put("type","player").put("positionMs",player.getCurrentPosition()).put("durationMs",Math.max(0,player.getDuration())).put("playing",player.isPlaying()).put("buffering",recovering||player.getPlaybackState()==Player.STATE_BUFFERING).put("ended",player.getPlaybackState()==Player.STATE_ENDED).put("renderedFirstFrame",renderedFirstFrame).put("decoderFallback",softwareDecoder).put("recovering",recovering).put("error",playbackError).put("errorCode",playbackErrorCode)
             .put("rate",player.getPlaybackParameters().speed).put("volume",volume).put("muted",muted).put("subtitleCues",shownSubtitles.size()).put("audioPresent",audioPresent).put("audioSupported",audioSupported).put("audioSelected",audioSelected).put("audioMime",format==null?"":format.sampleMimeType).put("audioChannels",format==null?0:Math.max(0,format.channelCount)).put("audioSampleRate",format==null?0:Math.max(0,format.sampleRate)).put("audioOutputAdvancing",audioOutputAdvancing&&player.isPlaying()).put("audioRenderedBuffers",counters==null?0:counters.renderedOutputBufferCount);
+        event.put("playbackId",playbackId).put("seekId",seekId).put("seeking",player.getPlaybackState()==Player.STATE_BUFFERING||player.getPlaybackState()==Player.STATE_IDLE);
         if(audioProbe!=null)event.put("audioPcmFrames",audioProbe.frames).put("audioPcmPeak",audioProbe.peak);events.accept(event);
     }catch(JSONException ignored){}}
-    private void emitError(String text){playbackError=text;recovering=false;try{events.accept(new JSONObject().put("type","player").put("error",text).put("errorCode",playbackErrorCode).put("playing",false).put("renderedFirstFrame",renderedFirstFrame).put("decoderFallback",softwareDecoder).put("recovering",false));}catch(JSONException ignored){}}
+    private void emitError(String text){playbackError=text;recovering=false;try{events.accept(new JSONObject().put("type","player").put("playbackId",playbackId).put("seekId",seekId).put("error",text).put("errorCode",playbackErrorCode).put("playing",false).put("renderedFirstFrame",renderedFirstFrame).put("decoderFallback",softwareDecoder).put("recovering",false));}catch(JSONException ignored){}}
     public void foreground(boolean value){foreground=value;if(!value){if(player!=null)player.pause();ownsFocus=false;audio.abandonAudioFocusRequest(focus);}if(container!=null){container.setVisibility(value&&visible?View.VISIBLE:View.GONE);container.setKeepScreenOn(value&&player!=null&&player.getPlayWhenReady());}}
     public boolean active(){return hasMedia&&ownsFocus;}
     private void updateSubtitles(){

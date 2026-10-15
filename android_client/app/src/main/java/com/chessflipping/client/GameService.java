@@ -28,10 +28,12 @@ public final class GameService extends Service {
     public WebView web;public AppUpdater updater;private VoiceEngine voice;private MediaController media;private boolean inForeground;private volatile boolean pendingMicrophone;
     private ConnectivityManager connectivity;private ConnectivityManager.NetworkCallback networkCallback;
     private MutableContextWrapper webContext;private volatile boolean destroyed;
+    private WatchSaveStore watchSave;
     private MainActivity webActivity;private FrameLayout webParent;private View fullscreenView,fullscreenExit;private WebChromeClient.CustomViewCallback fullscreenCallback;
     private static final String ORIGIN="appassets.androidplatform.net";
     @Override public void onCreate(){
         super.onCreate();
+        watchSave=new WatchSaveStore(this);
         updater=new AppUpdater(this,q->{if(connection!=null)connection.request(q);},this::updateEvent);
         try{udp=new UdpPeer(this::event);}catch(Exception ignored){}
         media=new MediaController(this,this::event,()->{if(voice!=null)voice.microphone(false);event(message("audioFocusLost"));});
@@ -169,6 +171,8 @@ public final class GameService extends Service {
         startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(uri,"application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_ACTIVITY_NEW_TASK));
     }
     public final class Bridge {
+        @JavascriptInterface public String watchSaveRead(){try{return watchSave.read();}catch(IOException error){throw new IllegalStateException(error.getMessage());}}
+        @JavascriptInterface public boolean watchSaveWrite(String text){try{return watchSave.write(text);}catch(IOException error){throw new IllegalStateException(error.getMessage());}}
         @JavascriptInterface public String settings(){
             try{return new JSONObject().put("host",host()).put("port",port()).put("transport",transport()).put("nickname",preferences().getString("nickname",""))
                 .put("sound",preferences().getBoolean("sound",true)).put("motion",preferences().getBoolean("motion",true)).put("version",updater.installedName).put("nativeMedia",true).put("nativeVoice",true).toString();}

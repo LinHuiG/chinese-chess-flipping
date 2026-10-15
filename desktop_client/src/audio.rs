@@ -16,6 +16,11 @@ use std::{
     time::{Duration, Instant},
 };
 const CODEC: &str = "ima-adpcm-16k-v1";
+fn capture_discontinuity(anchor: Instant, clock: u32, at: Instant) -> bool {
+    let expected = anchor + Duration::from_micros(clock as u64 * 1_000_000 / 16_000);
+    at.saturating_duration_since(expected) > Duration::from_millis(120)
+        || expected.saturating_duration_since(at) > Duration::from_millis(120)
+}
 const STEP: [i32; 89] = [
     7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66,
     73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449,
@@ -106,12 +111,16 @@ struct Source {
     retired: VecDeque<u32>,
     anchor: Instant,
     clock: u32,
+    received: u64,
+    late: u64,
 }
 #[derive(Default)]
 struct Mixer {
     sources: HashMap<String, Source>,
     phase: u32,
     value: f32,
+    played_frames: u64,
+    output_peak: f32,
 }
 impl Mixer {
     fn sample(&mut self) -> f32 {
@@ -128,6 +137,7 @@ impl Mixer {
                     continue;
                 }
                 if let Some((seq, _, data)) = source.frames.pop_front() {
+                    self.played_frames += 1;
                     source.seq = seq;
                     source.current = data;
                     source.offset = 0
@@ -138,7 +148,9 @@ impl Mixer {
             total += source.current[source.offset] as f32 / 32768.;
             source.offset += 1;
         }
-        total.clamp(-0.98, 0.98)
+        let value = total.clamp(-0.98, 0.98);
+        self.output_peak = self.output_peak.max(value.abs());
+        value
     }
 }
 pub struct Voice {
@@ -148,6 +160,7 @@ pub struct Voice {
     running: AtomicBool,
     microphone: AtomicBool,
     stop: AtomicBool,
+    diagnostics: bool,
 }
 impl Voice {
     pub fn new(state: Weak<AppState>) -> Arc<Self> {
@@ -158,6 +171,7 @@ impl Voice {
             running: AtomicBool::new(false),
             microphone: AtomicBool::new(false),
             stop: AtomicBool::new(false),
+            diagnostics: std::env::var("CYBER_ROOM_MEDIA_DIAGNOSTICS").as_deref() == Ok("1"),
         })
     }
     pub fn configure(self: &Arc<Self>, c: Config) -> Result<(), String> {
@@ -247,6 +261,8 @@ impl Voice {
             retired: VecDeque::new(),
             anchor: now,
             clock,
+            received: 0,
+            late: 0,
         });
         if stream != s.stream {
             if s.retired.contains(&stream) {
@@ -273,7 +289,9 @@ impl Voice {
             return true;
         }
         let expected = s.anchor + Duration::from_micros(delta as u64 * 1_000_000 / 16_000);
+        s.received += 1;
         if now.saturating_duration_since(expected) > Duration::from_millis(200) {
+            s.late += 1;
             return true;
         }
         // Re-anchor once a minute using the earlier of the sampling timeline and
@@ -297,7 +315,14 @@ impl Voice {
     fn status(&self, capture: bool, playing: bool, aec: bool, error: &str) {
         if let Some(s) = self.state.upgrade() {
             let backlog = s.network.queued_ms();
-            s.event(json!({"type":"voiceStatus","available":playing,"capture":capture,"playing":playing,"microphone":self.microphone.load(Ordering::Relaxed),"aec":aec,"aecMode":if aec{"windows-render-reference"}else{"unavailable"},"codec":CODEC,"queuedMs":backlog,"suggestedDirectLimit":if backlog>100{0}else{5},"error":error}));
+            let mut status = json!({"type":"voiceStatus","available":playing,"capture":capture,"playing":playing,"microphone":self.microphone.load(Ordering::Relaxed),"aec":aec,"aecMode":if aec{"windows-render-reference"}else{"unavailable"},"codec":CODEC,"queuedMs":backlog,"suggestedDirectLimit":if backlog>100{0}else{5},"error":error});
+            if self.diagnostics {
+                let mixer = self.mixer.lock().unwrap();
+                status["playedFrames"] = json!(mixer.played_frames);
+                status["outputPeak"] = json!(mixer.output_peak);
+                status["peers"] = json!(mixer.sources.iter().map(|(id, source)| json!({"peerId":id,"stream":source.stream,"received":source.received,"late":source.late,"queued":source.frames.len()})).collect::<Vec<_>>());
+            }
+            s.event(status);
         }
     }
     fn transmit(&self, body: Vec<u8>) {
@@ -351,11 +376,12 @@ impl Voice {
             return;
         }
         let mut capture = None;
-        let mut fallback: Option<(cpal::Stream, mpsc::Receiver<Vec<i16>>)> = None;
+        let mut fallback: Option<(cpal::Stream, mpsc::Receiver<(Instant, Vec<i16>)>)> = None;
         let mut samples = VecDeque::new();
         let mut seq = 0u32;
         let mut clock = 0u32;
         let mut stream = 0u32;
+        let mut sample_anchor = None;
         let mut last = Instant::now();
         let mut report = Instant::now();
         let mut error = String::new();
@@ -366,6 +392,7 @@ impl Voice {
                 stream = OsRng.next_u32();
                 seq = 0;
                 clock = 0;
+                sample_anchor = None;
                 samples.clear();
                 capture = Aec::open();
                 error.clear();
@@ -417,8 +444,10 @@ impl Voice {
                 }
             }
             if let Some((_, rx)) = &fallback {
-                while let Ok(frame) = rx.try_recv() {
-                    samples.extend(frame)
+                while let Ok((at, frame)) = rx.try_recv() {
+                    if at.elapsed() <= Duration::from_millis(200) {
+                        samples.extend(frame)
+                    }
                 }
             }
             while samples.len() > 1600 {
@@ -427,6 +456,16 @@ impl Voice {
                 seq = seq.wrapping_add(1);
             }
             while samples.len() >= 320 {
+                let at = Instant::now()
+                    - Duration::from_micros((samples.len() - 320) as u64 * 1_000_000 / 16_000);
+                if sample_anchor.is_none_or(|anchor| capture_discontinuity(anchor, clock, at)) {
+                    // A device stall or dropped capture callbacks must not leave
+                    // this stream permanently behind receivers' 200ms deadline.
+                    stream = OsRng.next_u32();
+                    seq = 0;
+                    clock = 0;
+                    sample_anchor = Some(at);
+                }
                 let frame = samples.drain(..320).collect::<Vec<_>>();
                 self.transmit(encode(&frame, stream, seq, clock));
                 seq = seq.wrapping_add(1);
@@ -505,7 +544,7 @@ fn output<T: cpal::SizedSample + cpal::FromSample<f32>>(
 }
 fn input_stream(
     failed: Arc<AtomicBool>,
-) -> Result<(cpal::Stream, mpsc::Receiver<Vec<i16>>), String> {
+) -> Result<(cpal::Stream, mpsc::Receiver<(Instant, Vec<i16>)>), String> {
     let device = cpal::default_host()
         .default_input_device()
         .ok_or("未找到麦克风，请检查Windows麦克风权限")?;
@@ -526,7 +565,7 @@ fn input_stream(
 fn input<T: cpal::SizedSample>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    tx: mpsc::SyncSender<Vec<i16>>,
+    tx: mpsc::SyncSender<(Instant, Vec<i16>)>,
     failed: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String>
 where
@@ -548,8 +587,10 @@ where
                         phase -= rate;
                         frame.push((mono.clamp(-1., 1.) * 32767.) as i16);
                         if frame.len() == 320 {
-                            let _ =
-                                tx.try_send(std::mem::replace(&mut frame, Vec::with_capacity(320)));
+                            let _ = tx.try_send((
+                                Instant::now(),
+                                std::mem::replace(&mut frame, Vec::with_capacity(320)),
+                            ));
                         }
                     }
                 }
@@ -605,6 +646,53 @@ mod tests {
             ),
             encode(&[900; 320], stream, seq, clock),
         )
+    }
+    #[test]
+    fn capture_stalls_start_a_new_timeline_without_reanchoring_late_network_packets() {
+        let start = Instant::now();
+        assert!(!capture_discontinuity(
+            start,
+            320,
+            start + Duration::from_millis(20)
+        ));
+        assert!(!capture_discontinuity(
+            start,
+            1600,
+            start + Duration::from_millis(140)
+        ));
+        assert!(capture_discontinuity(
+            start,
+            1600,
+            start + Duration::from_millis(500)
+        ));
+        let resumed = start + Duration::from_millis(500);
+        assert!(!capture_discontinuity(
+            resumed,
+            320,
+            resumed + Duration::from_millis(20)
+        ));
+        let voice = voice();
+        voice.receive(&packet(1, 0, 0), None);
+        voice
+            .mixer
+            .lock()
+            .unwrap()
+            .sources
+            .get_mut(&"3".repeat(32))
+            .unwrap()
+            .anchor = start - Duration::from_secs(1);
+        voice.receive(&packet(1, 1, 320), None);
+        assert_eq!(
+            voice.mixer.lock().unwrap().sources[&"3".repeat(32)]
+                .frames
+                .len(),
+            1
+        );
+        voice.receive(&packet(2, 0, 0), None);
+        voice.receive(&packet(2, 1, 320), None);
+        let mixer = voice.mixer.lock().unwrap();
+        assert_eq!(mixer.sources[&"3".repeat(32)].stream, 2);
+        assert_eq!(mixer.sources[&"3".repeat(32)].frames.len(), 2);
     }
     #[test]
     fn disabled_audio_discards_decoded_samples_before_foreground() {

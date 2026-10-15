@@ -9,8 +9,8 @@ android {
         applicationId = "com.chessflipping.client"
         minSdk = 26
         targetSdk = 37
-        versionCode = 16
-        versionName = "0.8.3"
+        versionCode = 17
+        versionName = "0.8.4"
         testInstrumentationRunner = "com.chessflipping.client.PresentationChecks"
     }
     compileOptions {
