@@ -1,5 +1,6 @@
+import './plugin-test-host.mjs';
 import assert from 'node:assert/strict';
-import {WatchRoom,mediaRequest,browserSourceError,playbackRequest,directCompatible} from '../server/src/main/resources/web/watch.js';
+import {WatchRoom,mediaRequest,browserSourceError,playbackRequest,directCompatible} from '../plugins/watch/watch.js';
 const savedFetch=globalThis.fetch,savedLocation=globalThis.location;
 const calls=[],sent=[],room={self:'test-device',host:true,background:false,room:{game:'watch'},client:{requireCompatible(){}},context:()=> 'room',current:c=>c==='room',assertCurrent:c=>assert.equal(c,'room'),publish(){}};
 const watch=Object.assign(Object.create(WatchRoom.prototype),{room,stopMedia:async()=>{},render(){},send:async(type,body)=>sent.push({type,body})});

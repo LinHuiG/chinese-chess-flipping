@@ -12,6 +12,7 @@ COPY --from=build --chown=10001:10001 /workspace/target/release/chess-server /ap
 COPY --chown=10001:10001 src/main/resources/web /app/src/main/resources/web
 COPY --chown=10001:10001 app-update /app/app-update
 COPY --chown=10001:10001 desktop-update /app/desktop-update
+COPY --chown=10001:10001 plugin-market /app/plugin-market
 USER 10001:10001
 ENV CHESS_RESOURCE_DIR=/app TCP_PORT=8888 HTTP_PORT=80 UDP_PORT=8888 TCP_WORKER_THREADS=4
 EXPOSE 8888/tcp 80/tcp 8888/udp

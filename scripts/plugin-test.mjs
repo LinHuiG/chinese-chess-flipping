@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {generateKeyPairSync,sign} from 'node:crypto';
+import {validateManifest,validateRelease,binding,incompatibility} from '../server/src/main/resources/web/plugin-package.js';
+import {PluginRuntime} from '../server/src/main/resources/web/plugin-runtime.js';
+import {PluginStore} from '../server/src/main/resources/web/plugin-store.js';
+const manifest=JSON.parse(await readFile(new URL('../plugins/chess/manifest.json',import.meta.url),'utf8'));
+const record={id:manifest.id,version:manifest.version,release:'a'.repeat(64),manifest,artifacts:Object.fromEntries(Object.keys(manifest.targets).map(p=>[p,{path:`${manifest.id}/${manifest.version}/${p}-${'b'.repeat(64)}.json`,sha256:'b'.repeat(64),size:10}]))};
+assert.equal(validateRelease(record),record);
+for(const mutate of [m=>m.targets.web.entry='../private.js',m=>m.targets.ios={},m=>m.permissions.push('system.exec'),m=>m.id='../host',m=>m.room.maxMembers=100]){const next=structuredClone(manifest);mutate(next);assert.throws(()=>validateManifest(next));}
+const androidOnly=structuredClone(manifest);delete androidOnly.targets.web;delete androidOnly.targets.windows;assert.match(incompatibility(androidOnly,'web'),/不支持/);assert.equal(incompatibility(androidOnly,'android'),'');
+const damaged=structuredClone(record);damaged.artifacts.web.path='../private.json';assert.throws(()=>validateRelease(damaged));
+const pair=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),store=new PluginStore();store.trust=Promise.resolve({keys:[pair.publicKey.export({format:'jwk'})]});
+const payload=JSON.stringify({schemaVersion:1,releases:[record]}),envelope={payload,signature:sign('sha256',Buffer.from(payload),{key:pair.privateKey,dsaEncoding:'ieee-p1363'}).toString('base64')};
+assert.equal((await store.verify(envelope)).releases[0].id,manifest.id);
+await assert.rejects(store.verify({...envelope,payload:payload.replace('翻棋','伪造')}),/签名无效/);
+await assert.rejects(store.install(record),/签名校验/);store.catalog={releases:[record]};assert.doesNotThrow(()=>store.trusted(record));assert.throws(()=>store.trusted({...record,revoked:true}));
+console.log('PASS plugin packages: declared platforms, unsafe entries, unknown permission, native release identity, signed catalog tamper and untrusted installation');
+
+const self='1'.repeat(32),room='2'.repeat(32),peer='3'.repeat(32),sent=[];
+let grantResolve;
+const client={identity:{clientId:self},createRoom:async q=>{sent.push(q);return {roomId:room};},sendTo:async(...q)=>sent.push(q),replyJoin:()=>new Promise(r=>grantResolve=r)};
+const runtime=new PluginRuntime(client,null),a=runtime.active={record,binding:binding(record),roomId:null,authorized:new Set(),peers:new Map(),pending:new Map(),values:{},closed:false};
+await runtime.invoke(a,'room.create',[{name:'fixture',metadata:'forged',roomType:'forged'}]);assert.equal(JSON.parse(sent[0].metadata).release,record.release);assert.equal(sent[0].roomType,manifest.roomFeature.slice(0,16));
+await assert.rejects(runtime.invoke(a,'room.create',[{}]),/重建/);
+await assert.rejects(runtime.invoke(a,'room.send',[room,peer,{},{}]),/未获准/);
+a.pending.set('request',{control:{from:peer}});const granting=runtime.invoke(a,'room.reply',['request',{allowed:true,room:{plugin:binding(record)}}]);
+await assert.rejects(runtime.invoke(a,'room.send',[room,peer,{},{}]),/未获准/);grantResolve(true);await granting;
+await runtime.invoke(a,'room.send',[room,peer,{type:'test'},{}]);
+await assert.rejects(runtime.invoke(a,'room.send',['4'.repeat(32),peer,{},{}]),/无权/);
+await assert.rejects(runtime.invoke(a,'room.request',[100,{}]),/不支持/);
+await assert.rejects(runtime.invoke(a,'storage.set',['__proto__',{}]),/存储键/);
+await assert.rejects(runtime.invoke(a,'microphone.start',[]),/麦克风权限/);
+runtime.active=null;await assert.rejects(runtime.invoke(a,'room.send',[room,peer,{},{}]),/已结束/);
+console.log('PASS plugin boundary: immutable room binding, grant-before-send, cross-room denial, reserved operations, private storage keys, microphone permission and stale instances');

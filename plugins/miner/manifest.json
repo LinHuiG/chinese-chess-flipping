@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "official.miner",
+  "key": "miner",
+  "name": "黄金矿工",
+  "description": "各自操作爪子，共闯千关矿谷，房主保存进度。",
+  "version": "1.0.0",
+  "hostApi": 1,
+  "resumeKey": "cyber.miner.save",
+  "protocol": "miner/1",
+  "roomFeature": "847f9bdc31ee4ca895d42d673b6a02ae",
+  "room": {
+    "minMembers": 2,
+    "maxMembers": 3
+  },
+  "targets": {
+    "web": {
+      "entry": "app.js"
+    },
+    "android": {
+      "entry": "app.js"
+    },
+    "windows": {
+      "entry": "app.js"
+    }
+  },
+  "permissions": [
+    "room.messaging",
+    "storage.private"
+  ],
+  "license": "AGPL-3.0-only"
+}

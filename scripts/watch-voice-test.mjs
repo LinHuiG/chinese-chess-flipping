@@ -1,6 +1,7 @@
+import './plugin-test-host.mjs';
 // Focused regressions for first-entry audio activation and native status feedback.
 import assert from 'node:assert/strict';
-import {RoomVoice,encodeVoice} from '../server/src/main/resources/web/voice.js';
+import {RoomVoice,encodeVoice} from '../plugins/watch/voice.js';
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 let lifecycle=0,gesture=false;
 const room={room:{game:'watch'},client:{ready:true},context:()=>lifecycle,current:c=>c===lifecycle};

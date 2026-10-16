@@ -364,7 +364,10 @@ pub async fn asset(uri: Uri, method: Method) -> Response {
     if name.split('/').any(|p| p.is_empty() || p.starts_with('.')) || name.contains(['\\', '%']) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let root = crate::resource_root().join("src/main/resources/web");
+    let (root, name) = match name.strip_prefix("plugins/") {
+        Some(relative) => (crate::resource_root().join("plugin-market"), relative),
+        None => (crate::resource_root().join("src/main/resources/web"), name),
+    };
     let root = match tokio::fs::canonicalize(root).await {
         Ok(p) => p,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
@@ -384,16 +387,21 @@ pub async fn asset(uri: Uri, method: Method) -> Response {
         "wav" => "audio/wav",
         "ogg" => "audio/ogg",
         "json" => "application/json",
+        "apk" | "exe" => "application/octet-stream",
         "txt" => "text/plain; charset=utf-8",
         "woff2" => "font/woff2",
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    let bytes = match tokio::fs::read(path).await {
-        Ok(b) => b,
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
-    Response::builder().header("content-type",mime).header("content-length",bytes.len()).header("cache-control","no-cache")
+    let size = match file.metadata().await {
+        Ok(meta) if meta.is_file() => meta.len(),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    Response::builder().header("content-type",mime).header("content-length",size).header("cache-control","no-cache")
         .header("x-content-type-options","nosniff").header("referrer-policy","same-origin")
-        .header("content-security-policy","default-src 'self'; connect-src 'self' ws: wss: https: http:; media-src 'self' blob: https: http:; img-src 'self' data: https: http:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-        .body(if method==Method::HEAD{Body::empty()}else{Body::from(bytes)}).unwrap()
+        .header("content-security-policy","default-src 'self'; script-src 'self' 'unsafe-inline' data: blob:; style-src 'self' 'unsafe-inline'; frame-src 'self' blob:; connect-src 'self' ws: wss: https: http:; media-src 'self' blob: data: https: http:; img-src 'self' data: blob: https: http:; worker-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+        .body(if method==Method::HEAD{Body::empty()}else{Body::from_stream(ReaderStream::with_capacity(file.take(size),64*1024))}).unwrap()
 }

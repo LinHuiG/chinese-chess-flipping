@@ -7,6 +7,9 @@ on:
       - 'android_client/**'
       - 'desktop_client/**'
       - 'scripts/**'
+      - 'plugins/**'
+      - 'plugin_sdk/**'
+      - 'package*.json'
       - '.github/workflows/publish.yml'
   pull_request:
   workflow_dispatch:
@@ -45,7 +48,7 @@ jobs:
             else
               git cat-file -e "$base^{commit}" || git fetch --no-tags origin "$base"
             fi
-            changed_files=$(git diff --name-only "$base" "$GITHUB_SHA" -- server/ android_client/ desktop_client/ scripts/ .github/workflows/publish.yml)
+            changed_files=$(git diff --name-only "$base" "$GITHUB_SHA" -- server/ android_client/ desktop_client/ scripts/ plugins/ plugin_sdk/ package.json package-lock.json .github/workflows/publish.yml)
             if [[ -n "$changed_files" ]]; then publish_image=true; fi
           fi
           # PR 保留检查，手动运行保留强制发布；无应用改动的 push 跳过全部后续步骤。
@@ -59,7 +62,7 @@ jobs:
         if: steps.scope.outputs.should_check == 'true'
         id: inputs
         env:
-          ANDROID_INPUTS: ${{ hashFiles('android_client/**', 'server/src/main/resources/web/**', 'scripts/package-app-update.py', 'scripts/fixtures/**') }}
+          ANDROID_INPUTS: ${{ hashFiles('android_client/**', 'plugin_sdk/native/android/**', 'plugins/watch/native/android/**', 'server/src/main/resources/web/**', 'scripts/package-app-update.py', 'scripts/fixtures/**') }}
           RUST_INPUTS: ${{ hashFiles('server/Cargo.*', 'server/src/**/*.rs', 'server/.cargo/**', 'server/build.rs', 'server/rust-toolchain*', '.cargo/**', 'rust-toolchain*') }}
           WORKFLOW_INPUTS: ${{ hashFiles('.github/workflows/publish.yml') }}
           APK_VARIANT: ${{ steps.scope.outputs.publish_image == 'true' && 'release' || 'debug' }}
@@ -83,6 +86,7 @@ jobs:
           path: |
             server/app-update/latest.apk
             server/app-update/latest.json
+            plugins/watch/native/android/build/outputs/apk/
       - uses: actions/cache/restore@v5
         if: steps.scope.outputs.should_check == 'true'
         id: rust_cache
@@ -110,7 +114,7 @@ jobs:
           apk=true
           rust=true
           interop=true
-          if [[ "$APK_HIT" == true ]] && python3 scripts/package-app-update.py --check; then apk=false; fi
+          if [[ "$APK_HIT" == true ]] && [[ -f plugins/watch/native/android/build/outputs/apk/release/watch_extension-release.apk || -f plugins/watch/native/android/build/outputs/apk/debug/watch_extension-debug.apk ]] && python3 scripts/package-app-update.py --check; then apk=false; fi
           if [[ "$RUST_HIT" == true ]] && [[ -x server/target/release/chess-server ]] && sha256sum --check .ci-cache/rust.sha256; then rust=false; fi
           if [[ "$apk" == false && "$rust" == false && "$INTEROP_HIT" == true ]] && [[ -f .ci-cache/interop.ok ]] && [[ "$(cat .ci-cache/interop.ok)" == "$INTEROP_KEY" ]]; then interop=false; fi
           echo "apk=$apk" >> "$GITHUB_OUTPUT"
@@ -158,6 +162,7 @@ jobs:
           unset APK_KEYSTORE_B64
           android_client/gradlew -p android_client --no-daemon --build-cache assembleRelease
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify android_client/app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify plugins/watch/native/android/build/outputs/apk/release/watch_extension-release.apk
           python3 scripts/package-app-update.py --release
       - name: Build debug APK for checks
         if: steps.required.outputs.apk == 'true' && steps.scope.outputs.publish_image != 'true'
@@ -194,8 +199,8 @@ jobs:
             sleep 1
           done
           # 验证工作目录中的网页资源，保留 HEAD 与未知路径行为。
-          curl --fail --silent http://127.0.0.1:18880/game.js | cmp - server/src/main/resources/web/game.js
-          curl --fail --silent --head http://127.0.0.1:18880/rules.txt
+          curl --fail --silent http://127.0.0.1:18880/plugin-runtime.js | cmp - server/src/main/resources/web/plugin-runtime.js
+          curl --fail --silent --head http://127.0.0.1:18880/plugin-trust.json
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18880/missing)" = 404
           if [[ "$RUN_INTEROP" == true ]]; then
             android_client/gradlew -p android_client --no-daemon --build-cache -PchessTestSuite=interop testDebugUnitTest
@@ -207,6 +212,7 @@ jobs:
       - name: Check browser game recovery and protocol
         if: steps.scope.outputs.should_check == 'true'
         run: |
+          node scripts/plugin-test.mjs
           node scripts/client-test.mjs
           node scripts/watch-voice-test.mjs
           node scripts/subtitles-test.mjs
@@ -233,6 +239,7 @@ jobs:
           path: |
             server/app-update/latest.apk
             server/app-update/latest.json
+            plugins/watch/native/android/build/outputs/apk/
       - uses: actions/cache/save@v5
         if: steps.required.outputs.rust == 'true' && steps.rust_cache.outputs.cache-hit != 'true'
         with:
@@ -253,6 +260,12 @@ jobs:
             server/app-update/latest.apk
             server/app-update/latest.json
           if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        if: steps.scope.outputs.publish_image == 'true'
+        with:
+          name: native-android
+          path: plugins/watch/native/android/build/outputs/apk/release/
+          if-no-files-found: error
   build_windows_and_check:
     name: Build Windows client
     needs: build_apk_and_check
@@ -260,6 +273,7 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v6
       - name: Set up Rust
@@ -270,7 +284,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             desktop_client/target
-          key: windows-client-${{ runner.os }}-${{ hashFiles('desktop_client/Cargo.lock', 'desktop_client/**', 'server/src/main/resources/web/**', 'scripts/fixtures/**', 'scripts/prepare-desktop-media.py', '.github/workflows/publish.yml') }}
+            plugins/watch/native/windows/target
+          key: windows-client-${{ runner.os }}-${{ hashFiles('desktop_client/Cargo.lock', 'desktop_client/**', 'plugins/watch/native/windows/**', 'server/src/main/resources/web/**', 'scripts/fixtures/**', 'scripts/prepare-desktop-media.py', '.github/workflows/publish.yml') }}
           restore-keys: windows-client-${{ runner.os }}-
       - name: Prepare pinned native media decoder
         run: |
@@ -281,6 +296,10 @@ jobs:
           cargo +stable test --locked --manifest-path desktop_client/Cargo.toml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +stable build --locked --release --manifest-path desktop_client/Cargo.toml --features custom-protocol
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +stable test --locked --manifest-path plugins/watch/native/windows/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +stable build --locked --release --manifest-path plugins/watch/native/windows/Cargo.toml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/package-desktop-update.py --source desktop_client/target/release/cyber-room.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -309,6 +328,58 @@ jobs:
             server/desktop-update/latest.exe
             server/desktop-update/latest.json
           if-no-files-found: error
+      - uses: actions/download-artifact@v7
+        if: needs.build_apk_and_check.outputs.publish_image == 'true'
+        with:
+          name: native-android
+          path: plugins/watch/native/android/build/outputs/apk/release/
+      - uses: actions/setup-node@v6
+        if: needs.build_apk_and_check.outputs.publish_image == 'true'
+        with:
+          node-version: '24'
+      - name: Build and sign plugin marketplace
+        if: needs.build_apk_and_check.outputs.publish_image == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PLUGIN_SIGNING_KEY_PEM: ${{ secrets.PLUGIN_SIGNING_KEY_PEM }}
+          PLUGIN_APK_VARIANT: release
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PLUGIN_SIGNING_KEY_PEM)) { throw 'Missing PLUGIN_SIGNING_KEY_PEM' }
+          $keyPath = Join-Path $env:RUNNER_TEMP 'plugin-signing.pem'
+          try {
+            [IO.File]::WriteAllText($keyPath, $env:PLUGIN_SIGNING_KEY_PEM)
+            $env:PLUGIN_SIGNING_KEY_FILE = $keyPath
+            Remove-Item Env:PLUGIN_SIGNING_KEY_PEM
+            npm ci
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # Carry forward immutable versions so a room can still request its pinned release.
+            $marketRelease = gh api "repos/$env:GH_REPO/releases?per_page=100" --jq '[.[] | select(.tag_name == "plugin-market")] | length'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ([int]$marketRelease -gt 0) {
+              gh release download plugin-market --pattern market.zip --dir "$env:RUNNER_TEMP/plugin-market"
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              Expand-Archive -LiteralPath "$env:RUNNER_TEMP/plugin-market/market.zip" -DestinationPath server/plugin-market
+            }
+            node scripts/package-plugins.mjs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            node scripts/check-plugin-market.mjs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # A durable backup survives Actions artifact expiry; it is not the live marketplace.
+            Compress-Archive -Path server/plugin-market/* -DestinationPath "$env:RUNNER_TEMP/market.zip"
+            if ([int]$marketRelease -eq 0) {
+              gh release create plugin-market --title 'Plugin marketplace archive' --notes 'Signed immutable plugin versions retained for future releases.' --prerelease --target "$env:GITHUB_SHA"
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+            gh release upload plugin-market "$env:RUNNER_TEMP/market.zip" --clobber
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally { Remove-Item -LiteralPath $keyPath -ErrorAction SilentlyContinue }
+      - uses: actions/upload-artifact@v6
+        if: needs.build_apk_and_check.outputs.publish_image == 'true'
+        with:
+          name: plugin-market
+          path: server/plugin-market/
+          if-no-files-found: error
   publish:
     name: Publish ${{ matrix.arch }}
     if: needs.build_apk_and_check.outputs.publish_image == 'true'
@@ -335,6 +406,10 @@ jobs:
         with:
           name: desktop-update
           path: server/desktop-update
+      - uses: actions/download-artifact@v7
+        with:
+          name: plugin-market
+          path: server/plugin-market
       - name: Lowercase image name
         shell: bash
         env:
@@ -376,11 +451,12 @@ jobs:
           done
           docker logs release-check
           python3 -c 'import json,sys; actual=json.load(open(sys.argv[1])); expected=json.load(open("server/app-update/latest.json")); assert all(actual[k]==v for k,v in expected.items())' "$RUNNER_TEMP/version.json"
-          curl --fail --silent http://127.0.0.1:18880/game.js | cmp - server/src/main/resources/web/game.js
+          curl --fail --silent http://127.0.0.1:18880/plugin-runtime.js | cmp - server/src/main/resources/web/plugin-runtime.js
           curl --fail --silent 'http://127.0.0.1:18880/api/app/latest.apk?versionCode=0' | cmp - server/app-update/latest.apk
           curl --fail --silent http://127.0.0.1:18880/api/desktop/version > "$RUNNER_TEMP/desktop-version.json"
           python3 -c 'import json,sys; actual=json.load(open(sys.argv[1])); expected=json.load(open("server/desktop-update/latest.json",encoding="utf-8")); assert all(actual[k]==v for k,v in expected.items())' "$RUNNER_TEMP/desktop-version.json"
           curl --fail --silent http://127.0.0.1:18880/api/desktop/latest.exe | cmp - server/desktop-update/latest.exe
+          curl --fail --silent http://127.0.0.1:18880/plugins/catalog.json | cmp - server/plugin-market/catalog.json
       - name: Publish verified architecture tags
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

@@ -1,7 +1,8 @@
+import './plugin-test-host.mjs';
 import assert from 'node:assert/strict';
 const commands=[];
 globalThis.NativeRoom={platform:'WINDOWS',playerCapabilities:{engine:'mpv'},playerCommand:text=>commands.push(JSON.parse(text))};
-const {WatchRoom}=await import('../server/src/main/resources/web/watch.js');
+const {WatchRoom}=await import('../plugins/watch/watch.js');
 const state={epoch:'film',duration:600,position:20,playing:true,rate:1,version:1,at:performance.now()};
 const room={host:true,self:'host',background:false,room:{game:'watch',playback:state},client:{ready:true},context:()=>1,current:c=>c===1,checkpoint(){}};
 const watch=Object.assign(Object.create(WatchRoom.prototype),{room,position:20,duration:600,offset:0,url:'fixture',epoch:'film',playbackId:'file-1',video:{seeking:false},voice:{event(){},configure(){}},render(){},send:async()=>{},session:null});

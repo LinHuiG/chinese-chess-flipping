@@ -68,6 +68,7 @@ struct User {
 struct Room {
     name: String,
     room_type: String,
+    metadata: String,
     host: String,
     routes: HashSet<String>,
     authorized: BTreeMap<String, String>,
@@ -158,7 +159,7 @@ impl Hub {
         Ok((
             user.clone(),
             u.generation,
-            json!({"clientId":user,"token":u.token,"serverVersion":env!("CARGO_PKG_VERSION"),"capabilities":["room-sync","room-broadcast","host-grant"]}),
+            json!({"clientId":user,"token":u.token,"serverVersion":env!("CARGO_PKG_VERSION"),"capabilities":["room-sync","room-broadcast","host-grant","room-descriptors"]}),
         ))
     }
     pub fn active(&self, user: &str, generation: u64) -> bool {
@@ -333,6 +334,11 @@ impl Hub {
                 ensure(name.chars().count() <= 32, "INVALID_ARGUMENT")?;
                 let room_type = json::field(q, "roomType", 128)?;
                 ensure(room_type.is_ascii(), "INVALID_ARGUMENT")?;
+                let metadata = match q.get("metadata") {
+                    None => "",
+                    Some(value) => value.as_str().ok_or("INVALID_ARGUMENT")?,
+                };
+                ensure(metadata.len() <= 2048, "INVALID_ARGUMENT")?;
                 let rid = id();
                 let routes = HashSet::from([user.to_owned()]);
                 self.rooms.insert(
@@ -340,6 +346,7 @@ impl Hub {
                     Room {
                         name: name.to_owned(),
                         room_type: room_type.to_owned(),
+                        metadata: metadata.to_owned(),
                         host: user.to_owned(),
                         routes,
                         authorized: BTreeMap::from([(user.to_owned(), id())]),
@@ -351,23 +358,31 @@ impl Hub {
                 Ok(json!({"roomId":rid}))
             }
             "101" => {
-                let room_type = json::field(q, "roomType", 128)?;
+                let room_type = match q.get("roomType") {
+                    None => None,
+                    Some(_) => Some(json::field(q, "roomType", 128)?),
+                };
                 let after = q["after"].as_str().unwrap_or("");
                 ensure(after.is_empty() || json::hex_id(after), "INVALID_ARGUMENT")?;
-                let mut iter = self
-                    .rooms
-                    .iter()
-                    .filter(|(id, r)| id.as_str() > after && r.room_type == room_type);
-                let rooms: Vec<_> = iter
-                    .by_ref()
-                    .take(64)
-                    .map(|(id, r)| json!({"roomId":id,"name":r.name,"hostId":r.host,"locked":r.locked}))
-                    .collect();
-                let next = if iter.next().is_some() {
-                    rooms.last().unwrap()["roomId"].clone()
-                } else {
-                    Value::Null
-                };
+                let mut iter = self.rooms.iter().filter(|(id, r)| {
+                    id.as_str() > after && room_type.is_none_or(|t| r.room_type == t)
+                });
+                let mut rooms = Vec::new();
+                let mut bytes = 64;
+                let mut next = Value::Null;
+                for (id, r) in iter.by_ref() {
+                    let entry = json!({"roomId":id,"name":r.name,"roomType":r.room_type,"metadata":r.metadata,"hostId":r.host,"locked":r.locked});
+                    let size = serde_json::to_vec(&entry).unwrap().len() + 1;
+                    if rooms.len() >= 64 || bytes + size > 60000 {
+                        next = rooms
+                            .last()
+                            .map(|r: &Value| r["roomId"].clone())
+                            .unwrap_or(Value::Null);
+                        break;
+                    }
+                    bytes += size;
+                    rooms.push(entry);
+                }
                 Ok(json!({"rooms":rooms,"next":next}))
             }
             "103" => {
@@ -780,7 +795,12 @@ mod tests {
         assert_eq!(identity["serverVersion"], env!("CARGO_PKG_VERSION"));
         assert_eq!(
             identity["capabilities"],
-            json!(["room-sync", "room-broadcast", "host-grant"])
+            json!([
+                "room-sync",
+                "room-broadcast",
+                "host-grant",
+                "room-descriptors"
+            ])
         );
     }
     #[test]
@@ -1035,5 +1055,35 @@ mod tests {
         assert!(rx.try_recv().is_err());
         h.leave(&guest, &rid);
         assert!(!h.rooms[&rid].routes.contains(&guest));
+    }
+    #[test]
+    fn room_descriptors_are_opaque_bounded_and_discoverable() {
+        let shared = Hub::new(8888);
+        let mut h = shared.lock().unwrap();
+        let (host, _, _, _, _) = peer(&mut h);
+        let metadata = "arbitrary opaque plugin descriptor";
+        h.command(
+            &host,
+            "100",
+            &json!({"name":"plugin","roomType":"module","metadata":metadata}),
+        )
+        .unwrap();
+        let rooms = h.command(&host, "101", &json!({})).unwrap();
+        assert_eq!(rooms["rooms"][0]["metadata"], metadata);
+        assert_eq!(
+            h.command(&host, "101", &json!({"roomType":"other"}))
+                .unwrap()["rooms"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(h
+            .command(
+                &host,
+                "100",
+                &json!({"name":"bad","roomType":"module","metadata":"x".repeat(2049)})
+            )
+            .is_err());
     }
 }

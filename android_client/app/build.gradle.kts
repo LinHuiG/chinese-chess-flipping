@@ -9,8 +9,8 @@ android {
         applicationId = "com.chessflipping.client"
         minSdk = 26
         targetSdk = 37
-        versionCode = 17
-        versionName = "0.8.4"
+        versionCode = 18
+        versionName = "0.9.0"
         testInstrumentationRunner = "com.chessflipping.client.PresentationChecks"
     }
     compileOptions {
@@ -33,12 +33,10 @@ android {
 android.sourceSets.getByName("main").assets.srcDir(rootProject.file("../server/src/main/resources"))
 
 dependencies {
+    implementation(project(":plugin_api"))
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.core:core:1.15.0")
-    implementation("androidx.media3:media3-exoplayer:1.8.0")
-    implementation("androidx.media3:media3-exoplayer-hls:1.8.0")
-    implementation("androidx.media3:media3-ui:1.8.0")
-    implementation("androidx.media3:media3-datasource-okhttp:1.8.0")
+    implementation("androidx.webkit:webkit:1.14.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }

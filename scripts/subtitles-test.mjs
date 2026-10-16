@@ -1,5 +1,6 @@
+import './plugin-test-host.mjs';
 import assert from 'node:assert/strict';
-import {parseVtt} from '../server/src/main/resources/web/subtitles.js';
+import {parseVtt} from '../plugins/watch/subtitles.js';
 
 const cues=parseVtt('\ufeffWEBVTT\r\n\r\nNOTE ignored\r\n00:00.000 --> 00:10.000\r\nnot a cue\r\n\r\nSTYLE\r\n::cue { color: red; }\r\n\r\nsecond\r\n01:00:02.125 --> 01:00:04.250 line:90%\r\n<v Guest><b>你好</b> &amp; <ruby>字<rt>zi</rt></ruby>\r\n下一行 &#x1f680;\r\n\r\n00:01.000 --> 00:02.000\r\n&lt;img src=x onerror=alert(1)&gt;\r\n\r\n00:01.500 --> 00:03.000\r\n重叠字幕\r\n');
 assert.deepEqual(cues,[{start:1,end:2,text:'<img src=x onerror=alert(1)>'},{start:1.5,end:3,text:'重叠字幕'},{start:3602.125,end:3604.25,text:'你好 & 字\n下一行 🚀'}]);

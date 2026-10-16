@@ -1,7 +1,8 @@
+import './plugin-test-host.mjs';
 import assert from 'node:assert/strict';
 globalThis.localStorage={values:new Map(),getItem(k){return this.values.get(k)||null;},setItem(k,v){this.values.set(k,v);}};
-const {cleanWatchSave,readWatchSave,writeWatchSave}=await import('../server/src/main/resources/web/watch-save.js');
-const {WatchRoom}=await import('../server/src/main/resources/web/watch.js');
+const {cleanWatchSave,readWatchSave,writeWatchSave}=await import('../plugins/watch/watch-save.js');
+const {WatchRoom}=await import('../plugins/watch/watch.js');
 const source={base:'http://localhost:18991',token:'test-only-token',userId:'test-user',username:'viewer',password:'MUST_NOT_SAVE',serverId:'fixture'};
 const record={version:1,source,settings:{quality:'720',volume:.35,muted:true},playback:{itemId:'episode-2',title:'剧集 S01E02',position:63,duration:120,rate:1.5,audioIndex:2,audioExplicit:true,subtitleIndex:3,playing:true,epoch:'old',url:'MUST_NOT_SAVE',session:'MUST_NOT_SAVE'}};
 await writeWatchSave(record);const clean=await readWatchSave();

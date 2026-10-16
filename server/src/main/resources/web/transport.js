@@ -117,11 +117,11 @@ export class RoomClient{
       Promise.resolve(this.sendPacket(16,{op,requestId,...headers},body)).then(sent=>{if(!sent)throw Error('发送失败');}).catch(e=>{clearTimeout(timer);this.pending.delete(requestId);reject(e);});
     });
   }
-  async createRoom({roomType,name,locked=false}){return object((await this.request(100,{roomType,name,locked})).rawBody);}
-  async roomSync(roomId,change={}){return object((await this.request(103,{roomId,...change})).rawBody);}
-  async listRooms({roomType}){
+  async createRoom({roomType,name,locked=false,metadata=''}){return object((await this.request(100,{roomType,name,locked,metadata})).rawBody);}
+  async roomSync(roomId,change={}){return object((await this.request(103,{...change,roomId})).rawBody);}
+  async listRooms({roomType}={}){
     let after,rooms=[];
-    do{const result=object((await this.request(101,{roomType,...(after?{after}:{})})).rawBody);rooms.push(...result.rooms);after=result.next;}while(after&&rooms.length<10000);
+    do{const result=object((await this.request(101,{...(roomType?{roomType}:{}),...(after?{after}:{})})).rawBody);rooms.push(...result.rooms);after=result.next;}while(after&&rooms.length<10000);
     return rooms;
   }
   joinRoom(roomId,body){return this.request(102,body,{roomId});}

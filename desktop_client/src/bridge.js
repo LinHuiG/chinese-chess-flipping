@@ -1,5 +1,7 @@
 (() => {
-  const call = (method, ...args) => window.__TAURI_INTERNALS__.invoke('native_call', {method, args});
+  if(window!==window.top)return;
+  const token=__CYBER_BRIDGE_TOKEN__;
+  const call = (method, ...args) => window.__TAURI_INTERNALS__.invoke('native_call', {method, args, token});
   // Element fullscreen alone only fills WebView2. Keep the host window in the
   // same state, including Escape and room teardown, in event order.
   let fullscreenChange = Promise.resolve();
@@ -29,18 +31,15 @@
     sendPeer: (id,data) => call('sendPeer',id,data),
     closePeers: () => call('closePeers'),
     roomActive: name => call('roomActive',name),
-    watchSaveRead: () => saveCall('watchSaveRead'),
-    watchSaveWrite: text => saveCall('watchSaveWrite',text),
-    voiceConfigure: config => call('voiceConfigure',config),
-    voiceMicrophone: enabled => call('voiceMicrophone',enabled),
-    voiceStop: () => call('voiceStop'),
-    mediaConfigure: config => call('mediaConfigure',config),
-    mediaRequest: request => call('mediaRequest',request),
-    playerCapabilities: {engine:'mpv',embeddedTracks:true},
-    playerCommand: command => call('playerCommand',command),
-    playerStop: () => call('playerStop'),
+    secureRead: namespace => saveCall('secureRead',namespace),
+    secureWrite: (namespace,text) => saveCall('secureWrite',namespace,text),
+    extensionPrepare: descriptor => call('extensionPrepare',descriptor),
+    extensionActivate: descriptor => call('extensionActivate',descriptor),
+    extensionCall: request => call('extensionCall',request),
+    extensionClose: () => call('extensionClose'),
     checkUpdate: () => call('checkUpdate'),
     installUpdate: () => call('checkUpdate'),
+    marketFetch: (url,limit) => call('marketFetch',url,limit),
     exitApp: () => call('exitApp')
   };
 })();

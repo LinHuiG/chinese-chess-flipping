@@ -14,12 +14,12 @@ final class WatchSaveChecks {
     private final Instrumentation owner;
     WatchSaveChecks(Instrumentation owner){this.owner=owner;}
     public static final class ErrorBridge {
-        final WatchSaveStore store;final CountDownLatch done=new CountDownLatch(1);volatile boolean caught;
-        ErrorBridge(WatchSaveStore store){this.store=store;}
+        final SecureStore store;final CountDownLatch done=new CountDownLatch(1);volatile boolean caught;
+        ErrorBridge(SecureStore store){this.store=store;}
         @JavascriptInterface public String read(){try{return store.read();}catch(IOException error){throw new IllegalStateException(error.getMessage());}}
         @JavascriptInterface public void result(boolean caught){this.caught=caught;done.countDown();}
     }
-    private void bridgeError(WatchSaveStore store)throws Exception{
+    private void bridgeError(SecureStore store)throws Exception{
         ErrorBridge bridge=new ErrorBridge(store);WebView[] web=new WebView[1];
         try{
             owner.runOnMainSync(()->{web[0]=new WebView(owner.getTargetContext());web[0].getSettings().setJavaScriptEnabled(true);web[0].addJavascriptInterface(bridge,"SaveTest");web[0].loadDataWithBaseURL("https://appassets.androidplatform.net/","<script>let caught=false;try{SaveTest.read()}catch(error){caught=true}SaveTest.result(caught)</script>","text/html","UTF-8",null);});
@@ -30,7 +30,7 @@ final class WatchSaveChecks {
     Bundle run(){
         Bundle result=new Bundle();boolean success=false;
         File path=new File(owner.getTargetContext().getNoBackupFilesDir(),"watch-save-test.enc");
-        String alias="cyber-room.watch-save.test";WatchSaveStore store=new WatchSaveStore(path,alias);
+        String alias="cyber-room.watch-save.test";SecureStore store=new SecureStore(path,alias);
         try{
             store.write(null);check(store.read()==null,"empty store");
             String data="{\"version\":1,\"source\":{\"token\":\"synthetic-token-only\"},\"position\":42}";
@@ -38,12 +38,12 @@ final class WatchSaveChecks {
             byte[] encrypted=Files.readAllBytes(path.toPath());check(!new String(encrypted,StandardCharsets.ISO_8859_1).contains("synthetic-token-only"),"credential plaintext in file");
             KeyStore keys=KeyStore.getInstance("AndroidKeyStore");keys.load(null);check(keys.getKey(alias,null).getEncoded()==null,"key must be non-exportable");
             store.write("{\"version\":1,\"position\":60}");check(store.read().contains("60"),"atomic replacement");
-            boolean rejected=false;try{store.write("{\"password\":\"forbidden\"}");}catch(IOException expected){rejected=true;}check(rejected,"password rejected");
-            rejected=false;try{store.write("{\"token\":\""+"x".repeat(WatchSaveStore.MAX_BYTES)+"\"}");}catch(IOException expected){rejected=true;}check(rejected,"size bound");
+            boolean rejected=false;store.write("{\"value\":\"encrypted generic data\"}");check(store.read().contains("encrypted generic data"),"generic JSON accepted");
+            rejected=false;try{store.write("{\"token\":\""+"x".repeat(SecureStore.MAX_BYTES)+"\"}");}catch(IOException expected){rejected=true;}check(rejected,"size bound");
             encrypted[encrypted.length-1]^=1;Files.write(path.toPath(),encrypted);rejected=false;try{store.read();}catch(IOException expected){rejected=true;}check(rejected,"tampered file rejected");bridgeError(store);
             store.write("null");check(store.read()==null,"delete damaged record");check(!keys.containsAlias(alias),"delete removes keystore entry");
             store.write(data);store.write("null");check(store.read()==null&&!path.exists(),"delete after write cannot be resurrected");
-            result.putString("result","PASS Android Keystore AES/GCM roundtrip, non-exportable key, no plaintext token, atomic replace, corruption, size/password rejection and deletion");success=true;
+            result.putString("result","PASS Android Keystore AES/GCM roundtrip, non-exportable key, no plaintext token, atomic replace, corruption, size rejection and deletion");success=true;
         }catch(Throwable error){result.putString("error",error.getClass().getSimpleName()+": "+error.getMessage());}
         finally{try{store.write(null);}catch(IOException ignored){}}
         result.putBoolean("success",success);return result;

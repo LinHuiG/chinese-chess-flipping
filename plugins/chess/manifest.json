@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "official.chess",
+  "key": "chess",
+  "name": "翻棋",
+  "description": "翻开暗棋决定阵营，和朋友下一盘。",
+  "version": "1.0.0",
+  "hostApi": 1,
+  "protocol": "chess/1",
+  "roomFeature": "f937bda248ce4fab9c710a18bdffb2d3",
+  "room": {
+    "minMembers": 2,
+    "maxMembers": 2
+  },
+  "targets": {
+    "web": {
+      "entry": "app.js"
+    },
+    "android": {
+      "entry": "app.js"
+    },
+    "windows": {
+      "entry": "app.js"
+    }
+  },
+  "permissions": [
+    "room.messaging",
+    "storage.private"
+  ],
+  "license": "AGPL-3.0-only"
+}

@@ -1,7 +1,8 @@
+import './plugin-test-host.mjs';
 // Exercise the real loading, state, authorization and session-cleanup methods.
 // Only DOM, HLS and HTTP boundaries are fake; no server or native player is started.
 import assert from 'node:assert/strict';
-import {WatchRoom} from '../server/src/main/resources/web/watch.js';
+import {WatchRoom} from '../plugins/watch/watch.js';
 
 const original={fetch:globalThis.fetch,performance:globalThis.performance,document:globalThis.document,Hls:globalThis.Hls,window:globalThis.window,ResizeObserver:globalThis.ResizeObserver,MutationObserver:globalThis.MutationObserver,setInterval:globalThis.setInterval};
 let now=1000;

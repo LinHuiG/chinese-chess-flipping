@@ -21,3 +21,4 @@
 **/__pycache__/
 /desktop_client/gen/
 /desktop_client/native/
+/server/plugin-market/

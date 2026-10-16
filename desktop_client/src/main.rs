@@ -1,14 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-mod audio;
+mod extensions;
 mod lifecycle;
-mod media;
-mod media_runtime;
 mod network;
+mod secure_store;
 mod udp;
-mod watch_save;
 mod wire;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use futures_util::StreamExt;
+use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -28,10 +27,6 @@ pub struct Settings {
     motion: bool,
     version: String,
     platform: String,
-    #[serde(rename = "nativeMedia")]
-    native_media: bool,
-    #[serde(rename = "nativeVoice")]
-    native_voice: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -44,35 +39,31 @@ impl Default for Settings {
             motion: true,
             version: env!("CARGO_PKG_VERSION").into(),
             platform: "WINDOWS".into(),
-            native_media: true,
-            native_voice: true,
         }
     }
 }
 pub struct AppState {
+    bridge_token: String,
     handle: tauri::AppHandle,
     settings: Mutex<Settings>,
     settings_path: PathBuf,
-    watch_save: watch_save::WatchSave,
+    secure_store: secure_store::SecureStore,
     pub network: Arc<network::Network>,
     pub udp: Mutex<Option<Arc<udp::Udp>>>,
-    pub voice: Arc<audio::Voice>,
-    player: Arc<media::Media>,
-    media_origin: Mutex<Option<reqwest::Url>>,
+    pub extensions: extensions::Manager,
     http: reqwest::Client,
     visibility: Mutex<lifecycle::Visibility>,
 }
 impl AppState {
     pub fn event(&self, value: Value) {
         if let Some(window) = self.handle.get_webview_window("main") {
-            let _ = window.eval(&format!(
+            let _ = window.eval(format!(
                 "window.dispatchEvent(new CustomEvent('native-room',{{detail:{value}}}));"
             ));
         }
     }
     fn shutdown(&self) {
-        self.player.shutdown();
-        self.voice.shutdown();
+        self.extensions.stop();
         self.network.disconnect();
         if let Some(u) = self.udp.lock().unwrap().as_ref() {
             u.close()
@@ -89,10 +80,11 @@ impl AppState {
         let change = state.update(minimized, visible, lifecycle::session_locked());
         let background = state.background();
         drop(state);
-        self.player.foreground(!background);
-        if background || resumed {
-            self.voice.mute();
+        let scale = window.scale_factor().unwrap_or(1.);
+        if resumed {
+            self.extensions.foreground(false, scale);
         }
+        self.extensions.foreground(!background, scale);
         if let Some(background) = change {
             self.event(json!({"type":if background{"background"}else{"foreground"}}));
         } else if resumed && !background {
@@ -114,31 +106,67 @@ fn local_url(url: &reqwest::Url) -> bool {
             && url.host_str() == Some("tauri.localhost")
             && url.port().is_none())
 }
-fn media_target_allowed(origin: Option<&reqwest::Url>, url: &reqwest::Url) -> bool {
-    origin.is_some_and(|a| a.origin() == url.origin())
-        && url.username().is_empty()
-        && url.password().is_none()
-}
 #[tauri::command]
 async fn native_call(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, Arc<AppState>>,
     method: String,
     args: Vec<Value>,
+    token: String,
 ) -> Result<Value, String> {
-    if window.label() != "main" || !window.url().is_ok_and(|url| local_url(&url)) {
+    if token != state.bridge_token
+        || window.label() != "main"
+        || !window.url().is_ok_and(|url| local_url(&url))
+    {
         return Err("仅可信本地界面可调用".into());
     }
     let state = state.inner().clone();
     match method.as_str() {
-        "watchSaveRead" => Ok(json!(state.watch_save.read()?)),
-        "watchSaveWrite" => {
-            let text = match args.first() {
+        "secureRead" => Ok(json!(state.secure_store.read(string(&args, 0)?)?)),
+        "secureWrite" => {
+            let text = match args.get(1) {
                 Some(Value::Null) => None,
-                _ => Some(string(&args, 0)?),
+                _ => Some(string(&args, 1)?),
             };
-            state.watch_save.write(text)?;
+            state.secure_store.write(string(&args, 0)?, text)?;
             Ok(json!(true))
+        }
+        "marketFetch" => {
+            let url = reqwest::Url::parse(string(&args, 0)?).map_err(|_| "插件地址无效")?;
+            let limit = args
+                .get(1)
+                .and_then(Value::as_u64)
+                .filter(|v| *v > 0 && *v <= 24 * 1024 * 1024)
+                .ok_or("下载大小无效")? as usize;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+            {
+                return Err("插件地址无效".into());
+            }
+            let response = state
+                .http
+                .get(url)
+                .timeout(Duration::from_secs(35))
+                .send()
+                .await
+                .map_err(|_| "插件市场连接失败")?;
+            if !response.status().is_success()
+                || response.content_length().is_some_and(|v| v > limit as u64)
+            {
+                return Err("插件市场响应无效或文件过大".into());
+            }
+            let mut stream = response.bytes_stream();
+            let mut data = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|_| "插件下载中断")?;
+                if data.len() + chunk.len() > limit {
+                    return Err("插件文件过大".into());
+                }
+                data.extend_from_slice(&chunk);
+            }
+            Ok(json!(String::from_utf8(data).map_err(|_| "插件编码无效")?))
         }
         "configure" => {
             let mut s: Settings = parse_arg(&args, 0)?;
@@ -155,8 +183,6 @@ async fn native_call(
             }
             s.version = env!("CARGO_PKG_VERSION").into();
             s.platform = "WINDOWS".into();
-            s.native_media = true;
-            s.native_voice = true;
             s.nickname = s.nickname.chars().take(32).collect();
             let text = serde_json::to_string(&s).map_err(|_| "保存失败")?;
             std::fs::write(&state.settings_path, &text).map_err(|_| "设置保存失败")?;
@@ -177,7 +203,7 @@ async fn native_call(
         }
         "disconnect" => {
             state.network.disconnect();
-            state.voice.mute();
+            state.extensions.foreground(false, 1.);
             if let Some(u) = state.udp.lock().unwrap().as_ref() {
                 u.clear()
             }
@@ -241,46 +267,28 @@ async fn native_call(
             Ok(json!(true))
         }
         "roomActive" => Ok(json!(true)),
-        "voiceConfigure" => {
-            state.voice.configure(parse_arg(&args, 0)?)?;
-            Ok(json!(true))
+        "extensionPrepare" => {
+            let descriptor = parse_arg(&args, 0)?;
+            Ok(json!(state
+                .extensions
+                .prepare(descriptor, &state.http)
+                .await?
+                .to_string()))
         }
-        "voiceMicrophone" => Ok(json!(state
-            .voice
-            .microphone(args.first().and_then(Value::as_bool).unwrap_or(false)))),
-        "voiceStop" => {
-            state.voice.stop();
-            Ok(json!(true))
+        "extensionActivate" => {
+            let descriptor = parse_arg(&args, 0)?;
+            let next = state.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                next.extensions.activate(next.clone(), descriptor)
+            })
+            .await
+            .map_err(|_| "组件启动失败")?
         }
-        "mediaConfigure" => {
-            let config: Value = parse_arg(&args, 0)?;
-            let raw = config.get("origin").and_then(Value::as_str).unwrap_or("");
-            let origin = if raw.is_empty() {
-                None
-            } else {
-                let url = reqwest::Url::parse(raw).map_err(|_| "片源地址无效")?;
-                if !matches!(url.scheme(), "http" | "https")
-                    || url.host_str().is_none()
-                    || !url.username().is_empty()
-                    || url.password().is_some()
-                {
-                    return Err("片源地址无效".into());
-                }
-                Some(url)
-            };
-            let mut current = state.media_origin.lock().unwrap();
-            if current.as_ref().map(|u| u.origin()) != origin.as_ref().map(|u| u.origin()) {
-                state.player.stop();
-            }
-            *current = origin;
-            Ok(json!(true))
-        }
-        "playerCommand" => {
-            state.player.command(parse_arg(&args, 0)?)?;
-            Ok(json!(true))
-        }
-        "playerStop" => {
-            state.player.stop();
+        "extensionCall" => state.extensions.call(parse_arg(&args, 0)?).await,
+        "extensionClose" => {
+            tauri::async_runtime::spawn_blocking(move || state.extensions.stop())
+                .await
+                .map_err(|_| "组件关闭失败")?;
             Ok(json!(true))
         }
         "windowFullscreen" => {
@@ -302,23 +310,6 @@ async fn native_call(
                 "monitor":monitor.map(|m| json!({"position":m.position(),"size":m.size()}))}),
             )
         }
-        "mediaRequest" => {
-            let request: Value = parse_arg(&args, 0)?;
-            let id = request.get("id").cloned().unwrap_or(Value::Null);
-            let result = media_request(&state, request).await;
-            let event = match result {
-                Ok((status, body, image)) => {
-                    if image {
-                        json!({"type":"mediaResponse","id":id,"status":status,"body":"","dataUrl":body})
-                    } else {
-                        json!({"type":"mediaResponse","id":id,"status":status,"body":body})
-                    }
-                }
-                Err(error) => json!({"type":"mediaResponse","id":id,"status":0,"error":error}),
-            };
-            state.event(event.clone());
-            Ok(event)
-        }
         "checkUpdate" => {
             state.event(json!({"type":"update","status":"Windows更新请从服务器网页下载最新运行包，关闭本程序后替换。","version":env!("CARGO_PKG_VERSION"),"busy":false,"ready":false}));
             Ok(json!(true))
@@ -331,127 +322,9 @@ async fn native_call(
         _ => Err("未知本地接口".into()),
     }
 }
-fn media_image_data_url(content_type: &str, bytes: &[u8]) -> Result<String, String> {
-    let mime = content_type
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    if !matches!(
-        mime.as_str(),
-        "image/jpeg" | "image/png" | "image/webp" | "image/gif"
-    ) {
-        return Err("片源未返回支持的图片格式".into());
-    }
-    Ok(format!("data:{mime};base64,{}", B64.encode(bytes)))
-}
-async fn media_request(state: &AppState, value: Value) -> Result<(u16, String, bool), String> {
-    let url = reqwest::Url::parse(
-        value
-            .get("url")
-            .and_then(Value::as_str)
-            .ok_or("媒体URL无效")?,
-    )
-    .map_err(|_| "媒体URL无效")?;
-    let allowed = state.media_origin.lock().unwrap().clone();
-    if !media_target_allowed(allowed.as_ref(), &url) {
-        return Err("媒体请求必须使用已配置的片源地址".into());
-    }
-    let method = value.get("method").and_then(Value::as_str).unwrap_or("GET");
-    if !matches!(method, "GET" | "POST" | "DELETE") {
-        return Err("媒体请求方式不支持".into());
-    }
-    let image = value.get("responseType").and_then(Value::as_str) == Some("image");
-    if image && method != "GET" {
-        return Err("图片请求必须使用 GET".into());
-    }
-    let mut request = state
-        .http
-        .request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), url)
-        .timeout(Duration::from_millis(
-            value
-                .get("timeoutMs")
-                .and_then(Value::as_u64)
-                .unwrap_or(20000)
-                .clamp(1000, if image { 20000 } else { 60000 }),
-        ));
-    if let Some(headers) = value.get("headers").and_then(Value::as_object) {
-        if headers.len() > 16 {
-            return Err("媒体请求头过大".into());
-        }
-        for (k, v) in headers {
-            if matches!(
-                k.to_ascii_lowercase().as_str(),
-                "host" | "connection" | "content-length" | "cookie"
-            ) {
-                return Err("不允许的请求头".into());
-            }
-            let v = v.as_str().filter(|v| v.len() <= 8192).ok_or("请求头无效")?;
-            request = request.header(k, v);
-        }
-    }
-    if let Some(body) = value.get("body") {
-        let body = if let Some(s) = body.as_str() {
-            s.to_string()
-        } else {
-            body.to_string()
-        };
-        if body.len() > 262144 {
-            return Err("媒体请求过大".into());
-        }
-        request = request.body(body);
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|_| "无法连接片源，请检查地址、网络或证书")?;
-    let status = response.status().as_u16();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    if response.content_length().is_some_and(|n| n > 2097152) {
-        return Err("片源响应过大".into());
-    }
-    let mut bytes = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| "片源响应中断")?;
-        if bytes.len() + chunk.len() > 2097152 {
-            return Err("片源响应过大".into());
-        }
-        bytes.extend(chunk);
-    }
-    let body = if image {
-        if (200..300).contains(&status) {
-            media_image_data_url(&content_type, &bytes)?
-        } else {
-            String::new()
-        }
-    } else {
-        String::from_utf8(bytes).map_err(|_| "片源应返回文本信息".to_string())?
-    };
-    Ok((status, body, image))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn poster_response_keeps_binary_bytes_and_rejects_html_svg() {
-        let bytes = b"\x89PNG\r\n\x1a\n\xff\0";
-        let encoded = media_image_data_url("IMAGE/PNG; charset=binary", bytes).unwrap();
-        assert_eq!(
-            B64.decode(encoded.split_once(',').unwrap().1).unwrap(),
-            bytes
-        );
-        for mime in ["text/html", "image/svg+xml", "application/json", ""] {
-            assert!(media_image_data_url(mime, bytes).is_err());
-        }
-    }
     #[test]
     fn native_bridge_is_restricted_to_embedded_origin() {
         for s in [
@@ -469,26 +342,6 @@ mod tests {
         ] {
             assert!(!local_url(&reqwest::Url::parse(s).unwrap()));
         }
-    }
-    #[test]
-    fn emby_scope_includes_scheme_port_and_no_url_credentials() {
-        let origin = reqwest::Url::parse("http://emby.example:8095/").unwrap();
-        assert!(media_target_allowed(
-            Some(&origin),
-            &origin.join("Items?api_key=test").unwrap()
-        ));
-        for s in [
-            "https://emby.example:8095/Items",
-            "http://emby.example/Items",
-            "http://other.example:8095/Items",
-            "http://user:password@emby.example:8095/Items",
-        ] {
-            assert!(!media_target_allowed(
-                Some(&origin),
-                &reqwest::Url::parse(s).unwrap()
-            ));
-        }
-        assert!(!media_target_allowed(None, &origin));
     }
     #[test]
     fn saved_settings_preserve_connection_and_default_missing_fields() {
@@ -536,25 +389,26 @@ fn main() {
                 .unwrap_or_default();
             settings.version = env!("CARGO_PKG_VERSION").into();
             settings.platform = "WINDOWS".into();
-            settings.native_media = true;
-            settings.native_voice = true;
+            let mut secret = [0u8; 32];
+            OsRng.fill_bytes(&mut secret);
+            let bridge_token = B64.encode(secret);
             let script = include_str!("bridge.js")
-                .replace("__CYBER_SETTINGS__", &serde_json::to_string(&settings)?);
+                .replace("__CYBER_SETTINGS__", &serde_json::to_string(&settings)?)
+                .replace("__CYBER_BRIDGE_TOKEN__", &serde_json::to_string(&bridge_token)?);
             let handle = app.handle().clone();
             let http = reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(15))
                 .build()?;
-            let state = Arc::new_cyclic(|weak| AppState {
+            let state = Arc::new(AppState {
+                bridge_token,
                 handle: handle.clone(),
                 settings: Mutex::new(settings),
                 settings_path,
-                watch_save: watch_save::WatchSave::new(path.clone()),
+                secure_store: secure_store::SecureStore::new(path.clone()),
                 network: Arc::new(network::Network::new()),
                 udp: Mutex::new(None),
-                voice: audio::Voice::new(weak.clone()),
-                player: media::Media::new(weak.clone(), path.clone()),
-                media_origin: Mutex::new(None),
+                extensions: extensions::Manager::new(path.clone()),
                 http,
                 visibility: Mutex::new(lifecycle::Visibility::default()),
             });
@@ -574,9 +428,9 @@ fn main() {
                 tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Resized(_) => events.refresh_visibility(false),
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
-                    events.voice.mute();
+                    events.extensions.foreground(false,1.);
                     if let Some(window)=events.handle.get_webview_window("main"){
-                        let script="Promise.race([Promise.resolve().then(()=>window.cyberDisconnect?.()),new Promise(r=>setTimeout(r,1500))]).catch(()=>{}).finally(()=>window.NativeRoom.exitApp());";
+                        let script="Promise.race([Promise.resolve().then(()=>window.cyberDisconnect?.()),new Promise(r=>setTimeout(r,8000))]).catch(()=>{}).finally(()=>window.NativeRoom.exitApp());";
                         if window.eval(script).is_err(){events.shutdown();events.handle.exit(0);}
                     }
                 },
@@ -594,7 +448,7 @@ fn main() {
                         let Some(s) = sleeper.upgrade() else { break };
                         let resumed=last.elapsed() > Duration::from_secs(6);
                         if resumed {
-                            s.voice.mute();
+                            s.extensions.foreground(false,1.);
                             if let Some(u) = s.udp.lock().unwrap().as_ref() {
                                 u.clear()
                             }

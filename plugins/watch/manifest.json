@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "id": "official.watch",
+  "key": "watch",
+  "name": "电影厅",
+  "description": "一起看电影、发弹幕和语音聊天，房主控制播放。",
+  "version": "1.0.0",
+  "hostApi": 1,
+  "protocol": "watch/1",
+  "roomFeature": "c1067e462c15443d896b2da3854e0128",
+  "room": {
+    "minMembers": 1,
+    "maxMembers": 6
+  },
+  "targets": {
+    "web": {
+      "entry": "app.js"
+    },
+    "android": {
+      "entry": "app.js",
+      "native": {
+        "api": 1,
+        "kind": "apk",
+        "packageName": "com.cyberroom.watch",
+        "entry": "com.cyberroom.watch.WatchExtension",
+        "exports": {
+          "voiceConfigure": "voice",
+          "voiceMicrophone": "voice",
+          "voiceStop": "voice",
+          "mediaConfigure": "media",
+          "mediaRequest": "media",
+          "playerCommand": "media",
+          "playerStop": "media"
+        }
+      }
+    },
+    "windows": {
+      "entry": "app.js",
+      "native": {
+        "api": 1,
+        "kind": "exe",
+        "exports": {
+          "voiceConfigure": "voice",
+          "voiceMicrophone": "voice",
+          "voiceStop": "voice",
+          "mediaConfigure": "media",
+          "mediaRequest": "media",
+          "playerCommand": "media",
+          "playerStop": "media"
+        }
+      }
+    }
+  },
+  "permissions": [
+    "room.messaging",
+    "storage.private",
+    "media",
+    "voice",
+    "network"
+  ],
+  "license": "AGPL-3.0-only"
+}

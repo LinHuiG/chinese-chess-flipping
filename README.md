@@ -21,6 +21,8 @@
 
 翻棋规则见 [棋局规则](docs/GAME_RULES.md)，矿工操作和道具说明在游戏内“?”。基于底座开发新功能见 [赛博房间接入手册](docs/CYBER_ROOM_INTEGRATION_MANUAL.md) 与 [客户端开发指南](docs/FRAMEWORK_DEVELOPMENT_GUIDE.md)。
 
+0.9.0 插件平台：宿主仅保留基础能力，翻棋、矿工和电影厅从插件市场安装。房间绑定固定插件发布，不支持的端不能进入，更换插件需退出并重建。开发接口、构建及发布见 [插件开发指南](docs/PLUGIN_DEVELOPMENT.md)，历史设计见 [插件平台方案](docs/PLUGIN_PLATFORM_PLAN.md)。本轮验证与发布状态见 [0.9.0 验收](docs/ACCEPTANCE_0_9_0.md)。
+
 0.8.3 本次更新：统一“深空冷域”界面、独立电影片库和完善的播放控制，Windows 接入内嵌原生播放器。本轮检查与真实片源限制见 [0.8.3 验收记录](docs/ACCEPTANCE_0_8_3.md)，包散列见 [执行记录](PROJECT_STATUS.md)，视觉和素材见 [设计归档](docs/design/DEEP_SPACE.md)。电影厅、密码、指定广播和 Windows 客户端的接口见 [实现契约](docs/WATCH_ROOM_IMPLEMENTATION.md)，此前发布的检查边界见 [0.8.2 验收记录](docs/ACCEPTANCE_0_8_2.md) 和 [0.8.1 全功能验收](docs/ACCEPTANCE_0_8_1.md)。
 
 ## 开始游戏
@@ -31,7 +33,8 @@
 
 1. 打开服务器网页，点击顶部的“下载 App”获取 Android 安装包。也可从 [GitHub Actions](https://github.com/LinHuiG/chinese-chess-flipping/actions/workflows/publish.yml) 最近一次成功发布的运行中下载 `app-update` 附件，解压并安装其中的 `latest.apk`（下载 Actions 附件需要登录 GitHub）。
 2. 打开 App，在设置中选择服务器。默认配置为 **TCP / fqgame.tdcode.tech / 8888**，也可以改为自己部署的服务器。
-3. 房主选择翻棋或黄金矿工并创建房间，朋友从大厅加入，大家点击“准备好了”开始。
+3. 在“插件市场”安装翻棋、黄金矿工或电影厅，安装后创建房间。朋友从大厅加入，缺少插件时按提示安装相同发布版本。游戏准备后开局。
+4. Android 电影厅还需安装独立原生组件：按系统提示安装，然后返回市场重试。宿主与组件必须来自同一正式发布签名；调试包不能混装。
 
 0.8.1 保留 v3 外壳，并通过 READY 能力声明检查房主路由授权、同步和广播契约；连接旧服务时会明确提示升级，需配套更新服务端与客户端。更早的 v2 客户端不能通过当前 TCP 协议自助更新，请从网页手动安装。
 
@@ -41,7 +44,7 @@
 
 ### 网页版
 
-在浏览器中打开服务器的网站即可游玩，无需安装。网页、Android 和 Windows 连接同一台服务器时，可以加入同一个房间。浏览器开麦需要 HTTPS（localhost 测试例外）及麦克风许可；Emby 必须允许该网页跨域访问，HTTPS 页面应使用 HTTPS 片源。
+在浏览器中打开服务器网站，从插件市场下载所需功能即可游玩，无需安装系统应用。网页、Android 和 Windows 连接同一台服务器时，可以加入同一个房间。浏览器开麦需要 HTTPS（localhost 测试例外）及麦克风许可；Emby 必须允许该网页跨域访问，HTTPS 页面应使用 HTTPS 片源。
 
 ### Windows
 

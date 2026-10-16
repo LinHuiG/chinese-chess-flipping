@@ -318,7 +318,7 @@ impl Udp {
                     interfaces = fresh;
                     self.clear();
                     if let Some(s) = self.state.upgrade() {
-                        s.voice.mute();
+                        s.extensions.network_changed();
                         s.event(json!({"type":"networkChanged"}));
                     }
                 }
@@ -401,7 +401,7 @@ impl Udp {
         }
         drop(peers);
         if let (Some((id, context, p)), Some(s)) = (delivered, self.state.upgrade()) {
-            if !s.voice.receive(&p, Some(&id)) {
+            if !s.extensions.receive(&p, Some(&id)) {
                 if let Ok(bytes) = p.plain() {
                     s.event(json!({"type":"peerPacket","peerId":id,"context":context,"data":B64.encode(bytes)}));
                 }

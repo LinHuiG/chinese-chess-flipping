@@ -2,7 +2,8 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const calls=[],listeners={};let complete;
 const document={fullscreenElement:null,addEventListener:(name,fn)=>listeners[name]=fn,exitFullscreen:async()=>{document.fullscreenElement=null;listeners.fullscreenchange();}};
 const window={__TAURI_INTERNALS__:{invoke:async(_,request)=>{calls.push(request);if(calls.length===1)await new Promise(r=>complete=r);}}};
-vm.runInNewContext(fs.readFileSync(__dirname+'/../src/bridge.js','utf8'),{window,document,console,__CYBER_SETTINGS__:{}});
+window.top=window;
+vm.runInNewContext(fs.readFileSync(__dirname+'/../src/bridge.js','utf8'),{window,document,console,__CYBER_SETTINGS__:{},__CYBER_BRIDGE_TOKEN__:'test'});
 (async()=>{
  document.fullscreenElement={};listeners.fullscreenchange();await Promise.resolve();
  document.fullscreenElement=null;listeners.fullscreenchange();await Promise.resolve();

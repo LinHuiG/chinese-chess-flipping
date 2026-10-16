@@ -1,6 +1,6 @@
 [package]
 name = "cyber-room"
-version = "0.8.4"
+version = "0.9.0"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "赛博房间 Windows 客户端"
@@ -23,11 +23,7 @@ sha2 = "0.10"
 rand_core = { version = "0.6", features = ["getrandom"] }
 base64 = "0.22"
 zeroize = "1"
-flate2 = "1"
-tar = "0.4"
-libloading = "0.7"
 if-addrs = "0.14"
-cpal = "0.16"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 
 [features]

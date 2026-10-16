@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "plugins:build": "node scripts/package-plugins.mjs",
+    "test:plugins": "node scripts/plugin-test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright": "^1.56.1"
+  }
+}

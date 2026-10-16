@@ -1,5 +1,7 @@
 # 赛博房间接入手册
 
+> 0.9.0 扩展：READY 能力新增 `room-descriptors`；CREATE(100) 可带最多 2048 字节的 metadata 字符串，服务端不解析；LIST(101) 可省略 roomType 并返回 metadata。插件 SDK 见 [开发指南](PLUGIN_DEVELOPMENT.md)。其余 v3 帧与路由语义不变。
+
 2026-10-14，基础协议 v3，现行客户端/服务端版本 0.8.1。已实现并完成本地 TCP/WS 互通、UDP 帧和转发检查，与旧 v2 不兼容。App 更新接口另见 [协议索引](PROTOCOL.md)。本手册只规定通信基础，不规定游戏、文件、直播或其他客户端业务协议。
 
 0.8.0 增加 ROOM_SYNC(103)、BROADCAST(201) 和 JOIN 控制字段 grant。17 字节 v3 外壳与握手不变，服务端和客户端需配套升级；旧客户端缺少 grant 的批准回复会被拒绝。设计依据见 [广播方案](ROOM_BROADCAST_PLAN.md)，实际跨端接口见 [实现契约](WATCH_ROOM_IMPLEMENTATION.md)。

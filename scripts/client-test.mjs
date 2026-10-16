@@ -1,13 +1,22 @@
+import './plugin-test-host.mjs';
 // Shared App/Web rule, recovery and v3 framing checks. No external network.
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
-import {RoomVoice,encodeVoice,decodeVoice} from '../server/src/main/resources/web/voice.js';
-import {WatchRoom} from '../server/src/main/resources/web/watch.js';
-import {GameEngine} from '../server/src/main/resources/web/game.js';
-import {GoldMine,levelMap,SHOP} from '../server/src/main/resources/web/miner.js';
+import {RoomVoice,encodeVoice,decodeVoice} from '../plugins/watch/voice.js';
+import {WatchRoom} from '../plugins/watch/watch.js';
+import {GameEngine} from '../plugins/chess/game.js';
+import {GoldMine,levelMap,SHOP} from '../plugins/miner/miner.js';
 import {RoomClient,packet,decode,object,id} from '../server/src/main/resources/web/transport.js';
-import {GameRoom,GAMES} from '../server/src/main/resources/web/room.js';
+import {Microphone} from '../server/src/main/resources/web/microphone.js';
+import {PluginRoom} from '../plugin_sdk/room.js';
+import {rules as chessRules} from '../plugins/chess/rules.js';
+import {rules as minerRules} from '../plugins/miner/rules.js';
+import {rules as watchRules} from '../plugins/watch/rules.js';
+const GAMES={};
+for(const key of ['chess','watch','miner']){const m=JSON.parse(await readFile(new URL('../plugins/'+key+'/manifest.json',import.meta.url),'utf8'));GAMES[key]={...m,feature:m.roomFeature,min:m.room.minMembers,max:m.room.maxMembers,platform:'web',binding:{id:m.id,version:m.version,protocol:m.protocol,release:'a'.repeat(64)}};}
+function fixture(key='chess',events={}){const g=new PluginRoom(GAMES[key],{chess:chessRules,watch:watchRules,miner:minerRules}[key],events);let state=null;Object.defineProperty(g,'room',{get:()=>state,set:r=>{state=r;if(r&&!r.plugin)r.plugin=GAMES[key].binding;}});return g;}
+
 globalThis.localStorage={values:new Map(),getItem(k){return this.values.get(k)||null;},setItem(k,v){this.values.set(k,v);}};
 globalThis.location={host:'test'};
 function position(...pairs){
@@ -85,7 +94,7 @@ supplyRestore.rebind(players);supplyRestore.step(12.74);assert.equal(supplyResto
 supplyRestore.step(.1);assert.equal(supplyRestore.level,2);assert.ok(supplyRestore.next(),'Late next request cannot start another level');
 delete supplySave.shopTime;assert.equal(GoldMine.restore(supplySave).shopTime,20,'Older shop saves receive the new timer');
 console.log('PASS miner supply timer: 20-second expiry, pause, save/rebind remainder, old-save migration and single settlement');
-const room=new GameRoom();clearInterval(room.timer);room.self=players[0].id;room.client.ready=true;room.client.sendTo=()=>true;
+const room=fixture();clearInterval(room.timer);room.self=players[0].id;room.client.ready=true;room.client.sendTo=()=>true;
 room.room={roomId:id(),hostId:room.self,name:'test',game:'chess',capacity:2,members:players.slice(0,2).map(p=>({...p,ready:false})),status:'waiting',seconds:60,seq:0,round:id(),move:0};
 for(const p of room.room.members)assert.equal(room.perform(p.id,{round:room.room.round,action:{type:'READY',ready:true}}),null);
 assert.equal(room.room.status,'playing');
@@ -93,7 +102,7 @@ const actor=room.room.members[room.engine.turn].id,actionId=id(),action={round:r
 room.hostAction(actor,actionId,action);room.hostAction(actor,actionId,action);assert.equal(room.room.move,1);assert.equal(room.engine.publicBoard().filter(p=>p===99).length,31);
 let decision;room.client.replyJoin=(request,body)=>decision=body;
 room.client.roomSync=async()=>({roomId:room.room.roomId,version:1,members:room.room.members.map(p=>({clientId:p.id}))});
-await room.joinRequest({control:{roomId:room.room.roomId,from:players[2].id},rawBody:new TextEncoder().encode(JSON.stringify({feature:GAMES.chess.feature.slice(16)}))});assert.equal(decision.allowed,false);
+await room.joinRequest({control:{roomId:room.room.roomId,from:players[2].id},rawBody:new TextEncoder().encode(JSON.stringify({feature:GAMES.chess.feature.slice(16),plugin:GAMES.chess.binding,platform:'web'}))});assert.equal(decision.allowed,false);
 room.reset();
 console.log('PASS host framework: admission, readiness, one execution for duplicate action, private checkpoint');
 clearInterval(room.timer);
@@ -149,7 +158,7 @@ await withClock(async({advance})=>{
 console.log('PASS session expiry: duplicate native closed callbacks preserve fresh-identity reconnect');
 
 await withClock(async()=>{
-  const host=new GameRoom();host.self=id();host.client.ready=true;host.client.sendTo=()=>true;
+  const host=fixture('watch');host.self=id();host.client.ready=true;host.client.sendTo=()=>true;
   const guestId=id(),rid=id(),hostAssociation=id(),oldAssociation=id(),newAssociation=id();
   host.room={roomId:rid,hostId:host.self,name:'recovery',game:'watch',capacity:6,members:[{id:host.self,name:'host'},{id:guestId,name:'old occupant'}],status:'watching',round:id(),seq:0};
   host.password='new password';
@@ -157,7 +166,7 @@ await withClock(async()=>{
   const old=membership(10,true,oldAssociation);host.reconcile(old);host.reconcile(membership(11,false));
   assert.deepEqual(host.room.members.map(p=>p.id),[host.self],'authoritative snapshot removes an offline departure');
   let decision,authoritative=membership(11,false);host.client.roomSync=async()=>authoritative;host.client.replyJoin=(_,body)=>decision=body;
-  const request=password=>({control:{roomId:rid,from:guestId},rawBody:new TextEncoder().encode(JSON.stringify({feature:GAMES.watch.feature.slice(16),name:'new occupant',password}))});
+  const request=password=>({control:{roomId:rid,from:guestId},rawBody:new TextEncoder().encode(JSON.stringify({feature:GAMES.watch.feature.slice(16),plugin:GAMES.watch.binding,platform:'web',name:'new occupant',password}))});
   // Reintroduce the stale local cache deliberately: the same ID is only pending,
   // not approved, and must not bypass the current password on a new association.
   host.room.members.push({id:guestId,name:'stale cache'});await host.joinRequest(request('old password'));
@@ -172,7 +181,7 @@ await withClock(async()=>{
 console.log('PASS R1: departed member reconciliation, same-ID fresh admission, stale association snapshot rejected');
 
 await withClock(async({advance})=>{
-  const host=new GameRoom(),guest=new GameRoom();host.self=id();guest.self=id();host.client.ready=guest.client.ready=true;
+  const host=fixture(),guest=fixture();host.self=id();guest.self=id();host.client.ready=guest.client.ready=true;
   host.room={roomId:id(),hostId:host.self,name:'ack recovery',game:'chess',capacity:2,members:[{id:host.self,name:'host',ready:false},{id:guest.self,name:'guest',ready:false}],status:'waiting',seconds:60,round:id(),seq:0,move:0};guest.room=structuredClone(host.room);
   const requests=[],replies=[];let executions=0;const perform=host.perform.bind(host);
   host.perform=(...args)=>{executions++;return perform(...args);};
@@ -192,16 +201,16 @@ await withClock(async({advance})=>{
 });
 console.log('PASS R3: lost acknowledgement, relay retry, exactly-once action and reliable snapshot reply');
 
-const capabilities=['room-sync','room-broadcast','host-grant'];
+const capabilities=['room-sync','room-broadcast','host-grant','room-descriptors'];
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 async function settle(){for(let i=0;i<8;i++)await Promise.resolve();}
 function watchHost(events={}){
-  const game=new GameRoom(events);game.self=id();game.client.ready=true;game.client.identity={clientId:game.self,token:'test',capabilities};game.client.sendTo=()=>true;
+  const game=fixture('watch',events);game.self=id();game.client.ready=true;game.client.identity={clientId:game.self,token:'test',capabilities};game.client.sendTo=()=>true;
   game.room={roomId:id(),hostId:game.self,name:'watch test',game:'watch',capacity:6,members:[{id:game.self,name:'host'}],status:'watching',round:id(),seq:0};
   return game;
 }
 await withClock(async()=>{
-  const game=new GameRoom();assert.equal(game.host,false,'unconnected empty room is never a host');game.client.ready=true;game.client.identity={clientId:id(),token:'legacy',serverVersion:'99.0.0'};
+  const game=fixture('watch');assert.equal(game.host,false,'unconnected empty room is never a host');game.client.ready=true;game.client.identity={clientId:id(),token:'legacy',serverVersion:'99.0.0'};
   let requests=0;game.client.createRoom=game.client.joinRoom=async()=>{requests++;throw Error('must not be called');};
   await assert.rejects(game.create('watch','legacy'),{code:'INCOMPATIBLE_SERVER'});
   await assert.rejects(game.join({roomId:id(),game:'watch'}),{code:'INCOMPATIBLE_SERVER'});
@@ -228,7 +237,7 @@ await withClock(async({advance})=>{
 console.log('PASS recovery: timeout retains room and retries, stale recovery/password response cannot change new room, definitive removal exits');
 
 await withClock(async()=>{
-  const game=watchHost(),joinReply=deferred();game.client.leaveRoom=async()=>{};game.client.joinRoom=()=>joinReply.promise;
+  const game=watchHost(),joinReply=deferred();game.reset();game.client.leaveRoom=async()=>{};game.client.joinRoom=()=>joinReply.promise;
   const target={roomId:id(),game:'watch'},joining=game.join(target),rejected=assert.rejects(joining,{code:'STALE_OPERATION'});await settle();
   game.reset();game.room={roomId:id(),hostId:game.self,game:'watch',members:[{id:game.self}],seq:0};const current=game.room;
   const hostId=id();joinReply.resolve({control:{from:hostId},rawBody:new TextEncoder().encode(JSON.stringify({allowed:true,room:{...target,hostId,members:[{id:game.self}],seq:1}}))});await rejected;
@@ -265,15 +274,18 @@ console.log('PASS Emby lifecycle: host check, successful login, delayed login/se
 
 await withClock(async()=>{
   const descriptor=Object.getOwnPropertyDescriptor(globalThis,'navigator'),request=deferred(),game=watchHost();let stopped=0,created=0;
+  const oldAudio=globalThis.AudioContext,oldDocument=globalThis.document,invoke=__CYBER_TEST_BOOTSTRAP__.invoke;
+  globalThis.document={hidden:false};globalThis.AudioContext=class{resume(){return Promise.resolve();}close(){return Promise.resolve();}createMediaStreamSource(){created++;}audioWorklet={addModule:async()=>{}};};
+  const microphone=new Microphone(()=>{});__CYBER_TEST_BOOTSTRAP__.invoke=method=>method==='microphone.start'?microphone.start():method==='microphone.stop'?microphone.stop():true;
   Object.defineProperty(globalThis,'navigator',{configurable:true,value:{mediaDevices:{getUserMedia:()=>request.promise}}});
   const voice=new RoomVoice(game,()=>{});voice.listen=async()=>{};voice.context={createMediaStreamSource(){created++;return {connect(){}};},close(){return Promise.resolve();}};voice.node={port:{postMessage(){}},disconnect(){}};
-  try{const opening=voice.microphoneToggle();await settle();game.reset();voice.stop();request.resolve({getTracks:()=>[{stop(){stopped++;}}]});await opening;assert.equal(stopped,1,'late permission grant releases its microphone track');assert.equal(created,0);assert.equal(voice.microphone,false);}
-  finally{voice.stop();clearInterval(game.timer);if(descriptor)Object.defineProperty(globalThis,'navigator',descriptor);else delete globalThis.navigator;}
+  try{const opening=voice.microphoneToggle();await settle();game.reset();voice.stop();await settle();request.resolve({getTracks:()=>[{stop(){stopped++;}}]});await opening;assert.equal(stopped,1,'late permission grant releases its microphone track');assert.equal(created,0);assert.equal(voice.microphone,false);}
+  finally{voice.stop();microphone.stop();clearInterval(game.timer);__CYBER_TEST_BOOTSTRAP__.invoke=invoke;globalThis.document=oldDocument;globalThis.AudioContext=oldAudio;if(descriptor)Object.defineProperty(globalThis,'navigator',descriptor);else delete globalThis.navigator;}
 });
 console.log('PASS microphone lifecycle: permission granted after room exit cannot reopen capture and releases device');
 
 await withClock(async()=>{
-  const host=watchHost(),guest=new GameRoom();guest.self=id();host.room={...host.room,game:'chess',status:'playing',seconds:30,move:0,members:[{id:host.self,ready:true},{id:guest.self,ready:true}]};guest.room=structuredClone(host.room);guest.client.ready=true;
+  const host=fixture('chess'),guest=fixture();host.self=id();host.client.ready=true;host.client.sendTo=()=>true;host.room={roomId:id(),hostId:host.self,round:id(),seq:0};guest.self=id();host.room={...host.room,game:'chess',status:'playing',seconds:30,move:0,members:[{id:host.self,ready:true},{id:guest.self,ready:true}]};guest.room=structuredClone(host.room);guest.client.ready=true;
   host.engine=position(5,4,6,-7);host.engine.resetClock(performance.now());
   host.client.sendTo=(rid,to,headers,body)=>{if(headers.type==='state')guest.apply(object(body));return true;};
   host.hostAction(host.self,id(),{round:host.room.round,action:{type:'MOVE',from:5,to:6,move:0}});
@@ -302,7 +314,8 @@ globalThis.NativeRoom={
     queueMicrotask(()=>respond(q,path.endsWith('PlaybackInfo')?{PlaySessionId:'new-session',MediaSources:[{Id:'source',SupportsDirectPlay:true}]}:{}));
   }
 };
-const {WatchRoom}=await import(${JSON.stringify(new URL('../server/src/main/resources/web/watch.js',import.meta.url).href)});
+globalThis.__CYBER_TEST_BOOTSTRAP__={platform:'windows',native:NativeRoom,storage:{}};
+const {WatchRoom}=await import(${JSON.stringify(new URL('../plugins/watch/watch.js',import.meta.url).href)});
 const state={epoch:'new',itemId:'new-movie',position:0,duration:60,version:0,playing:false};
 const room={self:'native-test',room:{game:'watch',playback:state},context:()=> 'room-context',current:c=>c==='room-context',client:{ready:true}};
 const watch=Object.assign(Object.create(WatchRoom.prototype),{room,generation:0,access:{base:'http://emby.test',token:'fixture',userId:'viewer'},session:{id:'old-session',itemId:'old',sourceId:'old-source',liveStreamId:'old-live'},video:{pause(){},removeAttribute(){},load(){}},current:()=>12,rectangle:()=>({}),follow(){},render(){}});
@@ -317,7 +330,7 @@ console.log('PASS native media cleanup: stop before terminal reports, repeated s
 
 await withClock(async()=>{
   const originalPerformance=globalThis.performance;let now=1000;globalThis.performance={now:()=>now};
-  const host=watchHost(),guest=watchHost(),requests=[],replies=[];host.latency=7;
+  const host=watchHost(),guest=watchHost(),requests=[],replies=[];host.latency=7;for(const g of [host,guest]){const old=g.client;g.client=new RoomClient(old.callbacks);g.client.ready=true;g.client.identity=old.identity;}
   host.room.members.push({id:guest.self,name:'guest',udp:true});guest.room=structuredClone(host.room);guest.room.hostId=host.self;
   host.client.sendTo=(rid,to,headers,body,path)=>{requests.push({rid,to,headers,body,path});return true;};guest.client.sendTo=(rid,to,headers,body,path)=>{replies.push({rid,to,headers,body,path});return true;};
   const receive=(game,from,message)=>game.client.receive(packet(64,{roomId:message.rid,from,...message.headers},message.body));
@@ -340,7 +353,7 @@ await withClock(async()=>{
 });
 console.log('PASS member network: real relay RTT, authenticated P2P context, expiry, reconnect/reentry isolation and member departure');
 await withClock(async()=>{
-  const host=watchHost(),guest=id();host.room.game='miner';host.room.status='playing';host.room.capacity=2;host.room.members.push({id:guest,name:'guest'});host.engine=new GoldMine(1,host.room.members);host.engine.finishRound();host.publish();
+  const host=watchHost(),guest=id();host.plugin=GAMES.miner;host.rules=minerRules;host.room.game='miner';host.room.plugin=GAMES.miner.binding;host.room.status='playing';host.room.capacity=2;host.room.members.push({id:guest,name:'guest'});host.engine=new GoldMine(1,host.room.members);host.engine.finishRound();host.publish();
   const round=host.room.round,level=host.engine.level,perform=(who,action)=>host.perform(who,{round,level,action});
   assert.ok(perform(guest,{type:'NEXT'}));assert.ok(perform(guest,{type:'PAUSE'}));
   assert.equal(perform(host.self,{type:'PAUSE'}),null);const left=host.engine.shopTime;host.lastTick=performance.now()-5000;host.tick();assert.equal(host.engine.shopTime,left);

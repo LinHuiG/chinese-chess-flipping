@@ -107,7 +107,7 @@ fn receive(state: &AppState, g: u64, p: Packet) {
     if !state.network.current(g) {
         return;
     }
-    if p.kind == 64 && state.voice.receive(&p, None) {
+    if p.kind == 64 && state.extensions.receive(&p, None) {
         return;
     }
     if let Ok(b) = p.plain() {

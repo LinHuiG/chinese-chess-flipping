@@ -1,5 +1,7 @@
 # 赛博房间 Windows 客户端
 
+> 0.9.0：Windows 宿主不再内置播放器，电影厅 EXE 由插件市场校验后独立下载运行。下面历史媒体说明对应 `plugins/watch/native/windows/` 组件；宿主构建仅 `cargo build --release --features custom-protocol`，组件另用其 Cargo.toml 构建。分发和 API 见 [插件开发指南](../docs/PLUGIN_DEVELOPMENT.md)。
+
 Windows 10/11 x64，Rust + Tauri 2，直接内嵌 `../server/src/main/resources/web`，与 Android/网页共用大厅、玩法和观影界面。运行需要 Microsoft Edge WebView2 Runtime；Windows 安装器配置可下载缺失的运行时，可移植 EXE 不附带运行时。
 
 默认连接 TCP / fqgame.tdcode.tech / 8888；设置保存在当前 Windows 用户的应用配置目录。升级保留设置。原生自有 TCP/WS 协议与 UDP 单播互连不使用 WebRTC/TURN。
