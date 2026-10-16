@@ -23,11 +23,11 @@
 
 0.9.0 插件平台：宿主仅保留基础能力，翻棋、矿工和电影厅从插件市场安装。房间绑定固定插件发布，不支持的端不能进入，更换插件需退出并重建。开发接口、构建及发布见 [插件开发指南](docs/PLUGIN_DEVELOPMENT.md)，历史设计见 [插件平台方案](docs/PLUGIN_PLATFORM_PLAN.md)。本轮验证与发布状态见 [0.9.0 验收](docs/ACCEPTANCE_0_9_0.md)。
 
-0.8.3 本次更新：统一“深空冷域”界面、独立电影片库和完善的播放控制，Windows 接入内嵌原生播放器。本轮检查与真实片源限制见 [0.8.3 验收记录](docs/ACCEPTANCE_0_8_3.md)，包散列见 [执行记录](PROJECT_STATUS.md)，视觉和素材见 [设计归档](docs/design/DEEP_SPACE.md)。电影厅、密码、指定广播和 Windows 客户端的接口见 [实现契约](docs/WATCH_ROOM_IMPLEMENTATION.md)，此前发布的检查边界见 [0.8.2 验收记录](docs/ACCEPTANCE_0_8_2.md) 和 [0.8.1 全功能验收](docs/ACCEPTANCE_0_8_1.md)。
+0.8.3 历史更新：统一“深空冷域”界面、独立电影片库和完善的播放控制，Windows 接入内嵌原生播放器。本轮检查与真实片源限制见 [0.8.3 验收记录](docs/ACCEPTANCE_0_8_3.md)，包散列见 [执行记录](PROJECT_STATUS.md)，视觉和素材见 [设计归档](docs/design/DEEP_SPACE.md)。电影厅、密码、指定广播和 Windows 客户端的接口见 [实现契约](docs/WATCH_ROOM_IMPLEMENTATION.md)，此前发布的检查边界见 [0.8.2 验收记录](docs/ACCEPTANCE_0_8_2.md) 和 [0.8.1 全功能验收](docs/ACCEPTANCE_0_8_1.md)。
 
 ## 开始游戏
 
-0.8.4 已发布并部署默认服务器：修复连续跳转误报片尾、慢加载期间进度不同步、语音恢复，新增房主观影存档、游戏真全屏和 20 秒游戏内商店。验证结果和片源限制见 [验收记录](docs/ACCEPTANCE_0_8_4.md) 与 [执行记录](PROJECT_STATUS.md)。
+0.9.0 已发布并部署默认服务器：翻棋、黄金矿工和电影厅均从签名插件市场独立安装，房间固定插件发布，支持 Web、Android 和 Windows。宿主升级后在“插件市场”选择功能；Android 电影厅另需按系统提示安装官方同签名组件。验证结果和边界见 [验收记录](docs/ACCEPTANCE_0_9_0.md)、[部署记录](docs/DEPLOYMENT_0_9_0.md) 与 [执行记录](PROJECT_STATUS.md)。
 
 ### Android
 
