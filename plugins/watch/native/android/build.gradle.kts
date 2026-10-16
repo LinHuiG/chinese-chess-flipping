@@ -1,9 +1,9 @@
 plugins { id("com.android.application") }
 android {
-    namespace = "com.cyberroom.watch"
+    namespace = "com.cyberroom.watch.v101"
     compileSdk = 37
     defaultConfig {
-        applicationId = "com.cyberroom.watch"
+        applicationId = "com.cyberroom.watch.v101"
         minSdk = 26
         targetSdk = 37
         versionCode = 1

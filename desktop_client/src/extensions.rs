@@ -1,7 +1,6 @@
 //! A verified native package runs as an owned child, with bounded private IPC and room-scoped routing.
 use crate::{wire, AppState};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -110,12 +109,14 @@ impl Session {
 pub struct Manager {
     directory: PathBuf,
     current: Mutex<Option<Arc<Session>>>,
+    download: tokio::sync::Mutex<()>,
 }
 impl Manager {
     pub fn new(directory: PathBuf) -> Self {
         Self {
             directory,
             current: Mutex::new(None),
+            download: tokio::sync::Mutex::new(()),
         }
     }
     fn path(&self, d: &Descriptor) -> PathBuf {
@@ -123,69 +124,17 @@ impl Manager {
             .join("components")
             .join(format!("{}.exe", d.sha256))
     }
-    pub async fn prepare(&self, d: Descriptor, http: &reqwest::Client) -> Result<Value, String> {
-        d.validate()?;
-        let path = self.path(&d);
-        let copy = d.clone();
-        let check = path.clone();
-        if tauri::async_runtime::spawn_blocking(move || matches(&check, &copy))
-            .await
-            .map_err(|_| "组件校验失败")?
-        {
-            return Ok(json!({"ready":true}));
-        }
-        let url = reqwest::Url::parse(&d.url).map_err(|_| "原生组件地址无效")?;
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-        {
-            return Err("原生组件地址无效".into());
-        }
-        fs::create_dir_all(path.parent().unwrap()).map_err(|_| "无法创建组件目录")?;
-        let temporary = path.with_extension(format!("{}.part", rand_core::OsRng.next_u64()));
-        let result = async {
-            let response = http
-                .get(url)
-                .timeout(Duration::from_secs(150))
-                .send()
-                .await
-                .map_err(|_| "原生组件下载失败")?;
-            if !response.status().is_success()
-                || response.content_length().is_some_and(|size| size != d.size)
-            {
-                return Err("原生组件响应无效".into());
-            }
-            let mut file = fs::File::create(&temporary).map_err(|_| "组件写入失败")?;
-            let mut stream = response.bytes_stream();
-            let mut hash = Sha256::new();
-            let mut size = 0;
-            while let Some(bytes) = stream.next().await {
-                let bytes = bytes.map_err(|_| "原生组件下载中断")?;
-                size += bytes.len() as u64;
-                if size > d.size {
-                    return Err("原生组件文件过大".into());
-                }
-                hash.update(&bytes);
-                file.write_all(&bytes).map_err(|_| "组件写入失败")?;
-            }
-            if size != d.size || format!("{:x}", hash.finalize()) != d.sha256 {
-                return Err("原生组件完整性校验失败".into());
-            }
-            file.sync_all().map_err(|_| "组件保存失败")?;
-            drop(file);
-            if path.exists() {
-                if matches(&path, &d) {
-                    return Ok(json!({"ready":true}));
-                }
-                fs::remove_file(&path).map_err(|_| "旧组件文件被占用")?;
-            }
-            fs::rename(&temporary, &path).map_err(|_| "组件保存失败")?;
-            Ok(json!({"ready":true}))
-        }
-        .await;
-        let _ = fs::remove_file(temporary);
-        result
+    pub async fn package(&self,a:crate::download::Artifact,http:&reqwest::Client,progress:impl Fn(Value))->Result<String,String>{
+        let _lock=self.download.lock().await;
+        let path=self.directory.join("packages").join(format!("{}.json",a.sha256));
+        crate::download::fetch(&path,&a,24*1024*1024,http,progress).await?;
+        fs::read_to_string(path).map_err(|_|"插件文本无效".into())
+    }
+    pub async fn prepare(&self,d:Descriptor,http:&reqwest::Client,progress:impl Fn(Value))->Result<Value,String>{
+        d.validate()?;let _lock=self.download.lock().await;
+        let a=crate::download::Artifact{url:d.url.clone(),sha256:d.sha256.clone(),size:d.size};
+        crate::download::fetch(&self.path(&d),&a,200*1024*1024,http,progress).await?;
+        Ok(json!({"ready":true}))
     }
     pub fn activate(&self, state: Arc<AppState>, d: Descriptor) -> Result<Value, String> {
         d.validate()?;

@@ -53,12 +53,27 @@ body.watch-active{background:#0d141c;color:#e7edf3}body.watch-active .topbar{bor
 #watch .watch-subtitle:not(:empty) { background:#0009; padding:3px 8px; width:fit-content; max-width:86%; margin:auto; }
 @media(max-width:380px) { #watch .watch-setting-grid{grid-template-columns:minmax(0,1fr)} #watch .watch-settings summary span { display:block; margin:5px 0 0; } }
 #watch .watch-screen { position:relative; width:100%; height:100%; overflow:hidden; background:#05090d; }
-#watch .watch-stage:fullscreen { display:flex; flex-direction:column; overflow:hidden; }
-#watch .watch-stage:fullscreen .watch-screen { flex:1; min-height:100px; height:auto; }
-#watch .watch-stage:fullscreen .cinema-playback { flex:0 1 auto; max-height:48dvh; overflow:auto; margin:0; padding:12px max(16px,env(safe-area-inset-right)) 12px max(16px,env(safe-area-inset-left)); background:#0d151c; border-top:1px solid #293943; }
-#watch .watch-stage:fullscreen .watch-controls { margin-top:7px; }
-#watch .watch-stage:fullscreen .watch-setting-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
-@media(max-width:540px) { #watch .watch-stage:fullscreen .watch-setting-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+/* The picture keeps the full viewport; controls overlay it rather than resize it. */
+#watch .watch-stage:fullscreen{display:block;width:100vw;height:100dvh;border:0;border-radius:0;background:#000}
+#watch .watch-stage:fullscreen .watch-screen{width:100%;height:100%;min-height:0}
+#watch .watch-stage:fullscreen .cinema-playback{position:absolute;z-index:12;inset:auto 0 0;margin:0;border:0;padding:24px max(24px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(24px,env(safe-area-inset-left));background:linear-gradient(transparent,#081019ee 35%);max-height:85dvh;overflow:auto;opacity:1;transition:opacity .18s}
+#watch .watch-stage:fullscreen.controls-hidden{cursor:none}
+#watch .watch-stage:fullscreen.controls-hidden .cinema-playback{opacity:0;visibility:hidden;pointer-events:none}
+#watch .watch-stage:fullscreen .watch-setting-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+#watch .watch-progress{flex-direction:row-reverse;gap:16px}
+#watch .watch-controls{gap:8px;align-items:center}
+#watch .watch-controls button{min-height:44px;border-radius:10px;font-size:13px;padding:8px 14px}
+#watch #watch-play{min-width:62px;background:#d5ecf3;color:#14232e}
+#watch #watch-back,#watch #watch-forward{font-size:18px;font-variant-numeric:tabular-nums;min-width:54px;color:#e4edf3}
+#watch #watch-fullscreen{margin-left:auto;padding:8px 14px}
+#watch .watch-controls button:hover:not(:disabled){background:#c3e3ee26;color:#fff}
+#watch .watch-settings summary{list-style:none;display:flex;justify-content:space-between;align-items:center}
+#watch .watch-settings summary::after{content:'⌄';color:#a8c6d7}
+#watch .watch-settings[open] summary::after{content:'⌃'}
+#watch .watch-stage:fullscreen .watch-subtitle{bottom:20%}
+#watch .watch-stage:fullscreen.controls-hidden .watch-subtitle{bottom:6%}
+@media(max-width:600px){#watch .watch-controls{gap:4px}#watch .watch-controls button{font-size:12px;padding:8px 10px}#watch #watch-volume{flex:0 1 64px;min-width:48px}#watch #watch-join{font-size:11px}#watch .watch-stage:fullscreen .cinema-playback{padding:16px 12px 12px}#watch .watch-stage:fullscreen .watch-setting-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(prefers-reduced-motion:reduce){#watch .cinema-playback{transition:none!important}}
 /* Connection measurements are relative to this device, separate from server RTT. */
 .member-path{display:block;margin-top:5px;font-size:10px;line-height:1.45;font-variant-numeric:tabular-nums;color:var(--muted);white-space:normal;overflow-wrap:anywhere}
 .member-path[data-path=direct]{color:#83d5ba}.member-path[data-path=self]{color:#8aa7ba}.member-path[data-path=offline]{color:#d6ad80}
@@ -472,3 +487,11 @@ dialog::backdrop { background: #03080dd4; backdrop-filter: blur(5px); }
 }
 
 body{padding:0}main{margin:0 auto;padding:16px;max-width:1440px}body.mine-active main{padding:0}.plugin-toolbar{display:flex;justify-content:space-between;padding:8px 16px}
+/* Settings live behind one familiar control, leaving the picture uncluttered. */
+#watch .cinema-playback{position:relative}#watch .watch-controls .watch-settings{margin:0;padding:0;border:0;background:transparent}
+#watch .watch-settings summary{min-height:44px;padding:10px 13px;display:flex;gap:8px;align-items:center;border-radius:10px;font-size:13px;color:#cbdce7}
+#watch .watch-settings summary:hover{background:#ffffff0d}#watch .watch-settings summary::after{display:none}
+#watch .watch-settings-panel{position:absolute;z-index:15;right:12px;top:100%;width:min(540px,calc(100% - 24px));padding:16px 20px;background:#14212e;border:1px solid #435665;border-radius:12px;box-shadow:0 14px 40px #0007}
+#watch .watch-stage:fullscreen .watch-settings{position:static}#watch .watch-stage:fullscreen .watch-settings-panel{top:auto;bottom:80px;max-height:calc(100dvh - 120px);overflow:auto}
+#watch .watch-stage:fullscreen .cinema-playback{overflow:visible}#watch .watch-setting-grid{margin-top:0}#watch-key-hint{font-size:12px;color:#b9dce8}
+#watch .watch-stage:fullscreen .watch-settings-panel .watch-setting-grid{grid-template-columns:repeat(2,minmax(0,1fr))}

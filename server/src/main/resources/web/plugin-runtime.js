@@ -11,7 +11,7 @@ export class PluginRuntime{
   async open(installed,command){if(this.active||this.opening)throw Error('请先退出当前插件');const opening=this.opening={};opening.done=new Promise(resolve=>opening.resolve=resolve);try{const {record,payload}=installed,m=record.manifest,frame=document.createElement('iframe');
     const component=record.artifacts[platform()]?.native;
     let activation;if(component){activation=await nativeCall('extensionActivate',JSON.stringify(component));if(typeof activation==='string')activation=JSON.parse(activation);}if(opening.cancelled){if(component)await nativeCall('extensionClose');throw Error('插件启动已取消');}
-    frame.id='plugin-frame';frame.title=m.name;frame.sandbox='allow-scripts allow-forms';frame.allow='fullscreen; autoplay';frame.allowFullscreen=true;
+    frame.id='plugin-frame';frame.title=m.name;frame.sandbox='allow-scripts allow-forms allow-orientation-lock';frame.allow='fullscreen *; autoplay *; screen-wake-lock *';frame.allowFullscreen=true;
     const a=this.active={componentSession:activation?.session,record,binding:binding(record),frame,roomId:null,authorized:new Set(),peers:new Map(),pending:new Map(),closed:false,inflight:0,storageKey:'cyber.plugin.data.'+record.id,command};
     a.microphone=new Microphone((value,transfer=[])=>{if(this.active===a)a.port.postMessage({event:'audio-input',value},transfer);});
     const savedValues=storageGet(a.storageKey,{}),values=savedValues&&typeof savedValues==='object'&&!Array.isArray(savedValues)?savedValues:{};if(migrateLegacyData(record.id,values))storageSet(a.storageKey,values);

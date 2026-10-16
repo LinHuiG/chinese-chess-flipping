@@ -30,7 +30,7 @@ public final class GameService extends Service {
     private MutableContextWrapper webContext;private volatile boolean destroyed;private NativeBridge nativeBridge;
     private final java.util.Map<String,SecureStore> secureStores=new java.util.HashMap<>();
     private synchronized SecureStore secureStore(String namespace){return secureStores.computeIfAbsent(namespace,key->new SecureStore(this,key));}
-    private MainActivity webActivity;private FrameLayout webParent;private View fullscreenView,fullscreenExit;private WebChromeClient.CustomViewCallback fullscreenCallback;
+    private MainActivity webActivity;private FrameLayout webParent;private View fullscreenView;private WebChromeClient.CustomViewCallback fullscreenCallback;
     private static final String ORIGIN="appassets.androidplatform.net";
     @Override public void onCreate(){
         super.onCreate();
@@ -54,18 +54,11 @@ public final class GameService extends Service {
             @Override public void onShowCustomView(View view,CustomViewCallback callback){
                 if(webActivity==null||webParent==null||fullscreenView!=null){callback.onCustomViewHidden();return;}
                 fullscreenView=view;fullscreenCallback=callback;web.setVisibility(View.INVISIBLE);
-                web.clearFocus();webParent.addView(view,new FrameLayout.LayoutParams(-1,-1));view.setFocusableInTouchMode(true);view.requestFocus();webActivity.fullscreen(true);
+                web.clearFocus();webParent.addView(view,new FrameLayout.LayoutParams(-1,-1));view.setFocusableInTouchMode(true);view.requestFocus();webActivity.fullscreen(true,extension.active());
                 // The video is rendered by Media3, so keep its texture and danmaku above
                 // Chromium's full-screen view; shared fullscreenchange supplies new bounds.
                 extension.attach(webParent);
-                // DOM games keep their own controls. Only the native movie texture needs
-                // an Android exit button above it; do not cover a game's full-screen HUD.
-                web.evaluateJavascript("document.fullscreenElement?.id",target->{
-                    if(fullscreenView!=view||!extension.active()||webActivity==null)return;
-                    android.widget.Button exit=new android.widget.Button(webActivity);exit.setText("退出全屏");exit.setTextColor(android.graphics.Color.WHITE);exit.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xcc333333));exit.setOnClickListener(v->back());
-                    float density=getResources().getDisplayMetrics().density;exit.setElevation(16*density);
-                    FrameLayout.LayoutParams button=new FrameLayout.LayoutParams(-2,-2,android.view.Gravity.TOP|android.view.Gravity.END);button.topMargin=button.rightMargin=Math.round(12*density);webParent.addView(exit,button);fullscreenExit=exit;
-                });
+
             }
             @Override public void onHideCustomView(){leaveFullscreen();}
         });
@@ -112,7 +105,6 @@ public final class GameService extends Service {
     private void leaveFullscreen(){
         if(fullscreenView==null)return;
         View view=fullscreenView;WebChromeClient.CustomViewCallback callback=fullscreenCallback;fullscreenView=null;fullscreenCallback=null;
-        if(fullscreenExit!=null&&fullscreenExit.getParent() instanceof ViewGroup)((ViewGroup)fullscreenExit.getParent()).removeView(fullscreenExit);fullscreenExit=null;
         if(view.getParent() instanceof ViewGroup)((ViewGroup)view.getParent()).removeView(view);
         web.setVisibility(View.VISIBLE);if(webActivity!=null)webActivity.fullscreen(false);
         if(callback!=null)callback.onCustomViewHidden();
@@ -195,6 +187,7 @@ public final class GameService extends Service {
         @JavascriptInterface public boolean sendPeer(String id,String encoded){try{return udp!=null&&encoded.length()<=100000&&udp.send(id,Base64.getDecoder().decode(encoded));}catch(Exception e){return false;}}
         @JavascriptInterface public void closePeers(){if(udp!=null)udp.clear();}
         @JavascriptInterface public void roomActive(String name){onMain(()->activeRoom=name);}
+        @JavascriptInterface public String marketDownload(String text)throws Exception{return extension.downloadPackage(text);}
         @JavascriptInterface public String extensionPrepare(String text)throws Exception{return extension.prepare(text);}
         @JavascriptInterface public String extensionActivate(String text)throws Exception{return extension.activate(text);}
         @JavascriptInterface public Object extensionCall(String text)throws Exception{return extension.call(text);}

@@ -39,6 +39,7 @@
     extensionClose: () => call('extensionClose'),
     checkUpdate: () => call('checkUpdate'),
     installUpdate: () => call('checkUpdate'),
+    marketDownload: descriptor => call('marketDownload',descriptor),
     marketFetch: (url,limit) => call('marketFetch',url,limit),
     exitApp: () => call('exitApp')
   };

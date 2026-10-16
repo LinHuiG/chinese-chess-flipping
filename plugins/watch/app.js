@@ -1,12 +1,15 @@
-import {$,text,element,toast,fail,confirm,mount,memberBadge,fullscreen} from '../../plugin_sdk/ui.js';
+import {$,text,element,toast,fail,confirm,mount,memberBadge} from '../../plugin_sdk/ui.js';
 import {native,nativeCall,storageGet,storageSet,asset} from '../../plugin_sdk/transport.js';
+import {playerUI} from './player-ui.js';
+import {playerWake} from './player-wake.js';
 import {rules} from './rules.js';
 import {WatchRoom,episodeLabel,episodeCode} from './watch.js';
 // The player dependency belongs to this plugin, never to the host page.
 if(!native?.playerCommand)await new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=asset('vendor/hls.min.js');script.onload=resolve;script.onerror=()=>reject(Error('电影厅播放组件加载失败'));document.head.append(script);});
 let watch,embyContext='',embyRequest=0;
 const game=mount(rules,{render(){if(embyContext&&(!game.current(embyContext)||!game.host)){embyContext='';embyRequest++;posterAccess=null;posterCache.clear();$('emby-dialog').close();$('library-dialog').close();$('emby-user').value='';$('emby-password').value='';$('emby-share').checked=false;$('emby-items').replaceChildren();}document.body.classList.toggle('watch-active',!!game.room);watch?.render();},event:e=>watch?.event(e)});
-watch=new WatchRoom(game,toast);
+watch=new WatchRoom(game,toast);watch.ui=playerUI(watch,fail);
+if(!native?.playerCommand)playerWake(watch.video,toast);
 $('watch-join').onclick=async()=>{try{watch.unlockMedia();await watch.voice.listen();await watch.follow(true);if(!game.host)watch.requestSync();}catch(e){fail(e);}};
 $('watch-mic').onclick=()=>watch.voice.microphoneToggle().catch(fail);
 $('watch-play').onclick=()=>watch.control(!game.room?.playback?.playing).catch(fail);
@@ -19,7 +22,8 @@ $('watch-mute').onclick=()=>{watch.setMuted(!watch.muted);watch.unlockMedia();};
 $('watch-volume').oninput=()=>watch.setVolume($('watch-volume').value);
 $('watch-volume').onchange=()=>watch.saveHost();
 $('watch-retry').onclick=()=>{watch.unlockMedia();watch.reload().catch(fail);};
-$('watch-fullscreen').onclick=()=>{const stage=$('watch-stage');if(document.fullscreenElement)document.exitFullscreen?.();else stage.requestFullscreen?.().catch(fail);};
+$('watch-back').onclick=()=>watch.skip(-10).catch(fail);
+$('watch-forward').onclick=()=>watch.skip(30).catch(fail);
 $('danmaku-form').onsubmit=e=>{e.preventDefault();watch.sendChat($('danmaku-text').value).catch(fail);$('danmaku-text').value='';};
 // Source management and browsing are separate screens. Credentials stay in memory.
 let libraryRequest=0,libraryType='Movie',libraryTerm='',libraryPath=[],libraryItems=[],libraryTotal=0,libraryOffset=0,libraryShown=0,libraryBusy=false,libraryRetry;

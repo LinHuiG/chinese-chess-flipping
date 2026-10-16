@@ -30,7 +30,7 @@ final class NativeBridge implements AutoCloseable {
             try{
                 String raw=message.getData();if(raw==null||raw.length()>5*1024*1024)return;
                 JSONObject q=new JSONObject(raw);long id=q.getLong("id");String name=q.getString("method");JSONArray args=q.getJSONArray("args");
-                try{(name.equals("marketFetch")||name.equals("extensionPrepare")?downloads:workers).execute(()->{
+                try{(name.equals("marketFetch")||name.equals("marketDownload")||name.equals("extensionPrepare")?downloads:workers).execute(()->{
                     Object result=null;String error=null;
                     try{
                         if(name.equals("marketFetch"))result=fetch(args.getString(0),args.getInt(1));

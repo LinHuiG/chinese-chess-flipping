@@ -7,12 +7,14 @@
 #include <dcomp.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <deque>
 #include <string>
 
 using Microsoft::WRL::ComPtr;
 namespace {
+std::atomic<bool> interacted{false};
 constexpr wchar_t WINDOW_CLASS[] = L"CyberRoomMediaViewport";
 constexpr float WIDTH = 1280.f, HEIGHT = 720.f;
 struct Bullet {
@@ -171,6 +173,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
     }
     // This viewport and its overlays must not steal keyboard focus from the
     // WebView controls. It also leaves scrolling/click gestures to the parent.
+    if (message == WM_MOUSEMOVE || message == WM_LBUTTONUP) interacted.store(true, std::memory_order_relaxed);
     if (message == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     return DefWindowProcW(hwnd, message, wparam, lparam);
 }
@@ -195,7 +198,8 @@ extern "C" int cyber_media_danmaku_add(void* window, const wchar_t* id, const wc
 extern "C" void cyber_media_danmaku_clear(void* window) {
     if (auto* state = viewport(static_cast<HWND>(window))) state->clear();
 }
-extern "C" void cyber_media_window_bounds(void* window, int x, int y, int width, int height, int visible) {
+extern "C" void cyber_media_window_bounds(void* window, int x, int y, int width, int height, int clip_height, int visible) {
+    SetWindowRgn(static_cast<HWND>(window),CreateRectRgn(0,0,width,std::clamp(clip_height,0,height)),TRUE);
     SetWindowPos(static_cast<HWND>(window), HWND_TOP, x, y, width, height,
         SWP_NOACTIVATE | (visible ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
 }
@@ -205,5 +209,19 @@ extern "C" void cyber_media_window_visible(void* window) {
 }
 extern "C" void cyber_media_window_destroy(void* window) { DestroyWindow(static_cast<HWND>(window)); }
 
+extern "C" int cyber_media_interaction(void* window) {
+    // mpv can own a child HWND, whose mouse messages do not reach our WndProc.
+    // Sample on the existing player tick, restricted to the foreground viewport.
+    static thread_local POINT previous{};
+    static thread_local bool pressed = false;
+    POINT point{}; GetCursorPos(&point);
+    bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+    bool changed = point.x != previous.x || point.y != previous.y || (down && !pressed);
+    previous = point; pressed = down;
+    HWND hwnd = static_cast<HWND>(window), hit = WindowFromPoint(point);
+    bool within = hwnd && IsWindowVisible(hwnd) && GetAncestor(hwnd, GA_ROOT) == GetForegroundWindow()
+        && (hit == hwnd || IsChild(hwnd, hit));
+    return interacted.exchange(false, std::memory_order_relaxed) || (changed && within) ? 1 : 0;
+}
 extern "C" void cyber_media_ui_init() { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
 extern "C" void cyber_media_ui_pump() { MSG msg; while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)){TranslateMessage(&msg);DispatchMessageW(&msg);} }

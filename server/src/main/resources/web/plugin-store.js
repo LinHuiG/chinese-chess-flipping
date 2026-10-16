@@ -1,3 +1,4 @@
+import {downloadPackage} from './plugin-download.js';
 import {native,nativeCall,storageGet} from './transport.js';
 import {validateManifest,validateRelease,incompatibility,PACKAGE_LIMIT} from './plugin-package.js';
 const enc=new TextEncoder(),decode64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
@@ -29,10 +30,29 @@ export class PluginStore{
   async prepareNative(record){const component=record.artifacts[platform()]?.native;if(!component)return;const q={...component,url:new URL(component.path,marketURL()).href};const result=JSON.parse(await nativeCall('extensionPrepare',JSON.stringify(q)));if(!result.ready)throw Error('请在系统界面允许并安装原生组件，然后返回这里重试');}
   async find(id,release){const list=this.catalog?.releases||[];return release?list.find(r=>r.id===id&&r.release===release):this.latest().find(r=>r.id===id);}
   async install(record){validateRelease(record);this.trusted(record);return this.lock(record.id,async()=>{const error=incompatibility(record.manifest,platform());if(error)throw Error(error);const a=record.artifacts[platform()],key=record.id+'@'+record.release;
-    let saved=await this.get('packages',key);if(saved&&(JSON.stringify(saved.record)!==JSON.stringify(record)||await digest(saved.raw)!==a.sha256))saved=null;if(!saved){const raw=await this.fetch(a.path,a.size);if(enc.encode(raw).length!==a.size||await digest(raw)!==a.sha256)throw Error('插件文件校验失败');const payload=JSON.parse(raw);validateManifest(payload.manifest);if(JSON.stringify(payload.manifest)!==JSON.stringify(record.manifest)||typeof payload.script!=='string'||typeof payload.html!=='string'||typeof payload.style!=='string')throw Error('插件包与发布信息不一致');saved={record,raw};await this.put('packages',key,saved);}
-    // A single transaction publishes the installed pointer only after the full package is durable.
-    await this.prepareNative(record);this.trusted(record);await this.select(record.id,record.release);return this.load(record.id,record.release);});
+    const total=a.size+(a.native?.size||0);let loaded=0,phase='下载插件';
+    const report=(received)=>{loaded=received;this.onProgress?.({id:record.id,name:record.manifest.name,received,total,phase});};
+    const nativeProgress=e=>{const q=e.detail;if(q?.type!=='pluginDownload'||!Number.isFinite(q.received))return;if(q.sha256===a.sha256)report(Math.min(a.size,q.received));else if(q.sha256===a.native?.sha256)report(a.size+Math.min(a.native.size,q.received));};
+    globalThis.addEventListener?.('native-room',nativeProgress);
+    try{
+      report(0);let saved=await this.get('packages',key);if(saved&&(JSON.stringify(saved.record)!==JSON.stringify(record)||await digest(saved.raw)!==a.sha256))saved=null;
+      if(!saved){
+        const url=new URL(a.path,marketURL());let raw;
+        if(native){if(!native.marketDownload)throw Error('请更新客户端以支持插件下载进度和续传');raw=await nativeCall('marketDownload',JSON.stringify({...a,url:url.href}));}
+        else raw=await downloadPackage(url,a,this,n=>report(n));
+        phase='校验插件';report(a.size);
+        if(typeof raw!=='string'||enc.encode(raw).length!==a.size||await digest(raw)!==a.sha256){await this.put('state','partial:'+a.sha256,null);throw Error('插件文件校验失败，请重新下载');}
+        const payload=JSON.parse(raw);validateManifest(payload.manifest);if(JSON.stringify(payload.manifest)!==JSON.stringify(record.manifest)||typeof payload.script!=='string'||typeof payload.html!=='string'||typeof payload.style!=='string')throw Error('插件包与发布信息不一致');
+        saved={record,raw};await this.put('packages',key,saved);await this.put('state','partial:'+a.sha256,null);
+      }
+      phase=a.native?'下载播放组件':'安装插件';report(a.size);
+      // Publish only after the package and its native component have both passed verification.
+      await this.prepareNative(record);this.trusted(record);await this.select(record.id,record.release);const result=await this.load(record.id,record.release);phase='安装完成';report(total);return result;
+    }catch(error){this.onProgress?.({id:record.id,name:record.manifest.name,received:loaded,total,phase:'下载未完成',error:error.message});throw error;}
+    finally{globalThis.removeEventListener?.('native-room',nativeProgress);}
+    });
   }
+
   async load(id,release){release??=(await this.installed())[id];if(!release)return null;const saved=await this.get('packages',id+'@'+release);if(!saved)return null;validateRelease(saved.record);
     const known=this.catalog?.releases.find(r=>r.id===id&&r.release===release);if(known?.revoked)throw Error('该插件版本已停止使用');if(!known||JSON.stringify(known)!==JSON.stringify(saved.record))throw Error('缺少该插件的有效签名记录，请刷新市场');const error=incompatibility(known.manifest,platform());if(error)throw Error(error);
     if(await digest(saved.raw)!==saved.record.artifacts[platform()].sha256)throw Error('本地插件文件损坏，请重新安装');return {record:saved.record,payload:JSON.parse(saved.raw)};

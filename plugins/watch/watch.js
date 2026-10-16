@@ -43,7 +43,7 @@ export class WatchRoom {
     this.video.addEventListener('waiting',()=>{this.buffering=true;this.render();});
     this.timer=setInterval(()=>this.pulse(),1000);this.resize=new ResizeObserver(()=>this.bounds());this.resize.observe($('watch-stage'));this.resize.observe($('watch-screen'));
     this.subtitleTimer=setInterval(()=>this.paintSubtitle(),100);
-    window.addEventListener('scroll',()=>this.bounds(),{passive:true});document.addEventListener('fullscreenchange',()=>{const stage=$('watch-stage'),controls=document.querySelector('.cinema-playback');if(document.fullscreenElement===stage)stage.append(controls);else stage.after(controls);$('watch-fullscreen').textContent=document.fullscreenElement===stage?'退出全屏 ↙':'全屏 ↗';this.bounds();});
+    window.addEventListener('scroll',()=>this.bounds(),{passive:true});
     new MutationObserver(()=>this.bounds()).observe(document.body,{subtree:true,attributes:true,attributeFilter:['open']});
     // Listening is a room action, independent of starting a film or opening the mic.
     // A later gesture also recovers an AudioContext suspended by the browser.
@@ -183,6 +183,9 @@ export class WatchRoom {
       openedSession.transcoded=transcoded;
       if(transcoded&&loading.seeked){await this.endSession(openedSession,access,start);openedSession=null;if(this.validContext(context,generation))return this.load(this.room.room.playback);return;}
       const url=new URL(stream,access.base.replace(/\/$/,'')+'/');if(url.origin!==new URL(access.base).origin)throw Error('片源返回了其他站点地址，无法安全共享授权');
+      // PlaybackInfo may return a zero-based URL. The actual stream request must
+      // match our timeline offset, including after every transcoded seek.
+      if(transcoded){for(const key of [...url.searchParams.keys()])if(key.toLowerCase()==='starttimeticks')url.searchParams.delete(key);url.searchParams.set('StartTimeTicks',Math.round(start*tick));}
       if(!url.searchParams.has('api_key'))url.searchParams.set('api_key',access.token);url.searchParams.set('DeviceId',this.room.self);
       this.session=openedSession;openedSession=null;this.offset=transcoded?start:0;this.url=url.href;this.updateDuration(Number(source.RunTimeTicks||0)/tick);
       if(this.nativePlayer){this.playbackId=id();const seek=this.beginSeek(start);await nativeCall('playerCommand',JSON.stringify({url:this.url,playbackId:this.playbackId,seekId:seek.id,positionMs:Math.max(0,start-this.offset)*1000,playing:false,rate:playbackRate(state),volume:this.volume,muted:this.muted,visible:this.playerVisible(),bounds:this.rectangle(),...(this.directTracks?{audioStreamIndex:this.audioIndex,subtitleStreamIndex:-1,mediaTracks:this.mediaTracks()}:this.nativeTracks?{subtitleStreamIndex:-1}:{})}));}
@@ -215,6 +218,8 @@ export class WatchRoom {
     if(!this.validContext(context)||this.room.room.playback!==state)return;await this.follow(true);if(!this.validContext(context))return;this.scheduleHostSave();await this.send('watch.state',state);if(!this.validContext(context))return;this.room.checkpoint();
   }
   async event(e){
+    if(e.type==='playerInteraction'){this.ui?.wake();return;}
+    if(e.type==='reset')this.ui?.reset();
     if(e.type==='leaving'){await this.saveHost();return;}
     if(e.type==='reset'){this.loginOperation=(this.loginOperation||0)+1;this.ownedSource=null;this.restoring=false;this.restoreTracks=null;this.voice.stop();const stopping=this.stopMedia();this.access=null;this.room.mediaAccess=null;this.epoch='';this.error='';this.subtitleError='';this.tracks=[];this.loading=false;this.waiting=false;this.lastSync=undefined;this.hostOffset=this.bestRtt=undefined;this.chatSeen?.clear();$('danmaku').replaceChildren();$('emby-dialog').close();$('library-dialog').close();$('emby-user').value='';$('emby-password').value='';$('emby-share').checked=false;$('emby-items').replaceChildren();await stopping;return;}
     if(!this.active)return;
@@ -291,8 +296,9 @@ export class WatchRoom {
     })();
     this.stopping=stopping;try{await stopping;}finally{if(this.stopping===stopping)this.stopping=null;}
   }
-  rectangle(){const r=$('watch-screen').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}
-  playerVisible(){if(!this.active||this.room.background||desktopPlayback()&&!this.session||globalThis.document?.querySelector('dialog[open]'))return false;const r=this.rectangle();return r.width>0&&r.height>0&&r.x+r.width>0&&r.y+r.height>0&&r.x<(globalThis.innerWidth||Infinity)&&r.y<(globalThis.innerHeight||Infinity);}
+  rectangle(){const r=$('watch-screen').getBoundingClientRect(),stage=$('watch-stage'),bar=document.querySelector('.cinema-playback');const clipHeight=document.fullscreenElement===stage&&!stage.classList.contains('controls-hidden')?Math.max(0,Math.min(bar.getBoundingClientRect().top,...(bar.querySelector('details').open?[bar.querySelector('.watch-settings-panel').getBoundingClientRect().top]:[]))-r.top):r.height;return {x:r.x,y:r.y,width:r.width,height:r.height,clipHeight};}
+  async skip(seconds){const state=this.room.room?.playback;if(!this.room.host||!state||this.loading||!this.url)return;const end=state.duration||this.duration||Infinity;await this.control(!!state.playing,Math.max(0,Math.min(end,this.current()+seconds)));}
+  playerVisible(){if(!this.active||this.room.background||desktopPlayback()&&!this.session||globalThis.document?.querySelector('dialog[open]')||globalThis.document?.querySelector('.watch-settings[open]')&&globalThis.document?.fullscreenElement!==$('watch-stage'))return false;const r=this.rectangle();return r.width>0&&r.height>0&&r.x+r.width>0&&r.y+r.height>0&&r.x<(globalThis.innerWidth||Infinity)&&r.y<(globalThis.innerHeight||Infinity);}
   bounds(){if(this.active&&this.nativePlayer)nativeCall('playerCommand',JSON.stringify({visible:this.playerVisible(),bounds:this.rectangle()}));}
   showError(message){this.error=message;this.render();}
   render(){
@@ -300,6 +306,7 @@ export class WatchRoom {
     if(!r.playback&&this.url)this.stopMedia().catch(()=>{});
     $('watch-name').textContent=r.name;$('watch-title').textContent=r.playback?.title||'挑一部电影，朋友随时入座';$('watch-count').textContent=r.members.length+'/6 人';
     $('watch-source').hidden=!this.room.host;$('watch-library').hidden=!this.room.host;$('watch-library').textContent=this.access?.token?(r.playback?'更换影片':'浏览片库'):'连接片源';$('watch-play').hidden=!this.room.host;$('watch-seek').disabled=!this.room.host||!r.playback||this.loading;$('watch-empty').hidden=!!r.playback;
+    for(const id of ['watch-back','watch-forward']){const b=$(id);if(b){b.hidden=!this.room.host;b.disabled=!r.playback||this.loading||!this.url;}}
     $('watch-play').textContent=r.playback?.playing?'暂停':'播放';$('watch-play').disabled=!r.playback||this.loading||!this.url;
     $('watch-join').textContent=r.playback?'加入观影 / 开启声音':'开启语音收听';$('danmaku-text').placeholder=r.playback?'说说这个镜头…':'发条弹幕，和朋友聊聊…';
     $('watch-seek').max=String(r.playback?.duration||this.duration||1);if(document.activeElement!==$('watch-seek'))$('watch-seek').value=String(this.current());

@@ -6,7 +6,7 @@ import android.view.*;
 import android.widget.FrameLayout;
 
 public final class MainActivity extends Activity {
-    private GameService service;private FrameLayout content;private boolean resumed,fullscreen;private int previousBarsBehavior;
+    private GameService service;private FrameLayout content;private boolean resumed,fullscreen;private int previousBarsBehavior,previousOrientation;
     private android.window.OnBackInvokedCallback fullscreenBack;
     private final ServiceConnection binding=new ServiceConnection(){
         @Override public void onServiceConnected(ComponentName name,IBinder binder){
@@ -28,7 +28,10 @@ public final class MainActivity extends Activity {
         if(Build.VERSION.SDK_INT>=37)requestPermissions(new String[]{"android.permission.ACCESS_LOCAL_NETWORK"},1);
         if(Build.VERSION.SDK_INT>=33){fullscreenBack=()->{if(service!=null)service.back();};getOnBackInvokedDispatcher().registerOnBackInvokedCallback(0,fullscreenBack);}
     }
-    void fullscreen(boolean value){
+    void fullscreen(boolean value){fullscreen(value,false);}
+    void fullscreen(boolean value,boolean landscape){
+        if(value&&!fullscreen){previousOrientation=getRequestedOrientation();if(landscape)setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);}
+        if(!value&&fullscreen)setRequestedOrientation(previousOrientation);
         fullscreen=value;
         if(Build.VERSION.SDK_INT>=33){getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(fullscreenBack);getOnBackInvokedDispatcher().registerOnBackInvokedCallback(value?android.window.OnBackInvokedDispatcher.PRIORITY_OVERLAY:android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,fullscreenBack);}
         if(value)getSystemService(android.view.inputmethod.InputMethodManager.class).hideSoftInputFromWindow(content.getWindowToken(),0);

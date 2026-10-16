@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+mod download;
 mod extensions;
 mod lifecycle;
 mod network;
@@ -130,6 +131,10 @@ async fn native_call(
             };
             state.secure_store.write(string(&args, 0)?, text)?;
             Ok(json!(true))
+        }
+        "marketDownload" => {
+            let artifact=parse_arg(&args,0)?;
+            Ok(json!(state.extensions.package(artifact,&state.http,|event|state.event(event)).await?))
         }
         "marketFetch" => {
             let url = reqwest::Url::parse(string(&args, 0)?).map_err(|_| "插件地址无效")?;
@@ -271,7 +276,7 @@ async fn native_call(
             let descriptor = parse_arg(&args, 0)?;
             Ok(json!(state
                 .extensions
-                .prepare(descriptor, &state.http)
+                .prepare(descriptor, &state.http, |event|state.event(event))
                 .await?
                 .to_string()))
         }

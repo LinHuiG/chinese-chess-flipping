@@ -59,7 +59,8 @@ public final class MediaController implements AutoCloseable {
     private FrameLayout.LayoutParams layout(){FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(width,height);p.leftMargin=x;p.topMargin=y;return p;}
     private void ensureOverlay(){
         if(container==null){
-            container=new FrameLayout(context);container.setClipChildren(true);container.setBackgroundColor(Color.BLACK);
+            container=new FrameLayout(context){@Override public boolean dispatchTouchEvent(android.view.MotionEvent e){android.graphics.Rect clip=getClipBounds();if(clip!=null&&!clip.contains((int)e.getX(),(int)e.getY()))return false;return super.dispatchTouchEvent(e);}};container.setClipChildren(true);
+            container.setOnTouchListener((v,e)->{if(e.getActionMasked()==android.view.MotionEvent.ACTION_UP){try{events.accept(new JSONObject().put("type","playerInteraction"));}catch(JSONException ignored){}}return true;});container.setBackgroundColor(Color.BLACK);
             video=new TextureView(context);container.addView(video,new FrameLayout.LayoutParams(-1,-1));subtitleView=new SubtitleView(context);subtitleView.setFractionalTextSize(.05f);container.addView(subtitleView,new FrameLayout.LayoutParams(-1,-1));danmaku=new Danmaku(context);container.addView(danmaku,new FrameLayout.LayoutParams(-1,-1));
             if(parent!=null)parent.addView(container,layout());
         }
@@ -155,7 +156,7 @@ public final class MediaController implements AutoCloseable {
             JSONObject bounds=q.optJSONObject("bounds");
             // DOM viewport coordinates become negative while scrolling. Preserve them:
             // the host clips the offscreen portion instead of pinning the video to its top.
-            if(bounds!=null){ensureOverlay();float density=context.getResources().getDisplayMetrics().density;x=Math.round((float)bounds.optDouble("x")*density);y=Math.round((float)bounds.optDouble("y")*density);width=Math.max(1,Math.round((float)bounds.optDouble("width",1)*density));height=Math.max(1,Math.round((float)bounds.optDouble("height",1)*density));container.setLayoutParams(layout());if(player!=null)resizeVideo(player.getVideoSize());}
+            if(bounds!=null){ensureOverlay();float density=context.getResources().getDisplayMetrics().density;x=Math.round((float)bounds.optDouble("x")*density);y=Math.round((float)bounds.optDouble("y")*density);width=Math.max(1,Math.round((float)bounds.optDouble("width",1)*density));height=Math.max(1,Math.round((float)bounds.optDouble("height",1)*density));container.setLayoutParams(layout());int clip=Math.max(0,Math.min(height,Math.round((float)bounds.optDouble("clipHeight",bounds.optDouble("height",1))*density)));container.setClipBounds(new android.graphics.Rect(0,0,width,clip));if(player!=null)resizeVideo(player.getVideoSize());}
             JSONObject bullet=q.optJSONObject("danmaku");if(bullet!=null&&danmaku!=null)danmaku.add(bullet.optString("id"),bullet.optString("text"));
             if(q.has("subtitleCues")){subtitleTimeline=SubtitleTimeline.parse(q.getJSONArray("subtitleCues"));}
             if(q.has("subtitleOffsetMs")){double offset=q.getDouble("subtitleOffsetMs");if(!Double.isFinite(offset)||offset<0)throw new IllegalArgumentException("Invalid subtitle offset");subtitleOffsetMs=offset;}

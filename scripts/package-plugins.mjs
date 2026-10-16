@@ -23,6 +23,7 @@ for(const f of await readdir(path.join(root,'plugins'),{withFileTypes:true})){
   let rules='';try{rules=await readFile(path.join(dir,'rules.txt'),'utf8');}catch{}
   const html=(await read('plugin_sdk/waiting.html'))+(await readFile(path.join(dir,'view.html'),'utf8'))+(await read('plugin_sdk/dialogs.html'));
   const style=await read('plugin_sdk/style.css'),files=await assets(dir),artifacts={},licenses={project:await read('LICENSE')};
+  if(manifest.cover&&(!files[manifest.cover]||files[manifest.cover].length>65536))throw Error('Plugin cover missing or larger than 64 KiB');
   if(f.name==='watch')licenses.hls=await readFile(path.join(dir,'vendor/hls.LICENSE'),'utf8');
   for(const [target,config] of Object.entries(manifest.targets)){
     const entry=path.resolve(dir,config.entry);if(!entry.startsWith(dir+path.sep))throw Error('Entry escapes plugin directory');
@@ -43,7 +44,7 @@ for(const f of await readdir(path.join(root,'plugins'),{withFileTypes:true})){
     }
   }
   const release=hash(JSON.stringify({manifest,artifacts}));releases=releases.filter(r=>r.id!==manifest.id||r.release!==release);
-  releases.push({id:manifest.id,version:manifest.version,release,manifest,artifacts,revoked:false});console.log(manifest.id,manifest.version,Object.keys(artifacts).join('/'));
+  releases.push({id:manifest.id,version:manifest.version,release,manifest,artifacts,...(manifest.cover?{cover:files[manifest.cover]}:{}),revoked:false});console.log(manifest.id,manifest.version,Object.keys(artifacts).join('/'));
 }
 const payload=JSON.stringify({schemaVersion:1,releases}),signature=sign('sha256',Buffer.from(payload),{key,dsaEncoding:'ieee-p1363'}).toString('base64');
 await writeFile(path.join(out,'catalog.json'),JSON.stringify({payload,signature}));console.log('Signed catalog written to server/plugin-market; private key retained locally.');

@@ -213,6 +213,8 @@ jobs:
         if: steps.scope.outputs.should_check == 'true'
         run: |
           node scripts/plugin-test.mjs
+          node scripts/plugin-download-test.mjs
+          node scripts/player-wake-test.mjs
           node scripts/client-test.mjs
           node scripts/watch-voice-test.mjs
           node scripts/subtitles-test.mjs

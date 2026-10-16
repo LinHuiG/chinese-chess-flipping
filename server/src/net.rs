@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     net::TcpStream,
     sync::{mpsc, watch},
     time::timeout,
@@ -352,7 +352,7 @@ pub async fn desktop_download() -> Response {
         .body(Body::from_stream(stream))
         .unwrap()
 }
-pub async fn asset(uri: Uri, method: Method) -> Response {
+pub async fn asset(uri: Uri, method: Method, headers: HeaderMap) -> Response {
     if method != Method::GET && method != Method::HEAD {
         return StatusCode::METHOD_NOT_ALLOWED.into_response();
     }
@@ -392,7 +392,7 @@ pub async fn asset(uri: Uri, method: Method) -> Response {
         "woff2" => "font/woff2",
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    let file = match tokio::fs::File::open(path).await {
+    let mut file = match tokio::fs::File::open(path).await {
         Ok(file) => file,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
     };
@@ -400,8 +400,22 @@ pub async fn asset(uri: Uri, method: Method) -> Response {
         Ok(meta) if meta.is_file() => meta.len(),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    Response::builder().header("content-type",mime).header("content-length",size).header("cache-control","no-cache")
+    let range=if method==Method::GET&&!headers.contains_key("if-range"){headers.get("range").map(|h|h.to_str().ok().and_then(|s|byte_range(s,size)))}else{None};
+    let (start,end,status)=match range{Some(Some((start,end)))=>(start,end,StatusCode::PARTIAL_CONTENT),Some(None)=>return Response::builder().status(StatusCode::RANGE_NOT_SATISFIABLE).header("content-range",format!("bytes */{size}")).body(Body::empty()).unwrap(),None=>(0,size.saturating_sub(1),StatusCode::OK)};
+    let length=if size==0{0}else{end-start+1};
+    if start>0&&file.seek(std::io::SeekFrom::Start(start)).await.is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response();}
+    let mut response=Response::builder().status(status).header("accept-ranges","bytes");
+    if status==StatusCode::PARTIAL_CONTENT{response=response.header("content-range",format!("bytes {start}-{end}/{size}"));}
+    response.header("content-type",mime).header("content-length",length).header("cache-control","no-cache")
         .header("x-content-type-options","nosniff").header("referrer-policy","same-origin")
         .header("content-security-policy","default-src 'self'; script-src 'self' 'unsafe-inline' data: blob:; style-src 'self' 'unsafe-inline'; frame-src 'self' blob:; connect-src 'self' ws: wss: https: http:; media-src 'self' blob: data: https: http:; img-src 'self' data: blob: https: http:; worker-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-        .body(if method==Method::HEAD{Body::empty()}else{Body::from_stream(ReaderStream::with_capacity(file.take(size),64*1024))}).unwrap()
+        .body(if method==Method::HEAD{Body::empty()}else{Body::from_stream(ReaderStream::with_capacity(file.take(length),64*1024))}).unwrap()
 }
+
+fn byte_range(value:&str,size:u64)->Option<(u64,u64)>{
+    if size==0{return None;}let (start,end)=value.strip_prefix("bytes=")?.split_once('-')?;
+    if start.is_empty(){let suffix=end.parse::<u64>().ok()?;return (suffix>0).then_some((size.saturating_sub(suffix),size-1));}
+    let start=start.parse::<u64>().ok()?;let end=if end.is_empty(){size-1}else{end.parse::<u64>().ok()?.min(size-1)};
+    (start<size&&start<=end).then_some((start,end))
+}
+#[cfg(test)]mod range_tests{use super::byte_range;#[test]fn resume_ranges(){assert_eq!(byte_range("bytes=40-",100),Some((40,99)));assert_eq!(byte_range("bytes=40-80",100),Some((40,80)));assert_eq!(byte_range("bytes=-20",100),Some((80,99)));for value in ["bytes=100-","bytes=80-40","bytes=0-1,4-5","bytes=-0","bytes=abc-"]{assert_eq!(byte_range(value,100),None);}assert_eq!(byte_range("bytes=0-",0),None);}}

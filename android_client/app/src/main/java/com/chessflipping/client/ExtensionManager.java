@@ -45,18 +45,36 @@ final class ExtensionManager implements AutoCloseable {
         JSONObject q=new JSONObject(text);if(installed(q)!=null)return "{\"ready\":true}";
         File directory=new File(context.getCacheDir(),"updates");if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("无法创建下载目录");
         File file=new File(directory,q.getString("sha256")+".apk");
-        if(!file.isFile()||file.length()!=q.getLong("size")||!hash(file).equals(q.getString("sha256"))){
-            File partial=new File(directory,q.getString("sha256")+".part");HttpUrl url=HttpUrl.parse(q.getString("url"));if(url==null||!url.username().isEmpty()||!url.password().isEmpty())throw new IOException("原生组件地址无效");
-            try(Response response=http.newCall(new Request.Builder().url(url).build()).execute()){
-                if(!response.isSuccessful()||response.body()==null)throw new IOException("原生组件下载失败");
-                try(InputStream in=response.body().byteStream();OutputStream out=new FileOutputStream(partial)){byte[] data=new byte[65536];int n;long total=0;while((n=in.read(data))!=-1){total+=n;if(destroyed||total>q.getLong("size"))throw new IOException("原生组件下载已停止");out.write(data,0,n);}}
-                if(partial.length()!=q.getLong("size")||!hash(partial).equals(q.getString("sha256")))throw new IOException("原生组件文件校验失败");
-                if(!partial.renameTo(file))throw new IOException("原生组件保存失败");
-            }finally{partial.delete();}
-        }
+        download(q,file,200L*1024*1024);
         main.post(()->{if(destroyed)return;if(!context.getPackageManager().canRequestPackageInstalls()){context.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:"+context.getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));return;}
             Uri uri=FileProvider.getUriForFile(context,context.getPackageName()+".updates",file);context.startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(uri,"application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_ACTIVITY_NEW_TASK));});
         return "{\"ready\":false}";
+    }
+    synchronized String downloadPackage(String text)throws Exception{
+        JSONObject q=new JSONObject(text);File file=new File(new File(context.getCacheDir(),"packages"),q.getString("sha256")+".json");download(q,file,24L*1024*1024);
+        try(InputStream in=new FileInputStream(file);ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] buffer=new byte[65536];int n;while((n=in.read(buffer))!=-1)out.write(buffer,0,n);return out.toString("UTF-8");}
+    }
+    private void progress(String sha,long received,long size){try{events.accept(new JSONObject().put("type","pluginDownload").put("sha256",sha).put("received",received).put("total",size));}catch(JSONException ignored){}}
+    private void download(JSONObject q,File file,long limit)throws Exception{
+        String sha=q.getString("sha256");long size=q.getLong("size");if(!sha.matches("[0-9a-f]{64}")||size<1||size>limit)throw new IOException("插件下载清单无效");
+        HttpUrl url=HttpUrl.parse(q.getString("url"));if(url==null||!url.username().isEmpty()||!url.password().isEmpty())throw new IOException("插件下载地址无效");
+        if(file.isFile()&&file.length()==size&&hash(file).equals(sha)){progress(sha,size,size);return;}
+        File directory=file.getParentFile();if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("无法创建下载目录");
+        File part=new File(directory,sha+".part");long offset=part.isFile()?part.length():0;
+        if(offset>=size){if(offset==size&&hash(part).equals(sha)){if(file.exists()&&!file.delete()||!part.renameTo(file))throw new IOException("保存插件失败");progress(sha,size,size);return;}if(!part.delete())throw new IOException("无法重置下载");offset=0;}
+        progress(sha,offset,size);Request.Builder request=new Request.Builder().url(url).header("Accept-Encoding","identity");if(offset>0)request.header("Range","bytes="+offset+"-");
+        try(Response response=http.newCall(request.build()).execute()){
+            if(response.code()==206){String expected="bytes "+offset+"-"+(size-1)+"/"+size;if(!expected.equals(response.header("Content-Range"))){part.delete();throw new IOException("插件续传范围无效");}}
+            else if(response.code()==200)offset=0;else throw new IOException("插件下载失败："+response.code()+"，重试可继续");
+            if(response.body()==null||response.body().contentLength()>size-offset)throw new IOException("插件文件大小异常");
+            long total=offset,last=0;
+            try(InputStream in=response.body().byteStream();FileOutputStream out=new FileOutputStream(part,offset>0)){
+                byte[] data=new byte[65536];int n;while((n=in.read(data))!=-1){if(destroyed)throw new IOException("下载已停止，下次可继续");total+=n;if(total>size){part.delete();throw new IOException("插件文件超过声明大小");}out.write(data,0,n);long now=SystemClock.elapsedRealtime();if(now-last>=200){progress(sha,total,size);last=now;}}out.getFD().sync();
+            }
+            if(total!=size)throw new IOException("插件下载中断，重试可继续");
+            if(!hash(part).equals(sha)){part.delete();throw new IOException("插件文件校验失败，请重试");}
+            if(file.exists()&&!file.delete()||!part.renameTo(file))throw new IOException("插件保存失败");progress(sha,size,size);
+        }
     }
     String activate(String text)throws Exception{
         JSONObject q=new JSONObject(text);PackageInfo info=installed(q);if(info==null)throw new IOException("请先安装所需原生组件");

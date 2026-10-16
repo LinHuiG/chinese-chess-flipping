@@ -24,8 +24,10 @@ extern "C" {
         y: c_int,
         width: c_int,
         height: c_int,
+        clip_height: c_int,
         visible: c_int,
     );
+    fn cyber_media_interaction(window: *mut c_void) -> c_int;
     fn cyber_media_window_hide(window: *mut c_void);
     fn cyber_media_window_visible(window: *mut c_void);
     fn cyber_media_window_destroy(window: *mut c_void);
@@ -208,6 +210,7 @@ impl Media {
                     }
                     player.events();
                     player.overlay();
+                    if unsafe { cyber_media_interaction(hwnd as *mut c_void) } != 0 {owner.emit(json!({"type":"playerInteraction"}));}
                     if last.elapsed()>=Duration::from_millis(250){owner.emit(player.state());last=Instant::now();}
                 }
             });
@@ -311,12 +314,13 @@ impl Media {
             physical("width", 1),
             physical("height", 1),
         );
+        let clip_height = if bounds.get("clipHeight").is_some() { physical("clipHeight", 0).min(height) } else { height };
         let visible =
             self.visible.load(Ordering::Acquire) && self.foreground.load(Ordering::Acquire);
         let hwnd = self.hwnd.load(Ordering::Acquire);
         w.run_on_main_thread(move || unsafe {
             if hwnd != 0 {
-                cyber_media_window_bounds(hwnd as *mut c_void, x, y, width, height, visible as i32)
+                cyber_media_window_bounds(hwnd as *mut c_void, x, y, width, height, clip_height, visible as i32)
             }
         })
         .map_err(|_| "播放器尺寸更新失败".into())
@@ -1623,6 +1627,27 @@ fn ass_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Drives the production Player from a local test harness. Muted, no native window.
+    #[test]
+    #[ignore = "requires MPV_DLL_DIR and explicit local stdin commands"]
+    fn headless_quality_player() {
+        use std::io::BufRead;
+        let directory=PathBuf::from(std::env::var_os("MPV_DLL_DIR").expect("MPV_DLL_DIR"));
+        let mut player=Player::with_mpv(Mpv::open(&directory.join("libmpv-2.dll"),0).unwrap(),false);
+        let (tx,rx)=std::sync::mpsc::channel();
+        std::thread::spawn(move||{for line in std::io::stdin().lock().lines(){if let Ok(line)=line{if let Ok(value)=serde_json::from_str::<Value>(&line){if tx.send(value).is_err(){break;}}}}});
+        let deadline=Instant::now()+Duration::from_secs(180);let mut last=Instant::now();
+        while Instant::now()<deadline {
+            match rx.recv_timeout(Duration::from_millis(10)){
+                Ok(mut q)=>{if q["quit"]==true{return;}if q["stop"]==true{player.stop();}else{if let Some(url)=q["url"].as_str(){assert!(url.starts_with("http://127.0.0.1:"),"local fixture only");}q["muted"]=json!(true);player.command(q).unwrap();}},
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected)=>return,
+                Err(_)=>{}
+            }
+            player.events();if last.elapsed()>Duration::from_millis(100){println!("QUALITY_STATE {}",player.state());last=Instant::now();}
+        }
+        panic!("headless quality test timed out");
+    }
+
     #[test]
     #[ignore = "requires MPV_DLL_DIR and MEDIA_PLAYER_INPUT; no application/window is started"]
     fn actual_player_network_seek_diagnostics() {
