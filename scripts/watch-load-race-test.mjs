@@ -44,6 +44,22 @@ function harness(){
 }
 async function startDirect({watch,room,requests}){const loading=watch.load(room.room.playback);await until(()=>requests.length===1,'initial direct negotiation');requests[0].reply(true);await loading;}
 const tests=[
+  ['an old seek timeout cannot poison the next episode while its save is pending',async h=>{
+    const {watch,room,requests}=h;await startDirect(h);room.host=true;
+    room.assertCurrent=()=>{};room.publish=()=>{};room.checkpoint=()=>{};
+    watch.beginSeek(599);now+=31000;watch.lastHostSave=now;watch.lastCheckin=now;
+    let saves=0,releaseSave;watch.saveHost=async()=>{if(++saves===2)await new Promise(resolve=>{releaseSave=resolve;});};
+    const selecting=watch.select({Type:'Episode',Id:'episode-27',Name:'Episode 27',RunTimeTicks:6000000000});
+    await until(()=>!!releaseSave,'new episode save is pending');
+    await watch.event({type:'player',nativeUnavailable:true,ended:true,positionMs:600000});
+    assert.equal(watch.loading,true,'old native events cannot end replacement loading');
+    assert.equal(room.room.playback.position,0,'old native progress cannot move the next episode');
+    await watch.pulse();const poisoned=watch.failedEpoch===room.room.playback.epoch;
+    releaseSave();await settle();
+    assert.equal(poisoned,false,'old player timeout must not mark the new epoch failed');
+    await until(()=>requests.length===2,'next episode must negotiate without recreating the room');
+    requests[1].reply(true);await selecting;assert.ok(watch.url);assert.equal(watch.epoch,room.room.playback.epoch);
+  }],
   ['HLS late join keeps only the latest seek and closes the discarded session',async h=>{
     const {watch,room,video,requests,reports,update}=h,loading=watch.load(room.room.playback);
     await until(()=>requests.length===1,'initial HLS negotiation');

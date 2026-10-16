@@ -45,11 +45,11 @@ try{
  child=spawn('cargo',['test','--manifest-path','plugins/watch/native/windows/Cargo.toml','headless_quality_player','--','--ignored','--nocapture'],{windowsHide:true,env:process.env,stdio:['pipe','pipe','pipe']});
  child.on('error',e=>failure=e);child.on('exit',code=>{if(code)failure=Error(`Player exited ${code}`);});
  child.stderr.on('data',s=>log+=s);readline.createInterface({input:child.stdout}).on('line',line=>{log+=line+'\n';const at=line.indexOf('QUALITY_STATE ');if(at>=0){latest=JSON.parse(line.slice(at+14));if(watch)watch.event({type:'player',...latest}).catch(e=>failure=e);}});
- globalThis.NativeRoom={platform:'WINDOWS',playerCapabilities:{engine:'mpv',embeddedTracks:true},mediaConfigure(){},playerCommand:text=>send(JSON.parse(text))};
+ globalThis.NativeRoom={platform:'WINDOWS',playerCapabilities:{engine:'mpv',embeddedTracks:true},mediaConfigure(){},playerStop:()=>send({stop:true}),playerCommand:text=>send(JSON.parse(text))};
  const {WatchRoom}=await import('../plugins/watch/watch.js');
  const state={epoch:'fixture',itemId:'movie',position:60,duration:120,version:1,playing:false,rate:1,at:performance.now()};
- const room={host:true,self:'fixture',room:{game:'watch',playback:state},client:{ready:true},context:()=>1,current:c=>c===1,checkpoint(){}};
- watch=Object.assign(Object.create(WatchRoom.prototype),{room,generation:0,quality:'auto',epoch:'fixture',position:60,duration:120,access:{base:`http://127.0.0.1:${server.address().port}`,token:'local',userId:'fixture'},video:{seeking:false},voice:{event(){}},render(){},rectangle:()=>({x:0,y:0,width:320,height:180}),playerVisible:()=>false,send:async()=>{},saveHost:async()=>{},scheduleHostSave(){},checkin:async()=>{},loadSubtitles:async()=>{},stopMedia:async()=>{send({stop:true});watch.url='';watch.pendingSeek=null;}});
+ const room={host:true,self:'fixture',room:{game:'watch',playback:state},client:{ready:true},context:()=>1,current:c=>c===1,assertCurrent:c=>assert.equal(c,1),publish(){},checkpoint(){}};
+ watch=Object.assign(Object.create(WatchRoom.prototype),{room,generation:0,quality:'auto',epoch:'fixture',position:60,duration:120,access:{base:`http://127.0.0.1:${server.address().port}`,token:'local',userId:'fixture'},video:{seeking:false,pause(){},load(){},removeAttribute(){}},voice:{event(){}},render(){},rectangle:()=>({x:0,y:0,width:320,height:180}),playerVisible:()=>false,send:async()=>{},saveHost:async()=>{},scheduleHostSave(){},checkin:async()=>{},loadSubtitles:async()=>{}});
  await wait(()=>latest,'player ready');
  await watch.load(state);await wait(()=>latest.playbackId===watch.playbackId&&!latest.seeking&&Math.abs(watch.current()-60)<1,'direct seek 60');
  await watch.setQuality('1080');await wait(()=>latest.playbackId===watch.playbackId&&!latest.seeking&&latest.durationMs>0,'1080p first frame');
@@ -69,7 +69,17 @@ try{
  await watch.control(true);await page.evaluate(state=>watch.event({type:'watch.state',from:'fixture',body:state}),{...state});await wait(()=>watch.current()>61&&!latest.seeking,'decoded playback advances after repeated seeks');
  await page.waitForFunction(()=>!watch.video.paused&&watch.current()>61&&watch.video.videoWidth>0);
  assert.equal(state.playing,true);assert.equal(watch.error,'');
- console.log('PASS real muted/headless mpv host + browser guest: direct 60s -> 1080p -> 90s -> 30s -> 60s -> both decoders advance; actual HTTP starts verified');
+ for(const itemId of ['second','movie','second']){
+  await watch.setQuality('auto');await watch.control(true,119);
+  await wait(()=>latest.playbackId===watch.playbackId&&!latest.seeking&&watch.current()>119.2,'previous episode near EOF');
+  await watch.select({Id:itemId,Type:'Movie',Name:'fixture',RunTimeTicks:120e7});
+  await wait(()=>latest.playbackId===watch.playbackId&&latest.renderedFirstFrame&&!latest.seeking,'replacement first frame');
+  await page.evaluate(state=>watch.event({type:'watch.state',from:'fixture',body:state}),{...room.room.playback});
+  await page.waitForFunction(()=>!watch.loading&&watch.video.readyState>=2&&watch.current()<1);
+  await watch.control(true);await page.evaluate(state=>watch.event({type:'watch.state',from:'fixture',body:state}),{...room.room.playback});
+  await wait(()=>watch.current()>1&&!latest.seeking,'replacement advances');await page.waitForFunction(()=>!watch.video.paused&&watch.current()>1);
+ }
+ console.log('PASS real muted/headless mpv host + browser guest: quality/seek then near-EOF A/B/A movie replacement; both decoders advance with production stop/select lifecycle');
 }finally{
  if(browser)await browser.close();
  if(child&&!child.killed){send({quit:true});child.stdin.end();}

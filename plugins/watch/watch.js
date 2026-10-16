@@ -112,7 +112,7 @@ export class WatchRoom {
   async loadSubtitles(){this.subtitleError='';this.clearSubtitles();const stream=this.tracks.find(s=>s.Type==='Subtitle'&&s.Index===this.subtitleIndex);if(this.directTracks){await nativeCall('playerCommand',JSON.stringify({subtitleStreamIndex:this.embeddedSubtitle(stream)?stream.Index:-1,mediaTracks:this.mediaTracks()}));if(!stream||this.embeddedSubtitle(stream))return;}if(!this.session||!stream||this.burnSubtitle)return;const context=this.room.context(),generation=this.generation,operation=this.subtitleGeneration,session=this.session,access=this.access;this.subtitleLoading=true;try{const text=await mediaRequest(this.endpoint('Videos/'+encodeURIComponent(session.itemId)+'/'+encodeURIComponent(session.sourceId)+'/Subtitles/'+stream.Index+'/Stream.vtt',{StartPositionTicks:0},access),'GET',this.headers(access),undefined,60000,'text');if(!this.validContext(context,generation)||operation!==this.subtitleGeneration)return;this.subtitleCues=parseVtt(text);if(!this.subtitleCues.length)throw Error('此字幕没有可显示的文本');if(this.nativePlayer)await nativeCall('playerCommand',JSON.stringify({subtitleCues:this.subtitleCues,subtitleOffsetMs:(this.offset||0)*1000}));this.paintSubtitle();}catch(e){if(this.validContext(context,generation)&&operation===this.subtitleGeneration)this.subtitleError='字幕加载失败，请重选字幕或关闭字幕';}if(operation===this.subtitleGeneration)this.subtitleLoading=false;this.render();}
   paintSubtitle(){if(!this.active||this.nativePlayer||!this.subtitleCues?.length)return;const now=this.current(),text=this.subtitleCues.filter(c=>now>=c.start&&now<c.end).map(c=>c.text).join('\n');if($('watch-subtitle').textContent!==text)$('watch-subtitle').textContent=text;}
   mediaFailure(message,codecFailure=false){if(!this.active||this.loading||!this.url||this.failedEpoch===this.epoch)return;if(codecFailure&&!desktopPlayback()&&!this.session?.transcoded&&!this.compatibility&&this.fallbackEpoch!==this.epoch){this.fallbackEpoch=this.epoch;this.compatibility=true;this.reload(true).catch(()=>{});return;}this.failPlayback(message);}
-  failPlayback(message){this.failedEpoch=this.room.room?.playback?.epoch||this.epoch;this.hls?.stopLoad();this.video.pause?.();if(this.nativePlayer)nativeCall('playerCommand',JSON.stringify({playing:false}));this.showError(message);}
+  failPlayback(message){this.failedEpoch=this.epoch||this.room.room?.playback?.epoch;this.hls?.stopLoad();this.video.pause?.();if(this.nativePlayer)nativeCall('playerCommand',JSON.stringify({playing:false}));this.showError(message);}
   async login(base,username,password,share,webBase='',remember=true){
     if(!this.active||!this.room.host)throw Error('只有房主可以配置片源');if(!share)throw Error('请确认将专用账号的播放权限共享给房间成员');
     this.room.client.requireCompatible();
@@ -239,6 +239,9 @@ export class WatchRoom {
     if(e.type==='watch.clockReply'&&e.from===this.room.room.hostId&&e.body.sent===this.clockSent){const rtt=performance.now()-e.body.sent;if(rtt>=0&&rtt<2000&&Number.isFinite(e.body.host)&&(this.bestRtt===undefined||rtt<=this.bestRtt*1.5)){this.bestRtt=rtt;this.hostOffset=e.body.host-(e.body.sent+rtt/2);}}
     if(e.type==='watch.chat'&&typeof e.body.text==='string'&&e.body.text.length<=200){this.chat(e.body.id,e.body.text,e.from);}
     if(e.type==='player'){
+      // select publishes the next epoch before its asynchronous save/load completes.
+      // Events from the previous player must not fail or finish that replacement.
+      if(this.epoch!==this.room.room?.playback?.epoch)return;
       if(e.nativeUnavailable&&this.url){++this.generation;this.loading=false;this.failPlayback('电影厅原生组件启动失败，请重新安装电影厅插件后重试');return;}
       if(!this.url||this.playbackId&&e.playbackId!==this.playbackId||this.playerSeekId&&e.seekId!==this.playerSeekId)return;
       this.buffering=!!e.buffering||!!e.seeking;
@@ -265,7 +268,7 @@ export class WatchRoom {
   async sendChat(text){text=text.trim().slice(0,200);if(!text||performance.now()-(this.lastChat||-1000)<500)return;this.lastChat=performance.now();const message={id:id(),text};this.chat(message.id,text,this.room.self);await this.send('watch.chat',message);}
   async pulse(){
     if(!this.active)return;const context=this.room.context();if(performance.now()-(this.lastHostSave||0)>=5000)this.saveHost();this.voice.configure();this.render();if(!this.room.client.ready)return;if(!this.room.host&&!this.access)this.requestSync();
-    if(this.pendingSeek&&performance.now()-this.pendingSeek.since>30000){this.pendingSeek=null;this.failPlayback('跳转未完成，请重试播放或切换画质');}
+    if(!this.loading&&this.epoch===this.room.room?.playback?.epoch&&this.pendingSeek&&performance.now()-this.pendingSeek.since>30000){this.pendingSeek=null;this.failPlayback('跳转未完成，请重试播放或切换画质');}
     if(!this.room.host&&performance.now()-(this.lastClock||0)>5000){this.lastClock=this.clockSent=performance.now();this.send('watch.clock',{sent:this.clockSent},this.room.room.hostId);}
     const state=this.room.room.playback;if(!state)return;
     if(this.room.host&&!this.room.background){state.position=this.url&&!this.loading&&(this.nativePlayer||this.video.readyState>=1)?this.current():state.position;if(state.duration>0&&state.position>=state.duration)state.playing=false;state.version++;state.at=performance.now();this.receivedAt=performance.now();this.send('watch.state',state);}
