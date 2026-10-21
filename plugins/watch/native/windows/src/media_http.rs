@@ -3,6 +3,23 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use futures_util::StreamExt;
 use serde_json::Value;
 use std::time::Duration;
+fn request_error(error: &reqwest::Error, reading: bool) -> &'static str {
+    // reqwest's Display includes the request URL, which can contain api_key.
+    // Report only the phase and category across the component boundary.
+    if error.is_timeout() {
+        if reading {
+            "Emby 响应读取超时，片源已连接但数据未能及时送达，请检查片源网络后重试"
+        } else {
+            "Emby 请求响应超时，请检查片源服务和网络后重试"
+        }
+    } else if error.is_connect() {
+        "无法连接 Emby，请检查片源地址、端口、DNS 或 HTTPS 证书"
+    } else if reading {
+        "Emby 响应传输中断，请检查片源网络后重试"
+    } else {
+        "Emby 请求失败，请检查片源网络和 HTTPS 证书后重试"
+    }
+}
 pub fn media_image_data_url(content_type: &str, bytes: &[u8]) -> Result<String, String> {
     let mime = content_type
         .split(';')
@@ -77,7 +94,7 @@ pub async fn media_request(state: &AppState, value: Value) -> Result<(u16, Strin
     let response = request
         .send()
         .await
-        .map_err(|_| "无法连接片源，请检查地址、网络或证书")?;
+        .map_err(|error| request_error(&error, false))?;
     let status = response.status().as_u16();
     let content_type = response
         .headers()
@@ -91,7 +108,7 @@ pub async fn media_request(state: &AppState, value: Value) -> Result<(u16, Strin
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| "片源响应中断")?;
+        let chunk = chunk.map_err(|error| request_error(&error, true))?;
         if bytes.len() + chunk.len() > 2097152 {
             return Err("片源响应过大".into());
         }
@@ -107,4 +124,51 @@ pub async fn media_request(state: &AppState, value: Value) -> Result<(u16, Strin
         String::from_utf8(bytes).map_err(|_| "片源应返回文本信息".to_string())?
     };
     Ok((status, body, image))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn silent_emby_headers_and_body_have_bounded_private_diagnostics() {
+        for reading in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 2048];
+                stream.read(&mut request).await.unwrap();
+                if reading {
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+                        .await
+                        .unwrap();
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            });
+            let response = reqwest::Client::new()
+                .get(format!(
+                    "http://{address}/PlaybackInfo?api_key=never-log-this"
+                ))
+                .timeout(Duration::from_millis(100))
+                .send()
+                .await;
+            let error = if reading {
+                response.unwrap().bytes().await.unwrap_err()
+            } else {
+                response.unwrap_err()
+            };
+            assert!(error.is_timeout());
+            let message = request_error(&error, reading);
+            assert!(message.contains("Emby") && message.contains("超时"));
+            assert_eq!(message.contains("读取"), reading);
+            assert!(
+                !message.contains("api_key")
+                    && !message.contains("never-log-this")
+                    && !message.contains("127.0.0.1")
+            );
+            server.abort();
+        }
+    }
 }

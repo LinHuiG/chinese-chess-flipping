@@ -5,12 +5,13 @@ import {createHash,createPrivateKey,createPublicKey,generateKeyPairSync,sign,ver
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {validateManifest} from '../server/src/main/resources/web/plugin-package.js';
-const root=fileURLToPath(new URL('../',import.meta.url)),out=path.join(root,'server/plugin-market');
+const root=fileURLToPath(new URL('../',import.meta.url)),argument=name=>{const i=process.argv.indexOf(name);if(i<0)return null;if(!process.argv[i+1]||process.argv[i+1].startsWith('--'))throw Error('Missing value: '+name);return path.resolve(process.argv[i+1]);},out=argument('--output')||path.join(root,'server/plugin-market');
 const dev=process.argv.includes('--development'),keyPath=process.env.PLUGIN_SIGNING_KEY_FILE||path.join(root,'server/target/plugin-signing-key.pem');
+if(!dev&&(argument('--output')||argument('--trust-output')))throw Error('Local output/trust overrides require --development');
 await mkdir(out,{recursive:true});await mkdir(path.dirname(keyPath),{recursive:true});
 let key;
 try{key=createPrivateKey(await readFile(keyPath));}catch(e){if(!dev)throw Error('Set PLUGIN_SIGNING_KEY_FILE, or use --development for a local signing key.');const pair=generateKeyPairSync('ec',{namedCurve:'prime256v1'});key=pair.privateKey;await writeFile(keyPath,key.export({type:'pkcs8',format:'pem'}),{flag:'wx',mode:0o600});}
-const publicKey=createPublicKey(key),jwk=publicKey.export({format:'jwk'}),trustPath=path.join(root,'server/src/main/resources/web/plugin-trust.json');
+const publicKey=createPublicKey(key),jwk=publicKey.export({format:'jwk'}),trustPath=argument('--trust-output')||path.join(root,'server/src/main/resources/web/plugin-trust.json');
 try{const trust=JSON.parse(await readFile(trustPath));if(!trust.keys.some(k=>k.x===jwk.x&&k.y===jwk.y))throw Error('Signing key is not in plugin-trust.json. Add the public key explicitly before building.');}catch(e){if(e.code!=='ENOENT')throw e;await writeFile(trustPath,JSON.stringify({keys:[jwk]},null,2)+'\n');}
 const hash=s=>createHash('sha256').update(s).digest('hex'),read=n=>readFile(path.join(root,n),'utf8');
 let releases=[];
@@ -47,4 +48,4 @@ for(const f of await readdir(path.join(root,'plugins'),{withFileTypes:true})){
   releases.push({id:manifest.id,version:manifest.version,release,manifest,artifacts,...(manifest.cover?{cover:files[manifest.cover]}:{}),revoked:false});console.log(manifest.id,manifest.version,Object.keys(artifacts).join('/'));
 }
 const payload=JSON.stringify({schemaVersion:1,releases}),signature=sign('sha256',Buffer.from(payload),{key,dsaEncoding:'ieee-p1363'}).toString('base64');
-await writeFile(path.join(out,'catalog.json'),JSON.stringify({payload,signature}));console.log('Signed catalog written to server/plugin-market; private key retained locally.');
+await writeFile(path.join(out,'catalog.json'),JSON.stringify({payload,signature}));console.log('Signed catalog written to '+out+'; private key retained locally.');

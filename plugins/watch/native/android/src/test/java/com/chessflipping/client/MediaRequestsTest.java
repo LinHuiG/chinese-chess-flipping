@@ -26,9 +26,26 @@ public class MediaRequestsTest {
     @Test public void requestDeadlineCanAllowSlowPlaybackNegotiation()throws Exception{
         BlockingQueue<JSONObject> events=new LinkedBlockingQueue<>();
         try(Server server=new Server(path->{Thread.sleep(1500);return ok();});MediaRequests media=new MediaRequests(Runnable::run,events::add)){
-            media.configure(server.base());media.request(request("short",server.base()).put("timeoutMs",1000));JSONObject event=events.poll(5,TimeUnit.SECONDS);assertNotNull(event);assertEquals(0,event.getInt("status"));
+            media.configure(server.base());media.request(request("short",server.base()).put("timeoutMs",1000));JSONObject event=events.poll(5,TimeUnit.SECONDS);assertNotNull(event);assertEquals(0,event.getInt("status"));assertTrue(event.getString("error").contains("Emby 片库请求超时"));
             media.request(request("patient",server.base()).put("timeoutMs",4000));event=events.poll(5,TimeUnit.SECONDS);assertNotNull(event);assertEquals("patient",event.getString("id"));assertEquals(200,event.getInt("status"));
         }
+    }
+    @Test public void errorsIdentifyEmbyStageWithoutCredentials()throws Exception{
+        String secret="https://account:password@private.example/?api_key=private-token";
+        assertTrue(MediaRequests.failureMessage(new UnknownHostException(secret),"Emby 登录").contains("域名无法解析"));
+        assertTrue(MediaRequests.failureMessage(new javax.net.ssl.SSLHandshakeException(secret),"Emby 登录").contains("证书"));
+        assertTrue(MediaRequests.failureMessage(new SocketTimeoutException(secret),"Emby 播放协商").contains("播放协商超时"));
+        assertTrue(MediaRequests.failureMessage(new ConnectException(secret),"Emby 片库请求").contains("地址、端口"));
+        assertFalse(MediaRequests.failureMessage(new IOException(secret),"Emby 请求").contains(secret));
+        assertEquals("Emby 播放协商",MediaRequests.requestStage(HttpUrl.get("https://fixture.invalid/Items/1/PlaybackInfo?api_key=test"),false));
+    }
+    @Test public void queueWaitingCountsTowardsTheRequestDeadline()throws Exception{
+        CountDownLatch started=new CountDownLatch(2),release=new CountDownLatch(1);AtomicInteger stale=new AtomicInteger();BlockingQueue<JSONObject> events=new LinkedBlockingQueue<>();
+        try(Server server=new Server(path->{if(path.equals("/hold")){started.countDown();release.await(5,TimeUnit.SECONDS);}if(path.equals("/expired"))stale.incrementAndGet();return ok();});MediaRequests media=new MediaRequests(Runnable::run,events::add)){
+            media.configure(server.base());media.request(request("hold-1",server.base()+"/hold"));media.request(request("hold-2",server.base()+"/hold"));assertTrue(started.await(5,TimeUnit.SECONDS));
+            media.request(request("expired",server.base()+"/expired").put("timeoutMs",1000));Thread.sleep(1100);release.countDown();JSONObject rejected=null;for(int i=0;i<3;i++){JSONObject event=events.poll(5,TimeUnit.SECONDS);assertNotNull(event);if(event.getString("id").equals("expired"))rejected=event;}
+            assertNotNull(rejected);assertEquals(0,rejected.getInt("status"));assertTrue(rejected.getString("error").contains("超时"));assertEquals(0,stale.get());
+        }finally{release.countDown();}
     }
     @Test public void postersPreserveBinaryAndRefuseSvgRedirectAndPost()throws Exception{
         byte[] png=java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ24AAAAASUVORK5CYII=");

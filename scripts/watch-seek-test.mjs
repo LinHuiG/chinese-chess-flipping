@@ -54,6 +54,20 @@ await watch.event({type:'player',playbackId:watch.playbackId,seekId:latest,posit
 await watch.pulse();assert.equal(state.position,15.5);assert.equal(state.playing,true);
 await watch.event({type:'player',playbackId:watch.playbackId,seekId:latest,positionMs:16750,seeking:false,playing:true});
 await watch.pulse();assert.equal(state.position,16.75);assert.equal(state.playing,true);
+// A native acknowledgement validates its own operation and fresh decoder state.
+// Network buffering / delivery can put the actual frame beyond a fixed 2s gate.
+await watch.control(true,60);const confirmed=watch.playerSeekId;
+await watch.event({type:'player',playbackId:watch.playbackId,seekId:confirmed,positionMs:62961,seeking:true,renderedFirstFrame:true});
+assert.ok(watch.pendingSeek,'A buffering sample cannot acknowledge a seek');
+await watch.event({type:'player',playbackId:watch.playbackId,seekId:confirmed,positionMs:62961,renderedFirstFrame:true});
+assert.ok(watch.pendingSeek,'A sample without an explicit completion cannot acknowledge a seek');
+await watch.event({type:'player',playbackId:watch.playbackId,seekId:confirmed,positionMs:600000,seeking:false,ended:true,renderedFirstFrame:true});
+assert.ok(watch.pendingSeek,'A far-away Android ENDED state cannot acknowledge the requested seek or finish the movie');
+await watch.event({type:'player',playbackId:watch.playbackId,seekId:confirmed,positionMs:62961,seeking:false,recovering:true,renderedFirstFrame:true});
+assert.ok(watch.pendingSeek,'Decoder recovery cannot acknowledge the requested seek');
+await watch.event({type:'player',playbackId:watch.playbackId,seekId:confirmed,positionMs:62961,seeking:false,renderedFirstFrame:true,playing:true});
+assert.equal(watch.pendingSeek,null);assert.equal(watch.current(),62.961);assert.equal(watch.playbackStarted,true);
+await watch.pulse();assert.equal(state.position,62.961);assert.equal(state.buffering,false,'Native completion releases host buffering and broadcasts the actual position');
 watch.send=async()=>{};room.mediaAccess=null;watch.offset=120;
 delete NativeRoom.playerCommand;
 watch.video={currentTime:40.5,seeking:false};watch.beginSeek(170);watch.confirmSeek(160.5);assert.ok(watch.pendingSeek,'Stale Web seeked cannot confirm a new seek');watch.confirmSeek(170);assert.equal(watch.pendingSeek,null);

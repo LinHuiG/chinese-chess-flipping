@@ -8,6 +8,7 @@ export class PluginRuntime{
   connection(){const c=this.client;return {ready:c.ready,generation:c.generation,identity:c.identity?{clientId:c.identity.clientId,capabilities:c.identity.capabilities,serverVersion:c.identity.serverVersion}:null,peers:[...c.peerReady],latencies:[...c.peerLatency],quality:[...c.peerQuality]};}
   emit(event,value){if(event==='native'&&value?.componentSession&&value.componentSession!==this.active?.componentSession)return;if(event==='native'&&value?.type==='nativeFailure'){this.events.error?.(value.message||'原生组件已停止');this.close();return;}if(event==='native'&&value?.type==='background')this.active?.microphone.stop();if(event==='connection'&&!value?.ready)this.active?.microphone.stop();this.active?.port?.postMessage({event,value});}
   current(a){if(this.active!==a||a.closed)throw Error('插件实例已结束');}
+  async setModal(open){const a=this.active;if(!a)return;a.hostModal=open;if(native&&a.record.artifacts[platform()]?.native?.exports?.playerCommand)await this.native(a,'playerCommand',JSON.stringify({visible:a.playerVisible??false}));}
   async open(installed,command){if(this.active||this.opening)throw Error('请先退出当前插件');const opening=this.opening={};opening.done=new Promise(resolve=>opening.resolve=resolve);try{const {record,payload}=installed,m=record.manifest,frame=document.createElement('iframe');
     const component=record.artifacts[platform()]?.native;
     let activation;if(component){activation=await nativeCall('extensionActivate',JSON.stringify(component));if(typeof activation==='string')activation=JSON.parse(activation);}if(opening.cancelled){if(component)await nativeCall('extensionClose');throw Error('插件启动已取消');}
@@ -59,7 +60,7 @@ export class PluginRuntime{
   }
   async native(a,method,...args){if(!native)throw Error('当前平台没有原生接口');
     const component=a.record.artifacts[platform()]?.native,permission=component?.exports?.[method];
-    if(permission){if(!a.record.manifest.permissions.includes(permission))throw Error('插件未声明此组件权限');const viewport=a.frame.getBoundingClientRect();return nativeCall('extensionCall',JSON.stringify({method,args,scope:{roomId:a.roomId||'',selfId:this.client.identity?.clientId,members:[...a.authorized],viewport:{x:viewport.x,y:viewport.y,width:viewport.width,height:viewport.height}}}));}
+    if(permission){if(!a.record.manifest.permissions.includes(permission))throw Error('插件未声明此组件权限');if(method==='playerCommand'){const q=JSON.parse(args[0]);if(typeof q.visible==='boolean')a.playerVisible=q.visible;if(a.hostModal)q.visible=false;args=[JSON.stringify(q),...args.slice(1)];}const viewport=a.frame.getBoundingClientRect();return nativeCall('extensionCall',JSON.stringify({method,args,scope:{roomId:a.roomId||'',selfId:this.client.identity?.clientId,members:[...a.authorized],viewport:{x:viewport.x,y:viewport.y,width:viewport.width,height:viewport.height}}}));}
     if(!['udpRegister','openPeer','closePeers','roomActive'].includes(method))throw Error('未公开的原生接口');
     if(method==='roomActive')return true;
     if(method==='udpRegister'){if(!a.discovery||!a.roomId)throw Error('没有直连登记');args=[this.client.identity.clientId,a.discovery.ticket,a.discovery.port];}

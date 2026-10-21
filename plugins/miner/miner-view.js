@@ -5,13 +5,13 @@ export class MinerView{
   constructor(canvas,sound){
     this.canvas=canvas;this.ctx=canvas.getContext('2d',{alpha:false});this.sound=sound;this.particles=[];this.seen=0;this.motion=true;this.previous=new Map();this.sprites=new Map();this.artX=this.artY=1;
     this.sizeDirty=true;this.background=document.createElement('canvas');this.background.width=960;this.background.height=640;
-    this.terrain=document.createElement('canvas');this.terrain.width=960;this.terrain.height=640;this.last=performance.now();
+    this.terrain=document.createElement('canvas');this.terrain.width=960;this.terrain.height=640;this.last=performance.now();this.artCache=new Map();
     this.resize=new ResizeObserver(()=>{this.sizeDirty=true;this.wake();});this.resize.observe(canvas);
   }
   prepare(){
     if(this.ready)return this.ready;
     const load=name=>new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=reject;image.src=asset('assets/'+name);});
-    this.ready=Promise.all([load('deep-mine.png'),load('miner-atlas.png')]).then(([background,atlas])=>{this.mineImage=background;this.atlas=atlas;this.sprites.clear();this.terrainDirty=true;if(this.state)this.paintBackground(this.state.level,this.state.seed);this.wake();return true;}).catch(()=>{this.assetError=true;this.wake();return false;});
+    this.ready=Promise.all([load('deep-mine.png'),load('miner-atlas.png')]).then(([background,atlas])=>{this.mineImage=background;this.atlas=atlas;this.sprites.clear();this.artCache.clear();this.terrainDirty=true;if(this.state)this.paintBackground(this.state.level,this.state.seed);this.wake();return true;}).catch(()=>{this.assetError=true;this.wake();return false;});
     return this.ready;
   }
   wake(){if(this.state&&!document.hidden&&!this.suspended&&!this.raf)this.raf=requestAnimationFrame(t=>this.draw(t));}
@@ -68,7 +68,11 @@ export class MinerView{
   }
   art(c,name,x,y,width){
     const source=ART[name];if(!this.atlas||!source)return;const height=width*source[3]/source[2];
-    c.drawImage(this.atlas,...source,x-width/2,y-height/2,width,height);
+    // Crop and shrink the large atlas once. In particular, the crew and claw
+    // were resampled from the entire atlas on every animation frame.
+    const key=name+':'+Math.ceil(width);let image=this.artCache.get(key);
+    if(!image){image=document.createElement('canvas');image.width=Math.max(1,Math.ceil(width*2));image.height=Math.max(1,Math.ceil(height*2));image.getContext('2d').drawImage(this.atlas,...source,0,0,image.width,image.height);this.artCache.set(key,image);}
+    c.drawImage(image,x-width/2,y-height/2,width,height);
   }
   item(c,o,time){
     c.save();c.translate(o.x,o.y);this.art(c,o.type,0,0,Math.max(o.r*2.2,o.type==='hamster'?44:0));
@@ -100,9 +104,9 @@ export class MinerView{
       this.canvas.width=Math.round(width*ratio);this.canvas.height=Math.round(height*ratio);
       const scale=Math.min(width/960,height/640);this.artX=scale/(width/960);this.artY=scale/(height/640);this.terrainDirty=true;
     }
-    c.setTransform(this.canvas.width/960,0,0,this.canvas.height/640,0,0);c.drawImage(this.background,0,0);
-    if(!this.atlas){c.fillStyle='#d5e6ee';c.font='24px sans-serif';c.textAlign='center';c.fillText(this.assetError?'采掘画面加载失败，请重新载入':'正在准备采掘设备…',480,320);return;}
-    if(this.terrainDirty){const terrain=this.terrain.getContext('2d');terrain.clearRect(0,0,960,640);for(const o of s.items)if(o.type!=='hamster'&&o.owner<0)this.sprite(terrain,o);this.terrainDirty=false;}
+    c.setTransform(this.canvas.width/960,0,0,this.canvas.height/640,0,0);
+    if(!this.atlas){c.drawImage(this.background,0,0);c.fillStyle='#d5e6ee';c.font='24px sans-serif';c.textAlign='center';c.fillText(this.assetError?'采掘画面加载失败，请重新载入':'正在准备采掘设备…',480,320);return;}
+    if(this.terrainDirty){const terrain=this.terrain.getContext('2d');terrain.drawImage(this.background,0,0);for(const o of s.items)if(o.type!=='hamster'&&o.owner<0)this.sprite(terrain,o);this.terrainDirty=false;}
     c.drawImage(this.terrain,0,0);
     const time=this.motion?s.elapsed+(s.paused?0:Math.min(.15,(now-this.received)/1000)):0;
     for(const item of s.items)if(item.type==='hamster'||item.owner>=0){const point=this.sample(this.previous.get('i'+item.id),now);this.sprite(c,item,point.x,point.y,time);}
@@ -114,7 +118,7 @@ export class MinerView{
       else if(p.ring){c.strokeStyle=p.color;c.lineWidth=8*p.life/p.max;c.beginPath();c.arc(p.x,p.y,100*(1-p.life/p.max),0,Math.PI*2);c.stroke();}
       else{c.translate(p.x,p.y);c.rotate(p.life*4);c.fillRect(-3,-3,6,6);}c.restore();
     }
-    this.particles=this.particles.filter(p=>p.life>0);
+    let alive=0;for(const p of this.particles)if(p.life>0)this.particles[alive++]=p;this.particles.length=alive;
     if(s.paused||s.phase!=='playing'){
       c.fillStyle='#070e18bb';c.fillRect(0,0,960,640);c.fillStyle='#edf7ff';c.font='bold 34px sans-serif';c.textAlign='center';
       c.save();c.translate(480,305);c.scale(this.artX,this.artY);c.fillText(s.paused?'采掘暂停 · 进度已保留':s.phase==='complete'?'第 1,000 关完成！':'这一趟，满载而归',0,0);

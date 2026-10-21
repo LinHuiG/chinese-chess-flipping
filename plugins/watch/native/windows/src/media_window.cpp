@@ -198,8 +198,10 @@ extern "C" int cyber_media_danmaku_add(void* window, const wchar_t* id, const wc
 extern "C" void cyber_media_danmaku_clear(void* window) {
     if (auto* state = viewport(static_cast<HWND>(window))) state->clear();
 }
-extern "C" void cyber_media_window_bounds(void* window, int x, int y, int width, int height, int clip_height, int visible) {
-    SetWindowRgn(static_cast<HWND>(window),CreateRectRgn(0,0,width,std::clamp(clip_height,0,height)),TRUE);
+extern "C" void cyber_media_window_bounds(void* window, int x, int y, int width, int height, int clip_height, int visible, int ex, int ey, int ew, int eh) {
+    HRGN region=CreateRectRgn(0,0,width,std::clamp(clip_height,0,height));
+    if(ew>0 && eh>0) { HRGN hole=CreateRectRgn(ex,ey,ex+ew,ey+eh); CombineRgn(region,region,hole,RGN_DIFF); DeleteObject(hole); }
+    SetWindowRgn(static_cast<HWND>(window),region,TRUE);
     SetWindowPos(static_cast<HWND>(window), HWND_TOP, x, y, width, height,
         SWP_NOACTIVATE | (visible ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
 }

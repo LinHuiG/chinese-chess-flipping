@@ -174,7 +174,7 @@ body.mine-active{overflow:hidden;overscroll-behavior:none}
 #chess:fullscreen .chess-info .hint{font-size:11px;margin:8px 0}
 #chess:fullscreen .board-panel{height:100%;min-height:0;max-width:none;display:grid;grid-template-rows:minmax(0,1fr) 20px;gap:5px}
 #chess:fullscreen .board-wrap{height:100%;min-height:0;gap:10px}
-#chess:fullscreen .board{height:100%;width:auto;max-width:calc(100% - 80px);aspect-ratio:1/2;flex:none;grid-template-rows:repeat(8,minmax(0,1fr));padding:7px;border-width:5px;gap:5px;box-shadow:none}
+#chess:fullscreen .board{height:100%;width:auto;max-width:calc(100% - 84px);aspect-ratio:1/2;flex:none;grid-template-rows:repeat(8,minmax(0,1fr));padding:7px;border-width:5px;gap:0;box-shadow:none}
 #chess:fullscreen .piece{aspect-ratio:auto;min-height:0;font-size:clamp(14px,3.5vh,32px)}
 #chess:fullscreen .captured{gap:5px;width:auto}#chess:fullscreen .captured span{width:clamp(18px,3.8vh,30px);height:clamp(18px,3.8vh,30px);font-size:clamp(12px,2.8vh,18px)}
 #chess:fullscreen .board-footnote{margin:0;font-size:9px}
@@ -188,7 +188,7 @@ body.mine-active{overflow:hidden;overscroll-behavior:none}
   #chess:fullscreen .clock{grid-column:2;grid-row:1/4;font-size:28px;margin:0 0 0 10px}
   #chess:fullscreen .member-connections{grid-template-columns:repeat(2,minmax(0,1fr));margin:2px 0 0}
   #chess:fullscreen .chess-info .hint,#chess:fullscreen .rules-link{display:none}
-  #chess:fullscreen .member-path{font-size:9px;margin-top:2px}#chess:fullscreen .board{max-width:calc(100% - 62px)}
+  #chess:fullscreen .member-path{font-size:9px;margin-top:2px}#chess:fullscreen .board{max-width:calc(100% - 84px)}
 }
 @media(orientation:landscape) and (max-height:450px){
   #chess:fullscreen{padding:6px;gap:5px}#chess:fullscreen .game-top .eyebrow{display:none}
@@ -351,22 +351,29 @@ dialog::backdrop { background: #03080dd4; backdrop-filter: blur(5px); }
 .rules-body { color: #b4c6d2; }
 #confirm-message { color: #b0c2cf; }
 
-/* A dark metal board; red and white pieces remain unambiguous. */
+/* A gridded wooden board with round pieces; the complete cell stays clickable. */
+#chess .game-top>div:first-child { min-width:0;flex:1; }
+#chess .game-top h2,#chess .chess-info h2 { overflow-wrap:anywhere; }
 .clock { color: #c9edfc; font-weight: 500; letter-spacing: .01em; }
 .clock.urgent { color: #ffa99c; }
-.board { background: #111f29; border-color: #3d5565; border-radius: 8px; box-shadow: 0 5px 0 #162732, 0 9px 0 #273e4d, 0 14px 25px #0005; }
-.piece { background: linear-gradient(145deg, #d2dce1, #8197a7); color: #162d40; border: 2px solid #aec5d3; border-radius: 7px; box-shadow: 0 3px 0 #4a6578, 0 5px 5px #0005; }
-.piece.red { color: #742d37; background: linear-gradient(145deg, #e2d1d0, #ad8f91); border-color: #e8bec0; box-shadow: 0 3px 0 #775358, 0 5px 5px #0005; }
-.piece.dark { background: linear-gradient(145deg, #2e485b, #152b3a); color: #bfdeed; border-color: #5e8198; box-shadow: 0 3px 0 #0b1a26, inset 0 0 0 4px #20394a; }
-.piece.empty { background: #0b1720; border-color: #2d4453; box-shadow: inset 0 2px 4px #0004; color: transparent; }
-.piece.last { background: linear-gradient(145deg, #e8f2f6, #a1c1d3); border-color: #d6f3ff; }
-.piece.red.last { background: linear-gradient(145deg, #efdede, #c4a4a7); border-color: #ffe1e2; }
-.piece.dark.last { background: #355c72; }
-.piece.selected { outline: 3px solid #b4edff; outline-offset: 2px; transform: translateY(-2px); }
-.captured span { border-radius: 4px; border-color: #324652; color: #849ba9; background: #0e1a23; }
-.captured .lost { background: #8da3b2; color: #122a3a; border-color: #c2d6e2; }
-.captured.red .lost { background: #c8aaac; color: #672d37; border-color: #edc8cb; }
-.captured b { background: #e1edf5; color: #243f51; border-radius: 3px; }
+#chess .board { gap:0;padding:9px;border:6px solid #7f6245;border-radius:9px;background:linear-gradient(120deg,#d3bb94,#bda17a);box-shadow:inset 0 0 0 1px #f3dfba,0 5px 0 #473725,0 12px 24px #0005; }
+#chess .piece { display:grid;place-items:center;isolation:isolate;border:0;border-radius:0;padding:4px;min-width:0;aspect-ratio:1;background:transparent!important;box-shadow:inset -1px -1px #775c3d99;transform:none;color:#24313c;font-family:KaiTi,"STKaiti","Songti SC",SimSun,serif; }
+#chess .piece:nth-child(4n+1) { box-shadow:inset 1px 0 #775c3d99,inset -1px -1px #775c3d99; }
+#chess .piece:nth-child(-n+4)::before { content:"";position:absolute;inset:0 0 auto;height:1px;background:#775c3d99; }
+#chess .piece-face { display:grid;place-items:center;width:88%;aspect-ratio:1;line-height:1;border-radius:50%;border:3px double #8c7250;background:radial-gradient(circle at 35% 25%,#fff6df,#e7d6af 74%);box-shadow:0 3px 0 #88704e,0 4px 5px #49361f48,inset 0 0 0 2px #fff3d780;color:#22313e;transition:transform .18s,box-shadow .18s; }
+#chess .piece.red .piece-face { color:#a02d2d;border-color:#a5634b; }
+#chess .piece.dark .piece-face { color:#d6e6ee;border-color:#91aab7;background:radial-gradient(circle at 35% 25%,#496273,#243e4f 75%);box-shadow:0 3px 0 #18303e,0 4px 5px #49361f48,inset 0 0 0 2px #304c5e; }
+#chess .piece.empty .piece-face { visibility:hidden; }
+#chess .piece.last { background:#fff0bb55!important; }
+#chess .piece.last .piece-face { border-color:#b5842d;box-shadow:0 3px 0 #88704e,0 0 0 2px #ffe09c; }
+#chess .piece.from::after { content:"";position:absolute;inset:43%;border:1px solid #705334;border-radius:50%;background:#785b3966;z-index:-1; }
+#chess .piece.selected { outline:none;background:#d9f5ff66!important; }
+#chess .piece.selected .piece-face { transform:translateY(-2px);box-shadow:0 3px 0 #88704e,0 0 0 3px #2c7d99,0 5px 9px #273a4566; }
+#chess .piece:focus-visible { outline:3px solid #245e77;outline-offset:-3px; }
+#chess .captured span { border-radius:50%;border-color:#577080;color:#a3b1b9;background:#14232e;font-family:KaiTi,"STKaiti","Songti SC",SimSun,serif; }
+#chess .captured .lost { background:#eadab8;color:#253642;border-color:#d8c29a; }
+#chess .captured.red .lost { color:#a02d2d; }
+#chess .captured b { background:#e1edf5;color:#243f51;border-radius:8px; }
 .board-footnote { color: #93a9b8; }
 
 /* Miner HUD: appearance only. Keep existing viewport/fullscreen geometry. */
@@ -454,8 +461,9 @@ dialog::backdrop { background: #03080dd4; backdrop-filter: blur(5px); }
   .panel { border-radius: 7px; }
   .player { border-radius: 5px; }
   .player .avatar { border-radius: 6px; }
-  .board { border-radius: 7px; }
-  .piece { border-radius: 5px; }
+  #chess .board { border-radius:7px;padding:6px;border-width:5px; }
+  #chess .piece { padding:3px; }
+  #chess .piece-face { border-width:2px; }
   .choice-sheet { border-radius: 8px; }
   dialog { border-radius: 8px; }
   .dialog-heading { gap: 12px; }
@@ -487,11 +495,48 @@ dialog::backdrop { background: #03080dd4; backdrop-filter: blur(5px); }
 }
 
 body{padding:0}main{margin:0 auto;padding:16px;max-width:1440px}body.mine-active main{padding:0}.plugin-toolbar{display:flex;justify-content:space-between;padding:8px 16px}
-/* Settings live behind one familiar control, leaving the picture uncluttered. */
-#watch .cinema-playback{position:relative}#watch .watch-controls .watch-settings{margin:0;padding:0;border:0;background:transparent}
-#watch .watch-settings summary{min-height:44px;padding:10px 13px;display:flex;gap:8px;align-items:center;border-radius:10px;font-size:13px;color:#cbdce7}
-#watch .watch-settings summary:hover{background:#ffffff0d}#watch .watch-settings summary::after{display:none}
-#watch .watch-settings-panel{position:absolute;z-index:15;right:12px;top:100%;width:min(540px,calc(100% - 24px));padding:16px 20px;background:#14212e;border:1px solid #435665;border-radius:12px;box-shadow:0 14px 40px #0007}
-#watch .watch-stage:fullscreen .watch-settings{position:static}#watch .watch-stage:fullscreen .watch-settings-panel{top:auto;bottom:80px;max-height:calc(100dvh - 120px);overflow:auto}
-#watch .watch-stage:fullscreen .cinema-playback{overflow:visible}#watch .watch-setting-grid{margin-top:0}#watch-key-hint{font-size:12px;color:#b9dce8}
-#watch .watch-stage:fullscreen .watch-settings-panel .watch-setting-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+/* A slim player strip; the whole strip hides after five seconds of inactivity. */
+#watch .cinema-heading{margin-bottom:10px;padding-bottom:6px}
+#watch .cinema-heading h2{font-size:20px}
+#watch .cinema-layout{gap:14px}
+#watch .cinema-sidebar{gap:10px}
+#watch .cinema-social{padding:12px}
+#watch .watch-members button{padding:8px 10px;min-height:36px}
+#watch .cinema-film-heading{padding:12px 0;gap:10px}
+#watch .cinema-film-heading h3{font-size:17px}
+#watch .watch-stage,#watch .watch-screen{border:0;border-radius:3px;box-shadow:none}
+#watch .cinema-playback{position:relative;padding:4px 0;border:0;opacity:1;transition:opacity .18s}
+#watch .cinema-playback.controls-hidden{opacity:0;visibility:hidden;pointer-events:none}
+#watch .watch-progress{gap:10px}
+#watch .watch-progress input[type=range]{height:14px}
+#watch .watch-progress>span{font-size:10px}
+#watch .watch-controls{display:flex;flex-wrap:nowrap;gap:3px;min-width:0;margin:3px 0 0;overflow-x:auto;scrollbar-width:none}
+#watch .watch-controls::-webkit-scrollbar{display:none}
+#watch .watch-controls>*{flex-shrink:0}
+#watch .watch-controls button{min-height:28px;padding:3px 7px;font-size:12px;line-height:1.3;white-space:nowrap;border:0;border-radius:3px;box-shadow:none;background:transparent;font-weight:400;color:#cbdce7}
+#watch .watch-controls button:focus-visible{outline:1px solid #a8d8eb;outline-offset:-1px}
+#watch #watch-play{min-width:0;background:transparent;color:#e5f5ff}
+#watch #watch-back,#watch #watch-forward{min-width:0;font-size:12px;padding:3px 6px}
+#watch #watch-fullscreen{min-width:0;margin-left:0;padding:3px 7px;position:sticky;right:0;z-index:1;background:var(--cinema-bg)}
+#watch .watch-inline-settings{display:flex;gap:1px;min-width:0;align-items:center}
+#watch .watch-inline-settings label{position:relative;display:block;margin:0;min-width:0}
+#watch .watch-inline-settings .native-choice{padding:0!important;border:0!important;min-width:0!important}
+#watch .watch-inline-settings .choice-trigger{max-width:none;width:auto;overflow:visible;text-overflow:clip}
+#watch #watch-volume{flex:0 0 50px;width:50px;min-width:38px;height:20px;padding:0;border:0;background:transparent}
+#watch #watch-join{max-width:none;overflow:visible;text-overflow:clip;font-size:12px}
+#watch-key-hint{font-size:11px;color:#b9dce8}
+#watch-key-hint:empty{display:none}
+#watch .watch-track-status{margin:2px 0;font-size:10px}
+#watch .watch-popup{position:absolute;z-index:20;bottom:calc(100% + 4px);right:5px;width:min(320px,calc(100% - 10px));max-height:min(340px,55dvh);overflow:auto;padding:5px;background:#111a22;border:1px solid #394953;border-radius:5px;box-shadow:0 5px 18px #0005;overscroll-behavior:contain}
+#watch .watch-popup .choice-option{display:block;width:100%;min-height:30px;margin:1px 0;padding:6px;text-align:left;white-space:normal;font-size:12px;border:0;border-radius:3px}
+#watch .fullscreen-danmaku{display:none;flex:0 0 136px;width:136px;margin:0}
+#watch .fullscreen-danmaku input{display:block;min-width:0;width:100%;height:26px;margin:0;padding:4px 7px;font-size:11px;line-height:1.3;border:0;border-radius:3px;box-shadow:none;background:#ffffff0c;color:#edf5fa}
+#watch .watch-stage:fullscreen,#watch .watch-stage:fullscreen .watch-screen,#watch .watch-stage:fullscreen .watch-empty{background:#000;border-radius:0}
+#watch .watch-stage:fullscreen .fullscreen-danmaku{display:flex}
+#watch .watch-stage:fullscreen .cinema-playback{padding:5px max(8px,env(safe-area-inset-right)) max(5px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));background:#000;overflow:visible}
+#watch .watch-stage:fullscreen #watch-fullscreen{background:#000}
+#watch .watch-stage:fullscreen .watch-controls{flex-wrap:nowrap}
+#watch .watch-fullscreen-status{display:none;font-size:11px;color:#ffd5a1;margin:3px 0}
+#watch .watch-stage:fullscreen .watch-fullscreen-status:not([hidden]){display:block}
+@media(max-width:760px){#watch .cinema-heading h2{font-size:18px}#watch .cinema-social{padding:11px}}
+@media(max-width:540px){#watch .watch-controls{gap:2px}#watch .watch-controls button{font-size:11px;padding:3px 5px}#watch #watch-back,#watch #watch-forward,#watch #watch-fullscreen{font-size:11px;padding:3px 5px}#watch .fullscreen-danmaku{flex-basis:110px;width:110px}#watch #watch-volume{flex-basis:40px;width:40px;min-width:40px}}

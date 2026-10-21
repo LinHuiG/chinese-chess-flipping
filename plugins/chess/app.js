@@ -6,9 +6,9 @@ const sound=new Sound(),view={motion:storageGet('cyber.motion',true)};sound.enab
 let selected=-1,boardKey='',lastMove=-1,resultSound='';
 const game=mount(rules,{timeSettings:true,round(){selected=-1;boardKey='';lastMove=-1;},render(){if(game.room?.status!=='waiting')renderChess();}});
 async function act(a){sound.unlock();try{await game.action(a);}catch(e){fail(e);}}
-const pieceNames={1:['','帅','仕','相','车','马','炮','兵'],'-1':['','将','士','象','车','马','炮','卒']};
+const pieceNames={1:['','帅','仕','相','車','马','炮','兵'],'-1':['','将','士','象','車','马','炮','卒']};
 function label(value){return value===99?'✦':value?pieceNames[Math.sign(value)][Math.abs(value)]:'';}
-for(let i=0;i<32;i++){const b=element('button','piece');b.dataset.index=i;b.onclick=()=>chessClick(i);$('board').append(b);}
+for(let i=0;i<32;i++){const b=element('button','piece');b.type='button';b.dataset.index=i;b.append(element('span','piece-face'));b.onclick=()=>chessClick(i);$('board').append(b);}
 function renderChess(){
   const r=game.room,s=game.state;if(!s)return;
   const members=$('chess-members'),membersKey=JSON.stringify([r.hostId,r.members.map(p=>[p.id,p.name])]);if(members.dataset.key!==membersKey){members.dataset.key=membersKey;members.replaceChildren(...r.members.map(p=>{const card=element('div','member-connection');card.append(element('span','',p.name+(p.id===r.hostId?' · 房主':'')),memberBadge(p.id));return card;}));}
@@ -23,10 +23,11 @@ function renderChess(){
   const key=JSON.stringify([s.board,s.lastFrom,s.lastTo,selected,myTurn,game.client.ready]);
   if(key!==boardKey){
     boardKey=key;[...$('board').children].forEach((b,i)=>{
-      const p=s.board[i],was=b.dataset.value;b.textContent=label(p);b.dataset.value=p;
-      b.className='piece '+(p===99?'dark':p===0?'empty':p>0?'red':'black')+(selected===i?' selected':'')+(s.lastTo===i?' last':'');
+      const p=s.board[i],was=b.dataset.value;b.firstElementChild.textContent=label(p);b.dataset.value=p;
+      b.className='piece '+(p===99?'dark':p===0?'empty':p>0?'red':'black')+(selected===i?' selected':'')+(s.lastTo===i?' last':'')+(s.lastFrom===i?' from':'');
+      b.setAttribute('aria-pressed',String(selected===i));
       b.disabled=!myTurn||!game.client.ready;b.setAttribute('aria-label','第 '+(i+1)+' 格，'+(p===99?'暗棋':p===0?'空格':(p>0?'红':'黑')+label(p)));
-      if(view.motion&&was!==undefined&&was!==String(p)&&p!==0)b.animate([{transform:'scale(.75) rotateY(75deg)'},{transform:'scale(1) rotateY(0)'}],{duration:240,easing:'ease-out'});
+      if(view.motion&&was!==undefined&&was!==String(p)&&p!==0)b.firstElementChild.animate([{transform:'scale(.75) rotateY(75deg)'},{transform:'scale(1) rotateY(0)'}],{duration:240,easing:'ease-out'});
     });
     for(const color of [1,-1]){
       const target=$(color===1?'red-captured':'black-captured');target.replaceChildren();

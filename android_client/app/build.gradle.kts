@@ -9,8 +9,8 @@ android {
         applicationId = "com.chessflipping.client"
         minSdk = 26
         targetSdk = 37
-        versionCode = 19
-        versionName = "0.9.1"
+        versionCode = 20
+        versionName = "0.9.2"
         testInstrumentationRunner = "com.chessflipping.client.PresentationChecks"
     }
     compileOptions {
@@ -30,7 +30,7 @@ android {
 }
 
 // App 和浏览器直接使用同一份客户端资源，不维护生成副本。
-android.sourceSets.getByName("main").assets.srcDir(rootProject.file("../server/src/main/resources"))
+android.sourceSets.getByName("main").assets.srcDir(providers.gradleProperty("cyberAssets").orNull?.let { file(it) } ?: rootProject.file("../server/src/main/resources"))
 
 dependencies {
     implementation(project(":plugin_api"))

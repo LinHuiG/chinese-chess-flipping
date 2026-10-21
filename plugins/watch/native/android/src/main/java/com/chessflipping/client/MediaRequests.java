@@ -3,6 +3,8 @@ package com.chessflipping.client;
 import okhttp3.*;
 import org.json.*;
 import java.io.*;
+import java.net.*;
+import javax.net.ssl.SSLException;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -52,18 +54,21 @@ final class MediaRequests implements AutoCloseable {
     void invalidate(){generation.incrementAndGet();workers.getQueue().clear();client.dispatcher().cancelAll();}
     void request(JSONObject q){
         String id=q.optString("id");int current=generation.get();if(closed||id.isEmpty()||id.length()>128)return;
+        boolean image=q.optString("responseType").equals("image");long timeout=Math.max(1000,Math.min(image?20000:60000,q.optLong("timeoutMs",20000))),deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(timeout);
         try{workers.execute(()->{
             if(closed||current!=generation.get())return;
+            String stage="Emby 请求";
             try{
                 HttpUrl url=HttpUrl.parse(q.getString("url"));if(url==null||!allowed(url))throw new IOException("Media origin is not authorized");
+                stage=requestStage(url,image);long remaining=TimeUnit.NANOSECONDS.toMillis(deadline-System.nanoTime());if(remaining<=0)throw new SocketTimeoutException();
                 String method=q.optString("method","GET").toUpperCase(Locale.ROOT);if(!method.matches("GET|POST|DELETE"))throw new IOException("Unsupported method");
-                boolean image=q.optString("responseType").equals("image");if(image&&!method.equals("GET"))throw new IOException("Images require GET");
+                if(image&&!method.equals("GET"))throw new IOException("Images require GET");
                 String body=q.optString("body","");if(body.length()>1048576)throw new IOException("Request too large");
                 Request.Builder builder=new Request.Builder().url(url).tag(Integer.class,current);JSONObject headers=q.optJSONObject("headers");
                 if(headers!=null){Iterator<String> keys=headers.keys();while(keys.hasNext()){String key=keys.next();if(key.matches("(?i)Accept|Content-Type|X-Emby-Token|X-Emby-Authorization|Authorization"))builder.header(key,headers.getString(key));}}
                 builder.method(method,method.equals("GET")?null:RequestBody.create(body,MediaType.parse("application/json; charset=utf-8")));
                 if(current!=generation.get())return;
-                Call call=(image?imageClient:client).newCall(builder.build());call.timeout().timeout(Math.max(1000,Math.min(image?20000:60000,q.optLong("timeoutMs",20000))),TimeUnit.MILLISECONDS);
+                Call call=(image?imageClient:client).newCall(builder.build());call.timeout().timeout(remaining,TimeUnit.MILLISECONDS);
                 try(Response response=call.execute()){
                     ByteArrayOutputStream bytes=new ByteArrayOutputStream();ResponseBody responseBody=response.body();
                     String mime="";if(image&&response.isSuccessful()){
@@ -74,8 +79,20 @@ final class MediaRequests implements AutoCloseable {
                     String dataUrl=image&&response.isSuccessful()?"data:"+mime+";base64,"+Base64.getEncoder().encodeToString(bytes.toByteArray()):"";
                     reply(id,response.code(),image?"":bytes.toString("UTF-8"),dataUrl,"",current);
                 }
-            }catch(Exception error){reply(id,0,"","","Emby 请求失败，请检查地址、授权和网络",current);}
-        });}catch(RejectedExecutionException full){reply(id,0,"","","请求过多，请稍后重试",current);}
+            }catch(Exception error){reply(id,0,"","",failureMessage(error,stage),current);}
+        });}catch(RejectedExecutionException full){reply(id,0,"","","Emby 请求排队已满，请稍后重试",current);}
+    }
+    static String requestStage(HttpUrl url,boolean image){String path=url.encodedPath();return image?"Emby 海报读取":path.endsWith("/PlaybackInfo")?"Emby 播放协商":path.endsWith("/AuthenticateByName")?"Emby 登录":path.contains("/Subtitles/")?"Emby 字幕读取":path.startsWith("/Sessions/")||path.contains("/ActiveEncodings")||path.startsWith("/LiveStreams/")?"Emby 播放状态上报":"Emby 片库请求";}
+    static String failureMessage(Throwable error,String stage){
+        for(Throwable cause=error;cause!=null;cause=cause.getCause()){
+            if(cause instanceof UnknownHostException)return stage+"失败：片源域名无法解析，请检查 Emby 地址和 DNS";
+            if(cause instanceof SSLException)return stage+"失败：片源 HTTPS 证书或安全连接异常，请检查证书及 HTTPS 入口";
+            if(cause instanceof InterruptedIOException)return stage+"超时，请检查片源网络或转码服务后重试";
+            if(cause instanceof ConnectException)return stage+"连接失败，请检查 Emby 地址、端口和服务状态";
+            if(cause instanceof SocketException||cause instanceof EOFException)return stage+"连接中断，请检查片源网络后重试";
+            if(cause.getCause()==cause)break;
+        }
+        return stage+"失败，请检查片源地址、授权、响应格式及网络";
     }
     private void reply(String id,int status,String body,String dataUrl,String error,int current){
         dispatch.accept(()->{if(closed||current!=generation.get())return;try{events.accept(new JSONObject().put("type","mediaResponse").put("id",id).put("status",status).put("body",body).put("dataUrl",dataUrl).put("error",error));}catch(JSONException ignored){}});

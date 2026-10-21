@@ -9,13 +9,97 @@ use rand_core::OsRng;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    io,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::{io::AsyncWriteExt, net::TcpStream, sync::mpsc, time::timeout};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt},
+    net::{lookup_host, TcpStream},
+    sync::mpsc,
+    time::timeout,
+};
+
+fn socket_error(error: &io::Error) -> String {
+    use io::ErrorKind::*;
+    match error.kind() {
+        ConnectionRefused => "服务端 TCP 连接被拒绝，请检查服务是否启动、端口和防火墙".into(),
+        TimedOut => "服务端 TCP 连接超时，请检查网络、端口和防火墙".into(),
+        PermissionDenied => "系统拒绝连接服务端，请检查本机网络权限或防火墙".into(),
+        ConnectionReset | ConnectionAborted | BrokenPipe | UnexpectedEof => {
+            "服务端 TCP 连接已中断，正在重新连接".into()
+        }
+        _ => "无法连接服务端 TCP 端口，请检查网络、服务器地址和端口".into(),
+    }
+}
+// Resolve separately so DNS failure is not confused with a refused TCP port.
+// Both TCP and WS use the same bounded connection stage; WSS still verifies TLS
+// against the original hostname, never the resolved address.
+async fn server_socket(host: &str, port: u16) -> Result<TcpStream, String> {
+    let addresses: Vec<_> = timeout(Duration::from_secs(5), lookup_host((host, port)))
+        .await
+        .map_err(|_| "服务端地址解析超时（5 秒），请检查 DNS 或服务器地址")?
+        .map_err(|_| "服务端地址解析失败，请检查 DNS 或服务器地址")?
+        .collect();
+    if addresses.is_empty() {
+        return Err("服务端地址解析未返回可用地址".into());
+    }
+    let stream = timeout(
+        Duration::from_secs(8),
+        TcpStream::connect(addresses.as_slice()),
+    )
+    .await
+    .map_err(|_| "服务端 TCP 连接超时（8 秒），请检查网络、端口和防火墙")?
+    .map_err(|error| socket_error(&error))?;
+    stream
+        .set_nodelay(true)
+        .map_err(|_| "服务端 TCP 连接初始化失败")?;
+    Ok(stream)
+}
+fn websocket_error(error: &tokio_tungstenite::tungstenite::Error) -> String {
+    use tokio_tungstenite::tungstenite::Error;
+    match error {
+        Error::Tls(_) => "服务端 TLS 握手失败，请检查 HTTPS 证书、系统时间和网络".into(),
+        Error::Http(response) => format!(
+            "服务端 WebSocket 接入被拒绝（HTTP {}），请检查反向代理和 /ws 地址",
+            response.status().as_u16()
+        ),
+        Error::Io(error) => socket_error(error),
+        Error::Url(_) => "服务端 WebSocket 地址无效，请检查服务器设置".into(),
+        Error::ConnectionClosed | Error::AlreadyClosed => {
+            "服务端 WebSocket 已关闭，正在重新连接".into()
+        }
+        _ => "服务端 WebSocket 握手或协议异常，请检查服务器版本和反向代理".into(),
+    }
+}
+async fn websocket_ready<S: AsyncRead + AsyncWrite + Unpin>(
+    socket: &mut tokio_tungstenite::WebSocketStream<S>,
+) -> Result<Packet, String> {
+    timeout(Duration::from_secs(8), async {
+        loop {
+            let message = socket
+                .next()
+                .await
+                .ok_or("服务端在身份确认前关闭连接")?
+                .map_err(|_| "服务端身份确认响应中断")?;
+            match message {
+                tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
+                    return Packet::parse(&bytes)
+                        .map_err(|_| "服务端身份确认报文无效，请检查服务器版本".to_string())
+                }
+                tokio_tungstenite::tungstenite::Message::Close(_) => {
+                    return Err("服务端在身份确认前关闭连接".into())
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .map_err(|_| "服务端身份确认超时（8 秒），请检查服务器和反向代理".to_string())?
+}
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -143,15 +227,9 @@ async fn tcp(
     mut rx: mpsc::Receiver<Pending>,
     mut audio: mpsc::Receiver<Pending>,
 ) -> Result<(), String> {
-    let mut stream = timeout(
-        Duration::from_secs(8),
-        TcpStream::connect((s.host.as_str(), s.port)),
-    )
-    .await
-    .map_err(|_| "连接超时")?
-    .map_err(|_| "连接失败，请检查服务器")?;
-    stream.set_nodelay(true).map_err(|_| "TCP设置失败")?;
-    state.event(json!({"type":"status","message":"正在进行加密握手…"}));
+    state.event(json!({"type":"status","message":"正在解析并连接服务端…"}));
+    let mut stream = server_socket(&s.host, s.port).await?;
+    state.event(json!({"type":"status","message":"正在与服务端进行加密握手…"}));
     let (mut send, mut recv) = timeout(Duration::from_secs(8), async {
         let request = Packet::new(1, b"", b"").plain()?;
         stream
@@ -185,17 +263,19 @@ async fn tcp(
         Ok::<_, String>((send, recv))
     })
     .await
-    .map_err(|_| "握手超时")??;
+    .map_err(|_| "服务端加密握手超时（8 秒），请检查网络和服务器版本")?
+    .map_err(|error| format!("服务端加密握手失败：{error}"))?;
     let ready = recv.decrypt(
         &timeout(Duration::from_secs(8), wire::read(&mut stream))
             .await
-            .map_err(|_| "身份确认超时")??,
+            .map_err(|_| "服务端身份确认超时（8 秒），请检查服务端响应")?
+            .map_err(|error| format!("服务端身份确认中断：{error}"))?,
         false,
     )?;
     let accepted = ready.kind == 4 && ready.fields()?.get("ok") == Some(&"1");
     receive(&state, g, ready);
     if !accepted {
-        return Err("身份被拒绝".into());
+        return Err("服务端拒绝身份确认，请重新连接".into());
     }
     let (mut reader, mut writer) = stream.into_split();
     let pong = Arc::new(Mutex::new(Instant::now()));
@@ -203,7 +283,9 @@ async fn tcp(
     let read_state = state.clone();
     let reading = async move {
         loop {
-            let b = wire::read(&mut reader).await?;
+            let b = wire::read(&mut reader)
+                .await
+                .map_err(|_| "服务端 TCP 接收中断，正在重新连接")?;
             let p = recv.decrypt(&b, false)?;
             if p.kind == 33 {
                 *rp.lock().unwrap() = Instant::now()
@@ -217,12 +299,12 @@ async fn tcp(
             Duration::from_secs(5),
         );
         loop {
-            let p = tokio::select! {p=next(&mut rx,&mut audio)=>p.ok_or("连接已关闭")?,_=interval.tick()=>{if pong.lock().unwrap().elapsed()>Duration::from_secs(15){return Err::<(),String>("心跳中断".into())}heartbeat()}};
+            let p = tokio::select! {p=next(&mut rx,&mut audio)=>p.ok_or("连接已关闭")?,_=interval.tick()=>{if pong.lock().unwrap().elapsed()>Duration::from_secs(15){return Err::<(),String>("服务端心跳响应超时，正在重新连接".into())}heartbeat()}};
             let b = send.encrypt(&p)?;
             timeout(Duration::from_secs(2), writer.write_all(&b))
                 .await
-                .map_err(|_| "发送阻塞，重新连接")?
-                .map_err(|_| "发送失败")?;
+                .map_err(|_| "向服务端发送超时（2 秒），正在重新连接")?
+                .map_err(|_| "向服务端发送失败，正在重新连接")?;
         }
     };
     tokio::select! {r=reading=>r,r=writing=>r}
@@ -236,32 +318,50 @@ async fn ws(
     mut audio: mpsc::Receiver<Pending>,
 ) -> Result<(), String> {
     let scheme = if s.transport == "HTTPS" { "wss" } else { "ws" };
+    state.event(json!({"type":"status","message":"正在解析并连接服务端…"}));
+    let stream = server_socket(&s.host, s.port).await?;
     let host = if s.host.contains(':') {
         format!("[{}]", s.host)
     } else {
         s.host
     };
     let url = format!("{scheme}://{host}:{}/ws", s.port);
+    state.event(json!({"type":"status","message":"正在建立服务端 WebSocket 通道…"}));
     let (mut socket, _) = timeout(
         Duration::from_secs(8),
-        tokio_tungstenite::connect_async(url),
+        tokio_tungstenite::client_async_tls_with_config(url, stream, None, None),
     )
     .await
-    .map_err(|_| "连接超时")?
-    .map_err(|_| "连接失败，请检查地址和证书")?;
-    socket
-        .send(tokio_tungstenite::tungstenite::Message::Binary(
+    .map_err(|_| "服务端 TLS / WebSocket 握手超时（8 秒），请检查证书、反向代理和网络")?
+    .map_err(|error| websocket_error(&error))?;
+    timeout(
+        Duration::from_secs(2),
+        socket.send(tokio_tungstenite::tungstenite::Message::Binary(
             Packet::new(3, b"", identity.to_string()).plain()?.into(),
-        ))
-        .await
-        .map_err(|_| "身份申请失败")?;
+        )),
+    )
+    .await
+    .map_err(|_| "向服务端发送身份申请超时（2 秒）")?
+    .map_err(|_| "向服务端发送身份申请失败")?;
+    // READY has its own deadline, before the normal heartbeat begins. A proxy
+    // accepting the WebSocket upgrade but never forwarding application traffic
+    // must be reported as identity confirmation, not a heartbeat failure.
+    let ready = websocket_ready(&mut socket).await?;
+    if ready.kind != 4 {
+        return Err("服务端未返回身份确认，请检查服务器版本".into());
+    }
+    let accepted = ready.fields()?.get("ok") == Some(&"1");
+    receive(&state, g, ready);
+    if !accepted {
+        return Err("服务端拒绝身份确认，请重新连接".into());
+    }
     let (mut writer, mut reader) = socket.split();
     let pong = Arc::new(Mutex::new(Instant::now()));
     let rp = pong.clone();
     let rs = state.clone();
     let reading = async move {
         while let Some(item) = reader.next().await {
-            let msg = item.map_err(|_| "连接中断")?;
+            let msg = item.map_err(|_| "服务端 WebSocket 接收中断，正在重新连接")?;
             if let tokio_tungstenite::tungstenite::Message::Binary(b) = msg {
                 let p = Packet::parse(&b)?;
                 if p.kind == 33 || p.kind == 4 {
@@ -272,7 +372,7 @@ async fn ws(
                 break;
             }
         }
-        Err::<(), String>("连接已关闭".into())
+        Err::<(), String>("服务端 WebSocket 已关闭，正在重新连接".into())
     };
     let writing = async move {
         let mut interval = tokio::time::interval_at(
@@ -280,7 +380,7 @@ async fn ws(
             Duration::from_secs(5),
         );
         loop {
-            let p = tokio::select! {p=next(&mut rx,&mut audio)=>p.ok_or("连接已关闭")?,_=interval.tick()=>{if pong.lock().unwrap().elapsed()>Duration::from_secs(15){return Err::<(),String>("心跳中断".into())}heartbeat()}};
+            let p = tokio::select! {p=next(&mut rx,&mut audio)=>p.ok_or("连接已关闭")?,_=interval.tick()=>{if pong.lock().unwrap().elapsed()>Duration::from_secs(15){return Err::<(),String>("服务端心跳响应超时，正在重新连接".into())}heartbeat()}};
             timeout(
                 Duration::from_secs(2),
                 writer.send(tokio_tungstenite::tungstenite::Message::Binary(
@@ -288,8 +388,8 @@ async fn ws(
                 )),
             )
             .await
-            .map_err(|_| "发送阻塞")?
-            .map_err(|_| "发送失败")?;
+            .map_err(|_| "向服务端发送超时（2 秒），正在重新连接")?
+            .map_err(|_| "向服务端发送失败，正在重新连接")?;
         }
     };
     tokio::select! {r=reading=>r,r=writing=>r}
@@ -298,6 +398,84 @@ async fn ws(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn service_socket_connects_and_refused_port_names_the_server_stage() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let socket = server_socket("127.0.0.1", address.port()).await.unwrap();
+        assert_eq!(socket.peer_addr().unwrap(), address);
+        drop(socket);
+        drop(listener);
+        let error = server_socket("127.0.0.1", address.port())
+            .await
+            .unwrap_err();
+        assert!(error.contains("服务端 TCP") && error.contains("拒绝"));
+    }
+    #[tokio::test]
+    async fn websocket_proxy_denial_is_reported_without_its_url_or_body() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 2048];
+            stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 11\r\n\r\nprivate-log")
+                .await
+                .unwrap();
+        });
+        let socket = server_socket("127.0.0.1", address.port()).await.unwrap();
+        let error = tokio_tungstenite::client_async_tls_with_config(
+            format!("ws://{address}/ws?token=never-log-this"),
+            socket,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        let message = websocket_error(&error);
+        assert!(message.contains("服务端 WebSocket") && message.contains("HTTP 502"));
+        assert!(
+            !message.contains("private-log")
+                && !message.contains("token=")
+                && !message.contains("never-log-this")
+        );
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn websocket_without_ready_times_out_in_identity_stage() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            // A proxy can accept the upgrade while the upstream never responds.
+            let _ = socket.next().await;
+            tokio::time::sleep(Duration::from_secs(20)).await;
+        });
+        let stream = server_socket("127.0.0.1", address.port()).await.unwrap();
+        let (mut socket, _) = tokio_tungstenite::client_async_tls_with_config(
+            format!("ws://{address}/ws"),
+            stream,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                Packet::new(3, b"", b"{}").plain().unwrap().into(),
+            ))
+            .await
+            .unwrap();
+        let error = websocket_ready(&mut socket)
+            .await
+            .err()
+            .expect("identity stage must time out");
+        assert!(error.contains("身份确认超时") && !error.contains("心跳"));
+        server.abort();
+    }
     #[test]
     fn queue_budget_keeps_reliable_capacity_when_voice_is_full() {
         let network = Network::new();

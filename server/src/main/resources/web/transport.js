@@ -53,15 +53,15 @@ export class RoomClient{
     this.enabled=true;clearTimeout(this.retry);
     if(this.connecting||this.ready)return;
     this.connecting=true;this.identity=storageGet(this.identityKey(),{});const generation=++this.generation;
-    this.callbacks.status?.('正在连接…');this.started=Date.now();
-    if(native){nativeCall('connect',JSON.stringify(this.identity)).catch(()=>this.finish('连接失败，请检查服务器'));}
+    this.connectPhase='连接';this.callbacks.status?.('正在连接服务器…');this.started=Date.now();
+    if(native){nativeCall('connect',JSON.stringify(this.identity)).catch(error=>this.finish(error?.message||'服务器连接失败，请检查地址和网络'));}
     else{
       const url=new URL('/ws',location.href);url.protocol=url.protocol==='https:'?'wss:':'ws:';
       const socket=this.socket=new WebSocket(url);socket.binaryType='arraybuffer';
-      socket.onopen=()=>{if(generation===this.generation)this.sendPacket(3,{},this.identity);};
+      socket.onopen=()=>{if(generation===this.generation){this.connectPhase='身份确认';this.callbacks.status?.('服务器通信已连接，正在确认身份…');this.sendPacket(3,{},this.identity);}};
       socket.onmessage=e=>{if(generation===this.generation)this.receive(new Uint8Array(e.data));};
-      socket.onclose=()=>{if(generation===this.generation)this.finish('连接已断开');};
-      socket.onerror=()=>{if(generation===this.generation)this.finish('连接失败，请检查服务器');};
+      socket.onclose=()=>{if(generation===this.generation)this.finish('服务器连接已断开');};
+      socket.onerror=()=>{if(generation===this.generation)this.finish('无法连接服务器 WebSocket，请检查服务器地址、网络、HTTPS 证书和反向代理');};
     }
     clearInterval(this.timer);this.timer=setInterval(()=>this.tick(),1000);
   }
@@ -112,9 +112,9 @@ export class RoomClient{
     if(!this.ready)return Promise.reject(Error('连接正在恢复'));
     const requestId=id();
     return new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{this.pending.delete(requestId);reject(Error('请求超时'));},op===102?32000:10000);
+      const timer=setTimeout(()=>{this.pending.delete(requestId);reject(Error(op===102?'入房超时（32 秒），服务器或房主未完成准入回应':('服务器'+({100:'建房',101:'房间列表',103:'房间同步',104:'退出房间',210:'直连登记'}[op]||'通信')+'请求超时（10 秒），请检查服务器连接')));},op===102?32000:10000);
       this.pending.set(requestId,{resolve,reject,timer});
-      Promise.resolve(this.sendPacket(16,{op,requestId,...headers},body)).then(sent=>{if(!sent)throw Error('发送失败');}).catch(e=>{clearTimeout(timer);this.pending.delete(requestId);reject(e);});
+      Promise.resolve(this.sendPacket(16,{op,requestId,...headers},body)).then(sent=>{if(!sent)throw Error('服务器发送失败，连接中断或发送队列已满，请稍后重试');}).catch(e=>{clearTimeout(timer);this.pending.delete(requestId);reject(e);});
     });
   }
   async createRoom({roomType,name,locked=false,metadata=''}){return object((await this.request(100,{roomType,name,locked,metadata})).rawBody);}
@@ -150,9 +150,9 @@ export class RoomClient{
   }
   tick(){
     const now=Date.now();
-    if(!this.ready){if(now-this.started>15000)this.finish('连接超时');return;}
+    if(!this.ready){const limit=native?40000:15000;if(now-this.started>limit)this.finish('服务器'+(this.connectPhase||'连接')+'超时（'+limit/1000+' 秒），请检查服务状态和网络');return;}
     if(native)return;
-    if(now-this.pongAt>15000){this.finish('服务器响应超时');return;}
+    if(now-this.pongAt>15000){this.finish('服务器心跳超时（15 秒未响应）');return;}
     if(now-this.pingAt>=5000){this.pingAt=now;this.sendPacket(32,{}, {pingId:id(),sentAtMs:now});}
   }
   finish(reason){
@@ -162,7 +162,7 @@ export class RoomClient{
     const socket=this.socket;this.socket=null;if(socket){socket.onclose=socket.onerror=socket.onmessage=socket.onopen=null;socket.close();}
     if(native)nativeCall('disconnect').catch(()=>{});
     this.clearPeers();for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(Error(reason));}this.pending.clear();
-    this.callbacks.closed?.(reason);
+    this.callbacks.closed?.(this.enabled?reason+'；3 秒后自动重连':reason);
     if(this.enabled){const generation=this.generation;this.retry=setTimeout(()=>{if(this.enabled&&this.generation===generation)this.connect();},3000);}
   }
   disconnect(){this.enabled=false;clearTimeout(this.retry);this.retry=null;this.finish('已断开连接');}

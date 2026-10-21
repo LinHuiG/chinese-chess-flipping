@@ -5,7 +5,7 @@ export class PluginRoom{
     this.events=events;this.room=null;this.engine=null;this.state=null;this.seq=-1;this.lifecycle=0;this.operation=0;this.recovery=0;this.actions=new Map();this.completed=new Map();this.candidates=[];this.offers=new Map();this.relayProbes=new Map();this.relayLatency=new Map();
     this.client=new RoomClient({
       connected:(identity,resumed)=>this.connected(identity,resumed),
-      status:s=>events.status?.(s),closed:s=>{this.connectedNow=false;this.latency=undefined;this.clearMemberNetwork();this.checkpoint();events.module?.({type:'disconnected'});events.status?.(s);events.changed?.();},
+      status:s=>events.status?.(s),closed:s=>{this.connectedNow=false;this.latency=undefined;this.clearMemberNetwork();this.checkpoint();events.module?.({type:'disconnected',reason:s});events.status?.(s);events.changed?.();},
       latency:ms=>{this.latency=ms;events.network?.();},path:()=>events.network?.(),
       peerValid:(who,context)=>typeof context==='string'&&this.room?.members.some(p=>p.id===who&&p.udp)&&this.offers.get(who)?.context===context,
       message:m=>this.message(m),native:e=>this.nativeEvent(e)
@@ -27,12 +27,13 @@ export class PluginRoom{
     if(!this.client.ready)return {kind:'offline',text:'连接恢复中',title:'本机与服务器连接中断，等待恢复'};
     const now=performance.now(),quality=this.client.peerQuality.get(who),direct=this.client.peerLatency.get(who),relay=this.relayLatency.get(who),ms=value=>(Math.round(value*10)/10)+' ms';
     if(this.client.peerReady.has(who)&&quality?.ready&&now-quality.receivedAt<6000&&Number.isFinite(direct))return {kind:'direct',text:'P2P 可用 · '+ms(direct),title:'本机与此成员的认证 UDP 往返延迟；控制消息仍走服务器，语音按质量选路'};
-    if(relay&&now-relay.at<10000)return {kind:'relay',text:'中转 · '+ms(relay.ms),title:'本机经服务器到此成员再返回的往返延迟，包含对方处理时间'};
+    if(relay&&now-relay.at<10000)return {kind:'relay',text:'中转可用 · '+ms(relay.ms),title:'本机经服务器到此成员再返回的往返延迟，包含对方处理时间'};
+    const pending=this.relayProbes.get(who);if(pending&&now-(pending.since??pending.at)>=10000)return {kind:'unresponsive',text:'成员通信超时 · 已尝试中转',title:'服务器连接正常，但此成员超过 10 秒未回应中转探测；可能已离线、退后台或成员网络异常'};
     return {kind:'relay',text:'中转 · 待测',title:'等待此成员回复测量；不使用本机到服务器的延迟代替'};
   }
   presence(){
     const context=this.context(),now=performance.now();
-    for(const p of this.room.members)if(p.id!==this.self){const probe=id();this.relayProbes.set(p.id,{probe,at:now,context});this.client.sendTo(this.room.roomId,p.id,{type:'presence'},{name:this.nickname,probe},'relay');}
+    for(const p of this.room.members)if(p.id!==this.self){const probe=id();this.relayProbes.set(p.id,{probe,at:now,since:this.relayProbes.get(p.id)?.since??now,context});Promise.resolve(this.client.sendTo(this.room.roomId,p.id,{type:'presence'},{name:this.nickname,probe},'relay')).catch(()=>{});}
     this.events.network?.();
   }
   async connected(identity,resumed){
@@ -181,7 +182,7 @@ export class PluginRoom{
     if(!this.host)return;
     this.room.seq++;const snapshot=this.snapshot();this.state=snapshot.state;this.stateAt=performance.now();this.seq=this.room.seq;
     const bytes=encoder.encode(JSON.stringify(snapshot));
-    for(const p of this.room.members)if(p.id!==this.self&&p.id!==exclude)this.client.sendTo(this.room.roomId,p.id,{type:'state'},bytes,'relay');
+    for(const p of this.room.members)if(p.id!==this.self&&p.id!==exclude)Promise.resolve(this.client.sendTo(this.room.roomId,p.id,{type:'state'},bytes,'relay')).catch(()=>{});
     this.updateTimer();this.events.changed?.();if(native)nativeCall('roomActive',this.room.name).catch(()=>{});
   }
   apply(snapshot){
@@ -196,9 +197,9 @@ export class PluginRoom{
     const messageId=id(),payload={round:this.room.round,action,...this.rules.actionData?.(this)};
     if(this.host){const error=this.perform(this.self,payload);this.publish();this.checkpoint();return error?Promise.reject(Error(error)):Promise.resolve();}
     return new Promise((resolve,reject)=>{
-      const send=path=>this.client.sendTo(this.room.roomId,this.room.hostId,{type:'action',messageId},payload,path);
+      const send=path=>Promise.resolve(this.client.sendTo(this.room.roomId,this.room.hostId,{type:'action',messageId},payload,path)).catch(()=>false);
       const retry=setTimeout(()=>send('relay'),400);
-      const timeout=setTimeout(()=>{this.actions.delete(messageId);reject(Error('房主暂时没有回应，请重试'));},5000);
+      const timeout=setTimeout(()=>{this.actions.delete(messageId);reject(Error('房主操作回应超时（5 秒），已尝试中转；请等待房主网络恢复后重试'));},5000);
       this.actions.set(messageId,{resolve,reject,retry,timeout});send('auto');
     });
   }

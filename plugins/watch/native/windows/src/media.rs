@@ -26,6 +26,7 @@ extern "C" {
         height: c_int,
         clip_height: c_int,
         visible: c_int,
+        ex: c_int, ey: c_int, ew: c_int, eh: c_int,
     );
     fn cyber_media_interaction(window: *mut c_void) -> c_int;
     fn cyber_media_window_hide(window: *mut c_void);
@@ -315,12 +316,15 @@ impl Media {
             physical("height", 1),
         );
         let clip_height = if bounds.get("clipHeight").is_some() { physical("clipHeight", 0).min(height) } else { height };
+        let exclusion = &bounds["exclusion"];
+        let edge = |key: &str| ((exclusion[key].as_f64().unwrap_or(0.) * scale).round() as i32).clamp(-32768, 32768);
+        let (ex, ey, ew, eh) = (edge("x"), edge("y"), edge("width").max(0), edge("height").max(0));
         let visible =
             self.visible.load(Ordering::Acquire) && self.foreground.load(Ordering::Acquire);
         let hwnd = self.hwnd.load(Ordering::Acquire);
         w.run_on_main_thread(move || unsafe {
             if hwnd != 0 {
-                cyber_media_window_bounds(hwnd as *mut c_void, x, y, width, height, clip_height, visible as i32)
+                cyber_media_window_bounds(hwnd as *mut c_void, x, y, width, height, clip_height, visible as i32, ex, ey, ew, eh)
             }
         })
         .map_err(|_| "播放器尺寸更新失败".into())

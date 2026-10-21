@@ -3,7 +3,7 @@ export function installChoices(){
   const sheet=document.createElement('dialog');sheet.className='choice-sheet';sheet.setAttribute('aria-label','选择');document.body.append(sheet);let source,trigger;
   const close=()=>{sheet.close();trigger?.focus();};sheet.addEventListener('click',e=>{if(e.target===sheet)close();});sheet.addEventListener('cancel',()=>trigger?.focus());
   const entries=[];
-  for(const select of document.querySelectorAll('select')){
+  for(const select of document.querySelectorAll('select:not([data-player-choice])')){
     select.classList.add('native-choice');select.tabIndex=-1;select.setAttribute('aria-hidden','true');
     const button=document.createElement('button');button.type='button';button.className='choice-trigger';button.setAttribute('aria-haspopup','dialog');button.setAttribute('aria-label',select.getAttribute('aria-label')||document.querySelector(`label[for="${select.id}"]`)?.textContent||'选择');select.after(button);
     button.onclick=()=>{source=select;trigger=button;sheet.replaceChildren();const title=document.createElement('h3');title.textContent=button.getAttribute('aria-label');sheet.append(title);

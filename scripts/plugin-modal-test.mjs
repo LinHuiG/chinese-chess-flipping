@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+const commands=[];
+globalThis.NativeRoom={platform:'WINDOWS',extensionCall:async text=>{commands.push(JSON.parse(text));return true;}};
+const {PluginRuntime}=await import('../server/src/main/resources/web/plugin-runtime.js');
+const runtime=new PluginRuntime({identity:{clientId:'self'}},null),a=runtime.active={record:{manifest:{permissions:['media']},artifacts:{windows:{native:{exports:{playerCommand:'media'}}}}},frame:{getBoundingClientRect:()=>({x:0,y:0,width:800,height:600})},roomId:'room',authorized:new Set(['self'])};
+const last=()=>JSON.parse(commands.at(-1).args[0]);
+await runtime.native(a,'playerCommand',JSON.stringify({visible:true}));assert.equal(last().visible,true);
+await runtime.setModal(true);assert.equal(last().visible,false);
+await runtime.native(a,'playerCommand',JSON.stringify({visible:true,bounds:{x:0,y:0,width:640,height:360}}));assert.equal(last().visible,false,'old plugins cannot cover the host confirmation by publishing another visible=true');
+await runtime.native(a,'playerCommand',JSON.stringify({playing:true}));assert.equal(last().visible,false);
+await runtime.setModal(false);assert.equal(last().visible,true,'cancel restores the latest plugin-requested visibility');
+await runtime.setModal(true);await runtime.native(a,'playerCommand',JSON.stringify({visible:false}));await runtime.setModal(false);assert.equal(last().visible,false,'a plugin dialog still hiding the video must remain respected');
+runtime.active=null;await runtime.setModal(false);
+console.log('PASS host exit-modal native visibility guard, old-plugin updates, cancellation and plugin-owned modal preservation');

@@ -213,6 +213,7 @@ jobs:
         if: steps.scope.outputs.should_check == 'true'
         run: |
           node scripts/plugin-test.mjs
+          node scripts/plugin-modal-test.mjs
           node scripts/plugin-download-test.mjs
           node scripts/player-wake-test.mjs
           node scripts/client-test.mjs
@@ -221,6 +222,9 @@ jobs:
           node scripts/watch-player-test.mjs
           node scripts/watch-native-player-test.mjs
           node scripts/watch-seek-test.mjs
+          node scripts/network-diagnostics-test.mjs
+          node scripts/watch-reliability-test.mjs
+          node scripts/hls-timeline-test.mjs
           node scripts/watch-load-race-test.mjs
           node scripts/watch-save-test.mjs
           node scripts/voice-capture-test.mjs

@@ -337,12 +337,12 @@ await withClock(async()=>{
   try{
     assert.equal(host.memberConnection(host.self).text,'我');assert.equal(host.memberConnection(guest.self).text,'中转 · 待测');
     host.presence();assert.equal(requests.length,1);assert.equal(requests[0].path,'relay');receive(guest,host.self,requests[0]);assert.equal(replies.length,1);assert.equal(replies[0].path,'relay','presence echo must remain on the server path');
-    now+=42;receive(host,guest.self,replies[0]);assert.equal(host.memberConnection(guest.self).text,'中转 · 42 ms','measure the full peer round trip, not the 7 ms server ping');
+    now+=42;receive(host,guest.self,replies[0]);assert.equal(host.memberConnection(guest.self).text,'中转可用 · 42 ms','measure the full peer round trip, not the 7 ms server ping');
     now+=20;receive(host,guest.self,replies[0]);assert.equal(host.relayLatency.get(guest.self).ms,42,'a duplicate echo cannot change a completed measurement');
     const peerContext=id();host.offers.set(guest.self,{context:peerContext});
     host.client.nativeEvent({type:'peer',peerId:guest.self,context:peerContext,ready:true,latency:13.5});assert.equal(host.memberConnection(guest.self).text,'P2P 可用 · 13.5 ms');
     host.client.nativeEvent({type:'peer',peerId:guest.self,context:id(),ready:false});assert.equal(host.memberConnection(guest.self).kind,'direct','stale native context cannot override the current peer');
-    now+=6001;assert.equal(host.memberConnection(guest.self).text,'中转 · 42 ms','expired direct probe falls back to a recent relay measurement');now+=4000;assert.equal(host.memberConnection(guest.self).text,'中转 · 待测','expired peer measurement must not remain as a live delay');
+    now+=6001;assert.equal(host.memberConnection(guest.self).text,'中转可用 · 42 ms','expired direct probe falls back to a recent relay measurement');now+=4000;assert.equal(host.memberConnection(guest.self).text,'中转 · 待测','expired peer measurement must not remain as a live delay');
     host.presence();const old=requests.at(-1);host.client.finish('test disconnect');assert.equal(host.memberConnection(guest.self).kind,'offline');host.client.ready=true;receive(host,guest.self,{rid:old.rid,headers:{type:'presence.reply'},body:{probe:old.body.probe}});assert.equal(host.relayLatency.size,0,'echo from a previous connection is discarded');
     const oldRoom=structuredClone(host.room);host.reset();host.room=oldRoom;host.offers.set(guest.self,{context:id()});host.client.nativeEvent({type:'peer',peerId:guest.self,context:peerContext,ready:true,latency:1});assert.equal(host.memberConnection(guest.self).text,'中转 · 待测','same-ID reentry cannot restore old P2P metrics');
     let delivered=0;host.events.module=()=>delivered++;const frame=packet(64,{roomId:host.room.roomId,type:'voice'},new Uint8Array([1]));

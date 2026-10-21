@@ -14,8 +14,9 @@ globalThis.setInterval=()=>0;
 class Hls {
   static Events={ERROR:'error'};
   static isSupported(){return true;}
+  constructor(config){this.config=config;}
   on(type,handler){this.handler=handler;} emit(error){this.handler?.('error',error);}
-  loadSource(url){this.url=url;} attachMedia(){} stopLoad(){}
+  loadSource(url){this.url=url;} attachMedia(video){video.currentTime=this.config.startPosition;} stopLoad(){}
   destroy(){this.destroyed=true;}
 }
 globalThis.Hls=Hls;
@@ -23,12 +24,13 @@ async function settle(){for(let i=0;i<60;i++)await Promise.resolve();}
 async function until(check,message){await settle();assert.ok(check(),message);}
 function harness(){
   now=1000;
-  const requests=[],reports=[];
+  const requests=[],reports=[],fixture={playlist:'#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:3,\n0.ts\n#EXT-X-ENDLIST\n'};
   globalThis.fetch=async(url,options)=>{
     const parsed=new URL(url),body=options.body?JSON.parse(options.body):null;
+    if(parsed.pathname.endsWith('.m3u8'))return new Response(fixture.playlist);
     if(parsed.pathname.endsWith('/PlaybackInfo'))return new Promise(resolve=>{
       const index=requests.length+1,request={url,body,headers:options.headers,index,done:false};requests.push(request);
-      request.reply=(direct=false,session='session-'+index)=>{if(request.done)return;request.done=true;resolve({status:200,text:async()=>JSON.stringify({PlaySessionId:session,MediaSources:[{Id:'source-'+index,RunTimeTicks:6000000000,LiveStreamId:'live-'+index,SupportsDirectPlay:direct,Container:'mp4',MediaStreams:[{Type:'Video',Codec:'h264'},{Type:'Audio',Codec:'aac',Index:1}],...(direct?{DirectStreamUrl:'/video.mp4'}:{TranscodingUrl:'/hls/'+session+'.m3u8?StartTimeTicks='+body.StartTimeTicks})}]})});};
+      request.reply=(direct=false,session='session-'+index)=>{if(request.done)return;request.done=true;resolve({status:200,text:async()=>JSON.stringify({PlaySessionId:session,MediaSources:[{Id:'source-'+index,RunTimeTicks:6000000000,LiveStreamId:'live-'+index,SupportsDirectPlay:direct,Container:'mp4',MediaStreams:[{Type:'Video',Codec:'h264'},{Type:'Audio',Codec:'aac',Index:1}],...(direct?{DirectStreamUrl:'/video.mp4'}:{TranscodingUrl:'/hls/'+session+'.m3u8?StartTimeTicks='+body.StartTimeTicks+'&allowVideoStreamCopy=true&videoCodec=copy&allowAudioStreamCopy=true'})}]})});};
     });
     reports.push({path:parsed.pathname,query:Object.fromEntries(parsed.searchParams),body,headers:options.headers});
     return {status:200,text:async()=>'{}'};
@@ -40,10 +42,16 @@ function harness(){
   const watch=Object.assign(new WatchRoom(room,()=>{}),{access:{base:'http://fixture.invalid',token:'old-test-token',userId:'viewer'},receivedAt:now,hostOffset:0,voice:{event(){},configure(){}},render(){},send:async()=>{},loadSubtitles:async()=>{}});
   const update=async(position,extra={})=>watch.event({type:'watch.state',from:'host',body:{...room.room.playback,position,version:room.room.playback.version+1,at:now,...extra}});
   const release=async()=>{for(let i=0;i<6;i++){for(const request of requests)request.reply();await settle();}};
-  return {watch,room,video,requests,reports,update,release};
+  return {watch,room,video,requests,reports,update,release,fixture};
 }
 async function startDirect({watch,room,requests}){const loading=watch.load(room.room.playback);await until(()=>requests.length===1,'initial direct negotiation');requests[0].reply(true);await loading;}
 const tests=[
+  ['full Emby HLS uses its absolute timeline and removes mixed-case codec/copy parameters',async h=>{
+    h.fixture.playlist='#EXTM3U\n#EXT-X-START:TIME-OFFSET=180\n'+Array(200).fill('#EXTINF:3,\nsegment.ts\n').join('')+'#EXT-X-ENDLIST\n';
+    const loading=h.watch.load(h.room.room.playback);await until(()=>h.requests.length===1,'full timeline negotiation');h.requests[0].reply();await loading;
+    assert.equal(h.watch.offset,0);assert.equal(h.watch.hls.config.startPosition,180);assert.equal(h.video.currentTime,180);
+    const query=new URL(h.watch.url).searchParams;for(const key of ['AllowVideoStreamCopy','AllowAudioStreamCopy','EnableAutoStreamCopy']){assert.equal(query.get(key),'false');assert.equal([...query.keys()].filter(k=>k.toLowerCase()===key.toLowerCase()).length,1);}assert.equal(query.get('VideoCodec'),'h264');assert(!query.has('videoCodec'));await h.update(55);assert.equal(h.requests.length,1,'full HLS seeks reuse the active Emby session');assert.equal(h.video.currentTime,55);
+  }],
   ['an old seek timeout cannot poison the next episode while its save is pending',async h=>{
     const {watch,room,requests}=h;await startDirect(h);room.host=true;
     room.assertCurrent=()=>{};room.publish=()=>{};room.checkpoint=()=>{};
