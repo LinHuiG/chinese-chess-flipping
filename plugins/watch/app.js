@@ -24,6 +24,12 @@ $('watch-volume').onchange=()=>watch.saveHost();
 $('watch-retry').onclick=()=>{watch.unlockMedia();watch.reload().catch(fail);};
 $('watch-back').onclick=()=>watch.skip(-10).catch(fail);
 $('watch-forward').onclick=()=>watch.skip(30).catch(fail);
+const diagnostics=$('watch-diagnostics-dialog');
+function refreshDiagnostics(){$('watch-diagnostics-text').value=watch.diagnosticsText();}
+$('watch-diagnostics').onclick=()=>{if(!watch.active)return;watch.ui.closePopup();refreshDiagnostics();if(document.fullscreenElement)document.fullscreenElement.append(diagnostics);diagnostics.showModal();watch.bounds();};
+$('watch-diagnostics-refresh').onclick=refreshDiagnostics;
+$('watch-diagnostics-select').onclick=()=>{$('watch-diagnostics-text').focus();$('watch-diagnostics-text').select();};
+diagnostics.addEventListener('close',()=>{document.body.append(diagnostics);watch.ui.wake();watch.bounds();});
 $('danmaku-form').onsubmit=e=>{e.preventDefault();watch.sendChat($('danmaku-text').value).catch(fail);$('danmaku-text').value='';};
 // Source management and browsing are separate screens. Credentials stay in memory.
 let libraryRequest=0,libraryType='Movie',libraryTerm='',libraryPath=[],libraryItems=[],libraryTotal=0,libraryOffset=0,libraryShown=0,libraryBusy=false,libraryRetry;

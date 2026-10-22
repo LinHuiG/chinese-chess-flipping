@@ -1,5 +1,6 @@
 import {asset,id,native,nativeCall,storageSet,base64,bootstrap} from '../../plugin_sdk/transport.js';
 import {RoomVoice} from './voice.js';
+import {watchLog,diagnosticsText} from './diagnostics.js';
 import {parseVtt} from './subtitles.js';
 import {playlistTimeline} from './hls-timeline.js';
 import {cleanWatchSave,readWatchSave,writeWatchSave} from './watch-save.js';
@@ -21,7 +22,7 @@ async function requestMedia(url,method='GET',headers={},body,timeoutMs=20000,res
   let status,text,dataUrl;
   if(native?.mediaRequest){const requestId=id(),response=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(requestId);reject(Error('片源请求超时'));},timeoutMs);pending.set(requestId,{resolve,reject,timer,responseType});nativeCall('mediaRequest',JSON.stringify({id:requestId,url,method,headers,responseType,timeoutMs,...(body===undefined?{}:{body:JSON.stringify(body)})})).catch(e=>{pending.delete(requestId);clearTimeout(timer);reject(e);});});status=response.status;text=response.body||'';dataUrl=response.dataUrl;}
   else{const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);if(responseType==='image')imageRequests.add(controller);try{const response=await fetch(url,{method,headers,body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal,credentials:'omit',redirect:'error'});status=response.status;if(responseType==='image'&&response.ok){const mime=(response.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();if(!/^image\/(jpeg|png|webp|gif)$/.test(mime))throw Error('不支持的海报格式');const reader=response.body.getReader(),chunks=[];let size=0;while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>2097152){await reader.cancel();throw Error('海报过大');}chunks.push(value);}const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}dataUrl='data:'+mime+';base64,'+base64(bytes);}else{const reader=response.body?.getReader(),chunks=[];let size=0;if(reader)try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>2097152)throw Error('片源响应过大');chunks.push(value);}}finally{await reader.cancel().catch(()=>{});}const bytes=new Uint8Array(size);let at=0;for(const chunk of chunks){bytes.set(chunk,at);at+=chunk.length;}text=new TextDecoder().decode(bytes);}}finally{clearTimeout(timer);imageRequests.delete(controller);}}
-  if(status<200||status>=300)throw Error(status===401?'Emby 授权已失效，请房主重新登录':status===403?'Emby 账号拒绝此次请求，请检查片源账号的播放权限和并发限制':'Emby 请求失败（'+status+'）');
+  if(status<200||status>=300){watchLog('request.failed',{status,stage:/Subtitles/.test(parsed.pathname)?'subtitle':/PlaybackInfo/.test(parsed.pathname)?'playback':'source'});throw Error(status===401?'Emby 授权已失效，请房主重新登录':status===403?'Emby 账号拒绝此次请求，请检查片源账号的播放权限和并发限制':'Emby 请求失败（'+status+'）');}
   if(responseType==='image'){if(!/^data:image\/(jpeg|png|webp|gif);base64,/.test(dataUrl||''))throw Error('海报暂时不可用');return dataUrl;}
   return responseType==='text'?text:text?JSON.parse(text):{};
 }
@@ -40,6 +41,11 @@ export function episodeLabel(item){const season=numberIndex(item.ParentIndexNumb
 export function episodeCode(item){return 'S'+(Number.isInteger(item.ParentIndexNumber)?String(item.ParentIndexNumber).padStart(2,'0'):'?')+'E'+(Number.isInteger(item.IndexNumber)?String(item.IndexNumber).padStart(2,'0'):'?');}
 export function itemTitle(item){return item.Type==='Episode'?[item.SeriesName,episodeCode(item),item.Name].filter(Boolean).join(' · '):item.Name||'未命名影片';}
 export function sortEpisodes(items){return items.sort((a,b)=>numberIndex(a.ParentIndexNumber)-numberIndex(b.ParentIndexNumber)||numberIndex(a.IndexNumber)-numberIndex(b.IndexNumber)||String(a.Name||'').localeCompare(String(b.Name||''),'zh-CN',{numeric:true}));}
+export function matchingSubtitle(tracks,previous){
+  if(!previous)return null;
+  const candidates=tracks.filter(s=>s.Type==='Subtitle'&&!!s.IsForced===!!previous.IsForced&&((previous.Language&&s.Language===previous.Language)||(!previous.Language&&(previous.Title||previous.DisplayTitle)&&(s.Title||s.DisplayTitle)===(previous.Title||previous.DisplayTitle))));
+  return candidates.find(s=>(s.Title||s.DisplayTitle)===(previous.Title||previous.DisplayTitle)&&s.Codec===previous.Codec&&!!s.IsExternal===!!previous.IsExternal)||candidates.find(s=>s.Codec===previous.Codec&&!!s.IsExternal===!!previous.IsExternal)||candidates[0]||null;
+}
 export class WatchRoom {
   constructor(room,notice){
     this.room=room;this.notice=notice;this.video=$('watch-video');this.voice=new RoomVoice(room,()=>this.render());this.epoch='';this.lastHost=performance.now();this.version=-1;this.generation=0;this.position=0;this.duration=0;this.micReady=false;this.quality='auto';this.volume=1;this.muted=false;this.subtitleIndex=-1;this.tracks=[];
@@ -61,6 +67,7 @@ export class WatchRoom {
     // A later gesture also recovers an AudioContext suspended by the browser.
     for(const event of ['pointerdown','keydown'])document.addEventListener(event,()=>{if(this.active&&!native&&this.voice.context?.state!=='running')this.voice.listen().catch(e=>{this.voice.status=e.message;this.render();});},{capture:true});
   }
+  diagnosticsText(){return JSON.stringify({...JSON.parse(diagnosticsText()),snapshot:{platform:native?.platform||'WEB',host:this.room.host,position:this.current(),offset:this.offset||0,subtitleIndex:this.subtitleIndex,cues:this.subtitleCues?.length||0,loading:!!this.loading,subtitleLoading:!!this.subtitleLoading,subtitleFailed:!!this.subtitleError,nativeSubtitleVisible:this.nativeSubtitleVisible??null}},null,2);}
   get active(){return this.room.room?.game==='watch';}
   get nativePlayer(){return !!native?.playerCommand;}
   get nativeTracks(){return desktopPlayback()&&native.playerCapabilities.embeddedTracks===true;}
@@ -68,7 +75,7 @@ export class WatchRoom {
   mediaTracks(){return this.tracks.map(({Index,Type,Codec,Language,DisplayTitle,IsExternal})=>({Index,Type,Codec,Language,DisplayTitle,IsExternal:!!IsExternal}));}
   embeddedSubtitle(stream){return this.directTracks&&stream&&!stream.IsExternal;}
   endpoint(path,query={},access=this.access){const url=new URL(access.base.replace(/\/$/,'')+'/'+path.replace(/^\//,''));for(const [k,v] of Object.entries(query))if(v!==undefined&&v!==null)url.searchParams.set(k,String(v));return url.toString();}
-  headers(access=this.access,deviceId=this.room.self){return {'Content-Type':'application/json','X-Emby-Token':access?.token||'','X-Emby-Authorization':`MediaBrowser Client="CyberRoom", Device="${native?'Native':'Web'}", DeviceId="${deviceId}", Version="0.9.2"`};}
+  headers(access=this.access,deviceId=this.room.self){return {'Content-Type':'application/json','X-Emby-Token':access?.token||'','X-Emby-Authorization':`MediaBrowser Client="CyberRoom", Device="${native?'Native':'Web'}", DeviceId="${deviceId}", Version="0.9.3"`};}
   validContext(context,generation){return this.active&&this.room.current(context)&&(generation===undefined||generation===this.generation);}
   validPlayback(context,generation,url){return this.validContext(context,generation)&&this.url===url&&this.epoch===this.room.room?.playback?.epoch&&this.failedEpoch!==this.epoch;}
   canSample(){return this.epoch===this.room.room?.playback?.epoch&&!!this.url&&!this.loading&&!this.error&&!this.pendingSeek&&this.failedEpoch!==this.epoch&&(this.nativePlayer||this.video.readyState>=2);}
@@ -137,13 +144,32 @@ export class WatchRoom {
   async reload(automatic=false){const state=this.room.room?.playback;if(!state)return;if(!this.access){this.requestSync();return;}if(!automatic){this.failedEpoch='';this.fallbackEpoch='';this.recoveryAttempts=0;this.recoverAt=0;}if(this.room.host){state.position=this.hostPosition(state);state.at=performance.now();}await this.load(state);}
   async setQuality(value){if(!QUALITIES[value])return;this.quality=value;this.compatibility=false;if(value==='auto'&&this.nativeTracks&&!this.tracks.find(s=>s.Type==='Subtitle'&&s.Index===this.subtitleIndex)?.IsExternal)this.burnSubtitle=false;await this.reload();await this.saveHost();}
   async setAudio(value){const index=Number(value);if(!this.tracks.some(s=>s.Type==='Audio'&&s.Index===index))return;const previous=this.audioIndex;this.audioIndex=index;this.audioExplicit=true;if(this.directTracks){try{await nativeCall('playerCommand',JSON.stringify({audioStreamIndex:index,mediaTracks:this.mediaTracks()}));}catch(e){this.audioIndex=previous;throw e;}finally{this.render();}await this.saveHost();return;}this.compatibility=true;await this.reload();await this.saveHost();}
-  async setSubtitle(value){const index=Number(value),stream=this.tracks.find(s=>s.Type==='Subtitle'&&s.Index===index);if(index!==-1&&!stream)return;const wasBurned=this.burnSubtitle;this.subtitleIndex=index;this.burnSubtitle=!!stream&&!this.textSubtitle(stream)&&!this.embeddedSubtitle(stream);this.subtitleError='';this.clearSubtitles();if(wasBurned||this.burnSubtitle)await this.reload();else await this.loadSubtitles();this.render();await this.saveHost();}
+  async setSubtitle(value){const index=Number(value),stream=this.tracks.find(s=>s.Type==='Subtitle'&&s.Index===index);if(index!==-1&&!stream)return;watchLog('subtitle.select',{itemId:this.session?.itemId,playbackId:this.playbackId,index});const wasBurned=this.burnSubtitle;this.subtitlePreference=stream?{...stream}:null;this.subtitleIndex=index;this.burnSubtitle=!!stream&&!this.textSubtitle(stream)&&!this.embeddedSubtitle(stream);this.subtitleError='';this.clearSubtitles();if(wasBurned||this.burnSubtitle)await this.reload();else await this.loadSubtitles();this.render();await this.saveHost();}
   textSubtitle(stream){return stream.IsTextSubtitleStream===true||/^(subrip|srt|vtt|webvtt|ass|ssa|mov_text|text)$/i.test(stream.Codec||'');}
-  clearSubtitles(){const hadCues=this.subtitleCues?.length;this.subtitleLoading=false;this.subtitleGeneration=(this.subtitleGeneration||0)+1;this.subtitleCues=[];const overlay=globalThis.document?.getElementById('watch-subtitle');if(overlay)overlay.textContent='';if(this.nativePlayer&&hadCues)nativeCall('playerCommand',JSON.stringify({subtitleCues:[],subtitleOffsetMs:0}));}
-  async loadSubtitles(){this.subtitleError='';this.clearSubtitles();const stream=this.tracks.find(s=>s.Type==='Subtitle'&&s.Index===this.subtitleIndex);if(this.directTracks){await nativeCall('playerCommand',JSON.stringify({subtitleStreamIndex:this.embeddedSubtitle(stream)?stream.Index:-1,mediaTracks:this.mediaTracks()}));if(!stream||this.embeddedSubtitle(stream))return;}if(!this.session||!stream||this.burnSubtitle)return;const context=this.room.context(),generation=this.generation,operation=this.subtitleGeneration,session=this.session,access=this.access;this.subtitleLoading=true;try{const text=await mediaRequest(this.endpoint('Videos/'+encodeURIComponent(session.itemId)+'/'+encodeURIComponent(session.sourceId)+'/Subtitles/'+stream.Index+'/Stream.vtt',{StartPositionTicks:0},access),'GET',this.headers(access),undefined,60000,'text');if(!this.validContext(context,generation)||operation!==this.subtitleGeneration)return;this.subtitleCues=parseVtt(text);if(!this.subtitleCues.length)throw Error('此字幕没有可显示的文本');if(this.nativePlayer)await nativeCall('playerCommand',JSON.stringify({subtitleCues:this.subtitleCues,subtitleOffsetMs:(this.offset||0)*1000}));this.paintSubtitle();}catch(e){if(this.validContext(context,generation)&&operation===this.subtitleGeneration)this.subtitleError='字幕加载失败，请重选字幕或关闭字幕';}if(operation===this.subtitleGeneration)this.subtitleLoading=false;this.render();}
+  clearSubtitles(){const hadCues=this.subtitleCues?.length;this.subtitleLoading=false;this.subtitleGeneration=(this.subtitleGeneration||0)+1;this.subtitleCues=[];const overlay=globalThis.document?.getElementById('watch-subtitle');if(overlay)overlay.textContent='';if(this.nativePlayer&&hadCues)nativeCall('playerCommand',JSON.stringify({playbackId:this.playbackId,subtitleCues:[],subtitleOffsetMs:0}));}
+  async loadSubtitles(){
+    this.subtitleError='';this.clearSubtitles();
+    const stream=this.tracks.find(s=>s.Type==='Subtitle'&&s.Index===this.subtitleIndex),context=this.room.context(),generation=this.generation,operation=this.subtitleGeneration,session=this.session,access=this.access,playbackId=this.playbackId;
+    const current=()=>this.validContext(context,generation)&&operation===this.subtitleGeneration&&this.session===session&&this.access===access;
+    const log=(event,extra={})=>watchLog(event,{itemId:session?.itemId,playbackId,generation,index:this.subtitleIndex,...extra});
+    const started=performance.now();
+    try{
+      if(this.directTracks){await nativeCall('playerCommand',JSON.stringify({playbackId,subtitleStreamIndex:this.embeddedSubtitle(stream)?stream.Index:-1,mediaTracks:this.mediaTracks()}));if(!current())return;if(!stream||this.embeddedSubtitle(stream)){log('subtitle.native');return;}}
+      if(!session||!stream||this.burnSubtitle)return;
+      this.subtitleLoading=true;log('subtitle.request');
+      const key=JSON.stringify([access.base,access.userId,access.token,session.itemId,session.sourceId,stream.Index]);
+      let cues=this.subtitleCache?.key===key?this.subtitleCache.cues:null;
+      if(!cues){const text=await mediaRequest(this.endpoint('Videos/'+encodeURIComponent(session.itemId)+'/'+encodeURIComponent(session.sourceId)+'/Subtitles/'+stream.Index+'/Stream.vtt',{StartPositionTicks:0},access),'GET',this.headers(access),undefined,60000,'text');if(!current())return;cues=parseVtt(text);if(!cues.length)throw Error('此字幕没有可显示的文本');this.subtitleCache={key,cues};}
+      if(!current())return;this.subtitleCues=cues;
+      if(this.nativePlayer)await nativeCall('playerCommand',JSON.stringify({playbackId,subtitleCues:cues,subtitleOffsetMs:(this.offset||0)*1000}));
+      if(!current())return;log('subtitle.ready',{cues:cues.length,offset:this.offset||0,elapsedMs:Math.round(performance.now()-started)});this.paintSubtitle();
+    }catch(e){if(current()){log('subtitle.failed',{code:e.code||'SUBTITLE_ERROR',elapsedMs:Math.round(performance.now()-started)});this.subtitleError=(e.message||'字幕加载失败')+'；请重选此字幕重试';}}
+    finally{if(current()){this.subtitleLoading=false;this.render();}}
+  }
   paintSubtitle(){if(!this.active||this.nativePlayer||!this.subtitleCues?.length)return;const now=this.current(),text=this.subtitleCues.filter(c=>now>=c.start&&now<c.end).map(c=>c.text).join('\n');if($('watch-subtitle').textContent!==text)$('watch-subtitle').textContent=text;}
   mediaFailure(message,codecFailure=false){if(!this.active||this.loading||!this.url||this.failedEpoch===this.epoch)return;if(codecFailure&&!desktopPlayback()&&!this.session?.transcoded&&!this.compatibility&&this.fallbackEpoch!==this.epoch){this.fallbackEpoch=this.epoch;this.compatibility=true;this.reload(true).catch(()=>{});return;}this.failPlayback(message,!codecFailure);}
   failPlayback(message,retry=false){
+    watchLog('playback.failed',{itemId:this.session?.itemId,playbackId:this.playbackId,generation:this.generation,mode:retry?'recoverable':'stopped'});
     const state=this.room.room?.playback;
     if(this.room.host&&state&&this.pendingSeek){state.position=this.pendingSeek.position;state.at=performance.now();}
     this.pendingSeek=null;
@@ -177,7 +203,7 @@ export class WatchRoom {
     validate();
     access.token=auth.AccessToken;access.userId=auth.User.Id;access.canTranscode=['EnableMediaPlayback','EnableAudioPlaybackTranscoding','EnableVideoPlaybackTranscoding'].every(key=>auth.User.Policy?.[key]===true);this.access=this.clientAccess(access);this.room.mediaAccess={...access};storageSet('cyber.emby.base',access.base);
     this.remember=remember;this.ownedSource={...access,username,serverId:auth.ServerId||''};
-    const previous=this.saved;if(previous?.source.base===access.base&&previous.source.userId===access.userId&&previous.playback){const p=previous.playback;Object.assign(this,previous.settings);this.room.room.playback={epoch:id(),itemId:p.itemId,title:p.title,duration:p.duration,position:p.position,rate:p.rate,playing:false,version:0,at:performance.now()};this.restoreTracks={audioIndex:p.audioIndex??undefined,audioExplicit:p.audioExplicit,subtitleIndex:p.subtitleIndex,burnSubtitle:p.burnSubtitle,compatibility:p.compatibility};}
+    const previous=this.saved;if(previous?.source.base===access.base&&previous.source.userId===access.userId&&previous.playback){const p=previous.playback;Object.assign(this,previous.settings);this.room.room.playback={epoch:id(),itemId:p.itemId,title:p.title,...(p.seriesId?{seriesId:p.seriesId,seriesName:p.seriesName,season:p.season,episode:p.episode}:{}),duration:p.duration,position:p.position,rate:p.rate,playing:false,version:0,at:performance.now()};this.restoreTracks={audioIndex:p.audioIndex??undefined,audioExplicit:p.audioExplicit,subtitleIndex:p.subtitleIndex,burnSubtitle:p.burnSubtitle,compatibility:p.compatibility};}
     if(!remember){this.saved=null;await writeWatchSave(null);validate();}else await this.saveHost();
     await this.send('watch.access',this.room.mediaAccess);validate();this.room.publish();this.render();
   }
@@ -196,7 +222,9 @@ export class WatchRoom {
   }
   async image(item){let itemId=item.Id,tag=item.ImageTags?.Primary;if(!tag&&item.PrimaryImageTag){tag=item.PrimaryImageTag;itemId=item.PrimaryImageItemId||item.Id;}if(!tag&&item.SeriesPrimaryImageTag&&item.SeriesId){itemId=item.SeriesId;tag=item.SeriesPrimaryImageTag;}if(!tag)return null;return this.catalog('Items/'+encodeURIComponent(itemId)+'/Images/Primary',{MaxWidth:480,Quality:85,Format:'jpg',Tag:tag},'image');}
   async episodes(){
-    const state=this.room.room?.playback;if(!this.room.host||!state?.seriesId)return [];
+    const state=this.room.room?.playback;if(!this.room.host||!state?.itemId)return [];
+    if(!state.seriesId){const detail=await this.detail({Id:state.itemId});if(this.room.room?.playback!==state)return [];if(detail.Type!=='Episode'||!detail.SeriesId)return [];Object.assign(state,{seriesId:detail.SeriesId,seriesName:detail.SeriesName,season:detail.ParentIndexNumber,episode:detail.IndexNumber});this.room.publish();this.room.checkpoint();await this.saveHost();}
+    watchLog('episodes.request',{itemId:state.itemId,epoch:state.epoch});
     if(this.episodeAccess===this.access&&this.episodeSeries===state.seriesId&&this.episodeItems)return this.episodeItems;
     const context=this.room.context(),access=this.access,seriesId=state.seriesId;
     const items=await this.children({Id:seriesId,Name:state.seriesName},{});
@@ -235,10 +263,11 @@ export class WatchRoom {
   }
   async load(state){
     if(!state?.itemId||!this.access?.token||this.room.background||this.failedEpoch===state.epoch)return;
+    watchLog('playback.load',{itemId:state.itemId,epoch:state.epoch});
     const generation=++this.generation,context=this.room.context(),access=this.access,deviceId=this.room.self,loading=this.loadingRequest={generation,epoch:state.epoch,seeked:false};let openedSession,start=state.position;this.loading=true;this.error='';
     const current=()=>this.validContext(context,generation)&&this.room.room?.playback?.epoch===loading.epoch&&this.access?.base===access.base&&this.access?.token===access.token&&this.access?.userId===access.userId;
     try{
-      const changed=this.epoch!==state.epoch;await this.stopMedia(false);if(!current())return;if(changed){this.recoveryAttempts=0;this.audioIndex=undefined;this.audioExplicit=false;this.subtitleIndex=-1;this.burnSubtitle=false;this.compatibility=false;this.tracks=[];if(this.restoreTracks){Object.assign(this,this.restoreTracks);this.restoreTracks=null;}}this.epoch=state.epoch;this.version=state.version;this.position=state.position;this.duration=state.duration||0;this.progressAt=performance.now();this.playbackStarted=false;this.playRequested=false;this.frameRequested=false;this.progressPosition=undefined;this.progressSamples=0;this.recoverAt=0;
+      const changed=this.epoch!==state.epoch,previousSubtitle=this.restoreTracks?null:this.tracks?.find(s=>s.Type==='Subtitle'&&s.Index===this.subtitleIndex)||this.subtitlePreference;if(this.restoreTracks)this.subtitlePreference=null;else if(previousSubtitle)this.subtitlePreference=previousSubtitle;await this.stopMedia(false);if(!current())return;if(changed){this.recoveryAttempts=0;this.audioIndex=undefined;this.audioExplicit=false;this.subtitleIndex=-1;this.burnSubtitle=false;this.compatibility=false;this.tracks=[];if(this.restoreTracks){Object.assign(this,this.restoreTracks);this.restoreTracks=null;}}this.epoch=state.epoch;this.version=state.version;this.position=state.position;this.duration=state.duration||0;this.progressAt=performance.now();this.playbackStarted=false;this.playRequested=false;this.frameRequested=false;this.progressPosition=undefined;this.progressSamples=0;this.recoverAt=0;
       await nativeCall('mediaConfigure',JSON.stringify({origin:new URL(access.base).origin}));if(!current())return;
       // Coalesce changes received while the previous session was stopping. Once
       // HTTP starts, only a real timeline discontinuity invalidates an HLS start.
@@ -251,7 +280,8 @@ export class WatchRoom {
       this.tracks=(source||sources[0])?.MediaStreams||[];if(!source||info.ErrorCode)throw Error(this.burnSubtitle?'Emby 未提供图片字幕烧录，请检查视频转码权限，或关闭此字幕':force?'Emby 未提供所选画质或音轨的兼容转码；请改用自动画质、兼容音轨，或检查片源转码服务':'此影片无法直接播放，Emby 未提供 H.264 / AAC 兼容转码；请换兼容音轨或影片，或检查片源转码服务');
       if(!this.tracks.some(s=>s.Type==='Audio'&&s.Index===this.audioIndex))this.audioIndex=undefined;
       this.audioIndex=Number.isInteger(source.DefaultAudioStreamIndex)&&this.audioIndex===undefined?source.DefaultAudioStreamIndex:this.audioIndex??this.tracks.find(s=>s.Type==='Audio')?.Index;
-      if(!this.tracks.some(s=>s.Type==='Subtitle'&&s.Index===this.subtitleIndex)){this.subtitleIndex=-1;this.burnSubtitle=false;}
+      if(previousSubtitle&&(changed||this.subtitleIndex===-1)){const selected=matchingSubtitle(this.tracks,previousSubtitle);if(selected){this.subtitleIndex=selected.Index;watchLog('subtitle.carried',{itemId:state.itemId,index:selected.Index});}}
+      if(!this.tracks.some(s=>s.Type==='Subtitle'&&s.Index===this.subtitleIndex)){this.subtitleIndex=-1;this.burnSubtitle=false;}else{this.subtitlePreference=this.tracks.find(s=>s.Type==='Subtitle'&&s.Index===this.subtitleIndex);}
       const container=source.Container==='matroska'?'mkv':source.Container==='mpegts'?'ts':source.Container||'mp4',original=this.endpoint('Videos/'+encodeURIComponent(state.itemId)+'/stream.'+container,{Static:true,MediaSourceId:source.Id,PlaySessionId:info.PlaySessionId},access);
       let stream=!force&&directCompatible(source)?this.nativeTracks?original:source.DirectStreamUrl:null,transcoded=false;
       if(!stream&&source.TranscodingUrl){stream=source.TranscodingUrl;transcoded=true;}
@@ -267,9 +297,10 @@ export class WatchRoom {
       // match our timeline offset, including after every transcoded seek.
       if(transcoded){if(!desktopPlayback()){for(const [key,value] of Object.entries({EnableAutoStreamCopy:false,AllowVideoStreamCopy:false,AllowAudioStreamCopy:false,VideoCodec:'h264',AudioCodec:'aac'}))streamParameter(url,key,value);}streamParameter(url,'StartTimeTicks',Math.round(start*tick));}
       if(!url.searchParams.has('api_key'))url.searchParams.set('api_key',access.token);url.searchParams.set('DeviceId',this.room.self);
-      const timeline=/\.m3u8$/i.test(url.pathname)?await this.hlsTimeline(url,start,Number(source.RunTimeTicks||0)/tick||state.duration,access,current):{offset:transcoded?start:0,absolute:false};const offset=timeline.offset;if(!current()){await this.endSession(openedSession,access,start);openedSession=null;return;}if(transcoded&&!timeline.absolute&&loading.seeked){await this.endSession(openedSession,access,start);openedSession=null;if(current())return this.load(this.room.room.playback);return;}this.session={...openedSession,absoluteTimeline:timeline.absolute};openedSession=null;this.offset=offset;this.url=url.href;this.updateDuration(Number(source.RunTimeTicks||0)/tick);const playerStart=this.target(this.room.room.playback);
+      const timeline=/\.m3u8$/i.test(url.pathname)?await this.hlsTimeline(url,start,Number(source.RunTimeTicks||0)/tick||state.duration,access,current):{offset:transcoded?start:0,absolute:false};const offset=timeline.offset;if(!current()){await this.endSession(openedSession,access,start);openedSession=null;return;}if(transcoded&&!timeline.absolute&&loading.seeked){await this.endSession(openedSession,access,start);openedSession=null;if(current())return this.load(this.room.room.playback);return;}this.session={...openedSession,absoluteTimeline:timeline.absolute};watchLog('playback.ready',{sessionId:this.session.id,platform:native?.platform||'WEB',itemId:state.itemId,generation,offset,mode:transcoded?'transcode':'direct'});openedSession=null;this.offset=offset;this.url=url.href;this.updateDuration(Number(source.RunTimeTicks||0)/tick);const playerStart=this.target(this.room.room.playback);
       this.frameStartedAt=this.progressAt=performance.now();if(this.nativePlayer){this.playbackId=id();const seek=this.beginSeek(playerStart);await nativeCall('playerCommand',JSON.stringify({url:this.url,playbackId:this.playbackId,seekId:seek.id,positionMs:Math.max(0,playerStart-this.offset)*1000,playing:false,rate:playbackRate(state),volume:this.volume,muted:this.muted,visible:this.playerVisible(),bounds:this.rectangle(),...(this.directTracks?{audioStreamIndex:this.audioIndex,subtitleStreamIndex:-1,mediaTracks:this.mediaTracks()}:this.nativeTracks?{subtitleStreamIndex:-1}:{})}));}
       else{this.video.volume=this.volume;this.video.muted=this.muted;if(/\.m3u8(?:\?|$)/i.test(url.href)&&globalThis.Hls?.isSupported()){this.beginSeek(playerStart);const hls=this.hls=new Hls({startPosition:Math.max(0,playerStart-this.offset),maxBufferLength:15,backBufferLength:10,manifestLoadingMaxRetry:2,levelLoadingMaxRetry:2,fragLoadingMaxRetry:2,fragLoadingTimeOut:60000});hls.on(Hls.Events.ERROR,(_,e)=>{if(e.fatal&&current())this.mediaFailure(e.type==='networkError'?(e.response?.code>=400?'Emby 兼容转码分片不可用（HTTP '+e.response.code+'）。请换兼容音轨或影片，或检查片源转码服务':'兼容转码清单或分片无法读取；请检查片源网络、HTTPS 入口和转码服务，或换兼容音轨或影片'):'视频或音轨解码失败，请重试兼容转码');});hls.loadSource(url.href);hls.attachMedia(this.video);}else this.video.src=url.href;}
+      if(!current())return;const selectedSubtitle=this.tracks.find(s=>s.Type==='Subtitle'&&s.Index===this.subtitleIndex);if(selectedSubtitle&&!this.burnSubtitle&&!this.textSubtitle(selectedSubtitle)&&!this.embeddedSubtitle(selectedSubtitle)){this.burnSubtitle=true;return this.load(this.room.room.playback);}
       if(!current())return;this.checkin('Playing').catch(()=>{});this.loading=false;Promise.resolve(this.follow()).catch(e=>this.showError(e.message));this.loadSubtitles().catch(()=>{});this.render();
     }catch(e){if(openedSession)await this.endSession(openedSession,access,start);if(current()){this.loading=false;this.failPlayback(e.name==='AbortError'?'片源响应超时，请检查服务状态后重试':e.message==='Failed to fetch'?'无法连接片源：请检查 HTTPS 入口、Emby 跨域设置和网络，再重试':e.message||'无法加载片源',e.name==='AbortError'||['SOURCE_TIMEOUT','SOURCE_NETWORK'].includes(e.code)||e.message==='Failed to fetch'||/请求失败（5\d\d）/.test(e.message||''));}}
     finally{if(this.loadingRequest===loading)this.loadingRequest=null;}
@@ -351,7 +382,7 @@ export class WatchRoom {
     if(e.type==='playerInteraction'){this.ui?.wake();return;}
     if(e.type==='reset')this.ui?.reset();
     if(e.type==='leaving'){await this.saveHost();return;}
-    if(e.type==='reset'){this.hasJoined=false;this.resumePending=false;this.selectOperation=(this.selectOperation||0)+1;this.episodeItems=null;this.episodeSeries='';this.recoveryAttempts=0;this.loginOperation=(this.loginOperation||0)+1;this.ownedSource=null;this.restoring=false;this.restoreTracks=null;this.voice.stop();const stopping=this.stopMedia();this.access=null;this.room.mediaAccess=null;this.epoch='';this.error='';this.subtitleError='';this.tracks=[];this.loading=false;this.waiting=false;this.lastSync=undefined;this.hostOffset=this.bestRtt=undefined;this.chatSeen?.clear();$('danmaku').replaceChildren();$('emby-dialog').close();$('library-dialog').close();$('emby-user').value='';$('emby-password').value='';$('emby-share').checked=false;$('emby-items').replaceChildren();await stopping;return;}
+    if(e.type==='reset'){this.subtitlePreference=null;this.subtitleCache=null;this.hasJoined=false;this.resumePending=false;this.selectOperation=(this.selectOperation||0)+1;this.episodeItems=null;this.episodeSeries='';this.recoveryAttempts=0;this.loginOperation=(this.loginOperation||0)+1;this.ownedSource=null;this.restoring=false;this.restoreTracks=null;this.voice.stop();const stopping=this.stopMedia();this.access=null;this.room.mediaAccess=null;this.epoch='';this.error='';this.subtitleError='';this.tracks=[];this.loading=false;this.waiting=false;this.lastSync=undefined;this.hostOffset=this.bestRtt=undefined;this.chatSeen?.clear();$('danmaku').replaceChildren();$('emby-dialog').close();$('library-dialog').close();$('emby-user').value='';$('emby-password').value='';$('emby-share').checked=false;$('emby-items').replaceChildren();await stopping;return;}
     if(!this.active)return;
     if(e.type==='hostReady'){await this.restoreHost();return;}
     const context=this.room.context();
@@ -375,7 +406,7 @@ export class WatchRoom {
       if(this.epoch!==this.room.room?.playback?.epoch)return;
       if(e.nativeUnavailable&&this.url){++this.generation;this.loading=false;this.failPlayback('电影厅原生组件启动失败，请重新安装电影厅插件后重试');return;}
       if(!this.url||this.playbackId&&e.playbackId!==this.playbackId||this.playerSeekId&&e.seekId!==this.playerSeekId)return;
-      this.buffering=!!e.buffering||!!e.seeking;this.playerPlaying=!!e.playing;
+      this.buffering=!!e.buffering||!!e.seeking;this.playerPlaying=!!e.playing;this.nativeSubtitleVisible=typeof e.subtitleVisible==='boolean'?e.subtitleVisible:null;
       if(e.seeking===false&&!e.error&&Number.isFinite(e.positionMs)){
         // Matching native operation IDs and an explicit completed state are the
         // seek acknowledgement. mpv validates its fresh post-restart position;
@@ -433,7 +464,7 @@ export class WatchRoom {
   }
   async stopMedia(invalidate=true){
     if(invalidate)++this.generation;cancelImages();this.clearSubtitles();const session=this.session,position=this.current(),access=this.access;
-    this.session=null;this.url='';this.playbackId='';this.playerSeekId='';this.pendingSeek=null;this.buffering=false;this.hls?.destroy();this.hls=null;this.video.pause();this.video.removeAttribute('src');this.video.load();
+    this.session=null;this.nativeSubtitleVisible=null;this.url='';this.playbackId='';this.playerSeekId='';this.pendingSeek=null;this.buffering=false;this.hls?.destroy();this.hls=null;this.video.pause();this.video.removeAttribute('src');this.video.load();
     if(this.stopping&&!session)return this.stopping;
     const previous=this.stopping,stopping=(async()=>{
       if(previous)await previous;
@@ -466,7 +497,7 @@ export class WatchRoom {
     const audio=this.tracks.filter(s=>s.Type==='Audio'),subtitles=this.tracks.filter(s=>s.Type==='Subtitle'),trackLabel=s=>[s.DisplayTitle||s.Title||s.Language||'未标注语言',s.Codec?.toUpperCase(),s.Channels?s.Channels+' 声道':s.IsForced?'强制字幕':''].filter(Boolean).join(' · ');
     select('watch-rate',playbackRate(r.playback),!this.room.host||!r.playback||this.loading);select('watch-quality',this.quality,!r.playback||this.loading);
     select('watch-audio',this.audioIndex??'',!audio.length||this.loading,audio.length?audio.map(s=>[s.Index,trackLabel(s)]):[['','暂无音轨信息']]);select('watch-subtitles',this.subtitleIndex,!subtitles.length||this.loading,[[-1,'关闭字幕'],...subtitles.map(s=>[s.Index,trackLabel(s)+(this.embeddedSubtitle(s)?' · 本机字幕':this.textSubtitle(s)?'':' · 需转码烧录')])]);
-    const episodes=$('watch-episodes');if(episodes)episodes.hidden=!this.room.host||!r.playback?.seriesId;
+    const episodes=$('watch-episodes');if(episodes)episodes.hidden=!this.room.host||!r.playback?.itemId;
     const method=this.session?(this.session.transcoded?'Emby 转码 · H.264 / AAC':desktopPlayback()?'本机解码 · 原画':this.nativePlayer?'设备解码 · 原画':'浏览器解码 · 原画'):'',trackStatus=this.subtitleError||(this.subtitleLoading?'正在加载字幕…':'')||(this.burnSubtitle?'图片字幕正在随视频烧录；切换字幕会重新协商转码。':this.directTracks?'内嵌音轨与字幕在本机切换；降低清晰度需要 Emby 转码。':r.playback&&!subtitles.length?'片源未提供字幕。画质、音轨切换需 Emby 支持转码。':'文本字幕独立加载；图片字幕需要 Emby 转码烧录。');
     $('watch-track-status').textContent=(method?'播放方式：'+method+'。':'')+trackStatus;
     $('watch-mic').textContent=this.voice.microphone?'关闭麦克风':'开启麦克风';$('watch-mic').classList.toggle('recording',this.voice.microphone);$('voice-status').textContent=this.voice.status;

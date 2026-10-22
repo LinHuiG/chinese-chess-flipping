@@ -4,7 +4,7 @@
   "key": "watch",
   "name": "电影厅",
   "description": "一起看电影、发弹幕和语音聊天，房主控制播放。",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "hostApi": 1,
   "protocol": "watch/1",
   "roomFeature": "c1067e462c15443d896b2da3854e0128",
@@ -21,8 +21,8 @@
       "native": {
         "api": 1,
         "kind": "apk",
-        "packageName": "com.cyberroom.watch.v102",
-        "entry": "com.cyberroom.watch.v102.WatchExtension",
+        "packageName": "com.cyberroom.watch.v103",
+        "entry": "com.cyberroom.watch.v103.WatchExtension",
         "exports": {
           "voiceConfigure": "voice",
           "voiceMicrophone": "voice",

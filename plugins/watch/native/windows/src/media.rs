@@ -46,6 +46,7 @@ enum Action {
 // and shutdown are priority flags, so a slow decoder never blocks the UI caller.
 #[derive(Default)]
 struct Pending {
+    playback_id: Option<String>,
     command: serde_json::Map<String, Value>,
     bullets: VecDeque<Value>,
     foreground: Option<bool>,
@@ -68,6 +69,13 @@ impl Mailbox {
                 if let Some(mut fields) = value.as_object().cloned() {
                     if fields.contains_key("url") {
                         pending.command.clear();
+                        pending.playback_id = fields.get("playbackId").and_then(Value::as_str).map(str::to_owned);
+                    } else if fields.get("playbackId").and_then(Value::as_str).is_some_and(|id| {
+                        pending.playback_id.as_deref().is_some_and(|current| id != current)
+                    }) {
+                        // Late subtitle/download callbacks must not overwrite a newer
+                        // load's identity while the worker is still decoding.
+                        return;
                     }
                     fields.retain(|key, _| {
                         matches!(
@@ -764,6 +772,19 @@ struct Subtitles {
     dirty: bool,
 }
 impl Subtitles {
+    fn apply_command(&mut self, command: &Value, replacing: bool) {
+        // Mailbox may merge a load and its completed subtitle request. Clear
+        // the old movie first, then install cues from the same command.
+        if replacing {
+            self.clear();
+        }
+        if let Some(cues) = command.get("subtitleCues").and_then(Value::as_array) {
+            self.replace(cues);
+        }
+        if command.get("subtitleStreamIndex").and_then(Value::as_i64).is_some_and(|index| index >= 0) {
+            self.clear();
+        }
+    }
     fn replace(&mut self, values: &[Value]) {
         self.clear();
         self.cues = values
@@ -962,14 +983,19 @@ impl Player {
             .get("playbackId")
             .and_then(Value::as_str)
             .is_some_and(|id| id != self.playback_id);
-        if q.get("url")
+        if new_playback && q.get("url").is_none() {
+            return Ok(());
+        }
+        let replacing = q.get("url")
             .and_then(Value::as_str)
-            .is_some_and(|url| new_playback || url != self.url || !self.error.is_empty())
-        {
+            .is_some_and(|url| new_playback || url != self.url || !self.error.is_empty());
+        if replacing {
             self.audio_index = None;
             self.subtitle_index = Some(-1);
             self.media_tracks.clear();
+            self.subtitle_offset = 0.;
         }
+        self.cues.apply_command(&q, replacing);
         if let Some(v) = q.get("rate").and_then(Value::as_f64) {
             self.rate = v.clamp(0.5, 2.);
             self.mpv.set("speed", &self.rate.to_string())?;
@@ -982,9 +1008,6 @@ impl Player {
             self.muted = v;
             self.mpv.set("mute", if v { "yes" } else { "no" })?;
         }
-        if let Some(v) = q.get("subtitleCues").and_then(Value::as_array) {
-            self.cues.replace(v);
-        }
         if let Some(v) = q.get("subtitleOffsetMs").and_then(Value::as_f64) {
             self.subtitle_offset = v.max(0.) / 1000.;
         }
@@ -996,9 +1019,6 @@ impl Player {
         }
         if let Some(v) = q.get("subtitleStreamIndex").and_then(Value::as_i64) {
             self.subtitle_index = Some(v);
-            if v >= 0 {
-                self.cues.clear();
-            }
         }
         if let Some(b) = q.get("danmaku") {
             let id = b["id"]
@@ -1041,7 +1061,6 @@ impl Player {
                 self.loaded = false;
                 self.first_frame = false;
                 self.error.clear();
-                self.cues.clear();
                 self.mpv.set("sid", "no")?;
                 self.mpv.set("aid", "auto")?;
                 let start = q["positionMs"].as_f64().unwrap_or(0.).max(0.) / 1000.;
@@ -1483,7 +1502,7 @@ impl Player {
         };
         let peak = number("af-metadata/diagnostics/lavfi.astats.Overall.Peak_level")
             .map(|db| 10f64.powf(db / 20.));
-        json!({"type":"player","playbackId":self.playback_id,"seekId":self.seek_id,"seeking":seeking,"positionMs":time*1000.,"durationMs":duration*1000.,"playing":self.loaded&&!seeking&&!paused&&!buffering,"buffering":!self.url.is_empty()&&(seeking||buffering)&&self.error.is_empty(),"ended":ended,"renderedFirstFrame":self.first_frame,"error":self.error,"rate":self.rate,"volume":self.volume,"muted":self.muted,"audioPresent":audio_present,"audioSupported":if self.loaded&&audio_present{json!(!audio.is_null())}else{Value::Null},"audioSelected":selected.is_number(),"audioMime":audio,"audioChannels":self.mpv.get("audio-out-params/channel-count"),"audioSampleRate":self.mpv.get("audio-out-params/samplerate"),"audioOutputAdvancing":self.loaded&&!seeking&&!paused&&!buffering&&selected.is_number(),"audioStreamIndex":audio_index,"subtitleStreamIndex":subtitle_index,"audioPcmPeak":peak,"audioPcmFrames":number("af-metadata/diagnostics/lavfi.astats.Overall.Number_of_samples"),"subtitleCues":self.cues.len(),"audioOutput":self.mpv.get("current-ao"),"videoOutput":self.mpv.get("current-vo"),"engine":"mpv","danmakuRenderer":if self.compositor{"directcomposition"}else{"ass-fallback"}})
+        json!({"type":"player","playbackId":self.playback_id,"seekId":self.seek_id,"seeking":seeking,"positionMs":time*1000.,"durationMs":duration*1000.,"playing":self.loaded&&!seeking&&!paused&&!buffering,"buffering":!self.url.is_empty()&&(seeking||buffering)&&self.error.is_empty(),"ended":ended,"renderedFirstFrame":self.first_frame,"error":self.error,"rate":self.rate,"volume":self.volume,"muted":self.muted,"audioPresent":audio_present,"audioSupported":if self.loaded&&audio_present{json!(!audio.is_null())}else{Value::Null},"audioSelected":selected.is_number(),"audioMime":audio,"audioChannels":self.mpv.get("audio-out-params/channel-count"),"audioSampleRate":self.mpv.get("audio-out-params/samplerate"),"audioOutputAdvancing":self.loaded&&!seeking&&!paused&&!buffering&&selected.is_number(),"audioStreamIndex":audio_index,"subtitleStreamIndex":subtitle_index,"audioPcmPeak":peak,"audioPcmFrames":number("af-metadata/diagnostics/lavfi.astats.Overall.Number_of_samples"),"subtitleCues":self.cues.len(),"subtitleOffsetMs":self.subtitle_offset*1000.,"subtitleRequestedIndex":self.subtitle_index,"subtitleVisible":!self.subtitle_text.is_empty(),"audioOutput":self.mpv.get("current-ao"),"videoOutput":self.mpv.get("current-vo"),"engine":"mpv","danmakuRenderer":if self.compositor{"directcomposition"}else{"ass-fallback"}})
     }
     fn overlay(&mut self) {
         self.bullets
@@ -1911,6 +1930,35 @@ mod tests {
             }
             _ => panic!("expected new load"),
         }
+    }
+    #[test]
+    fn coalesced_load_keeps_its_subtitles_and_rejects_previous_playback() {
+        let mailbox = Mailbox::default();
+        mailbox.push(Action::Command(json!({"url":"http://localhost/new", "playbackId":"new"})));
+        mailbox.push(Action::Command(json!({"playbackId":"new", "subtitleStreamIndex":-1,
+            "subtitleCues":[{"start":1,"end":10,"text":"new subtitles"}]})));
+        mailbox.push(Action::Command(json!({"playbackId":"old", "subtitleCues":[]})));
+        let Some(Action::Command(command)) = mailbox.receive(Duration::ZERO) else {
+            panic!("expected merged load");
+        };
+        assert_eq!(command["playbackId"], "new");
+        let mut subtitles = Subtitles::default();
+        subtitles.replace(&[json!({"start":0,"end":10,"text":"old subtitles"})]);
+        subtitles.apply_command(&command, true);
+        assert_eq!(subtitles.update(2.).as_deref(), Some("new subtitles"));
+        // Identity survives dequeue: a late callback cannot enter an empty queue.
+        mailbox.push(Action::Command(json!({"playbackId":"old", "subtitleCues":[]})));
+        assert!(mailbox.receive(Duration::ZERO).is_none());
+        subtitles.apply_command(&json!({"url":"http://localhost/third"}), true);
+        assert_eq!(subtitles.update(2.).as_deref(), Some(""));
+    }
+    #[test]
+    fn embedded_subtitle_selection_clears_external_cues() {
+        let mut subtitles = Subtitles::default();
+        subtitles.apply_command(&json!({"subtitleCues":[{"start":0,"end":5,"text":"external"}]}), false);
+        assert_eq!(subtitles.update(1.).as_deref(), Some("external"));
+        subtitles.apply_command(&json!({"subtitleStreamIndex":2}), false);
+        assert_eq!(subtitles.update(1.).as_deref(), Some(""));
     }
     #[test]
     fn transient_seek_eof_never_finishes_the_room() {
