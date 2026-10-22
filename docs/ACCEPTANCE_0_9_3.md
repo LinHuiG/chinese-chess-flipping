@@ -49,3 +49,7 @@
 - 本轮真实片源 PC/Web 端到端**未执行通过**：隔离测试 profile 的加密片源副本已准备，但“启动 CDP 调试宿主并运行真实字幕验收脚本”的组合命令在 CreateProcess 前被自动审批拒绝，工具仅返回 `blocked by policy`，未提供更具体原因。随后删除测试加密副本，改为纯 localhost mock、在启动前断言 profile 无存档后，组合命令仍被同样拒绝。未拆分命令或更换工具绕过，未继续启动调试宿主。
 - `scripts/plugin-real-subtitle-smoke.cjs` 已准备真实字幕可见、重复切换、跳转、画质重载及选集保留偏好检查；`scripts/plugin-native-smoke.cjs` 增加 `WATCH_TEST_SUBTITLES=1` 对应本地样片检查。脚本语法检查通过，新增端到端断言本轮未运行，不计为通过。mock 外部文本字幕已明确标记 IsExternal，避免把 API 提供的文本字幕误当本地媒体内嵌轨道。
 - 独立资源/市场位于忽略目录 `server/target/subtitle-0.9.3/`；实际用户原 profile 与存档未改。临时测试宿主已停止，真实授权副本已删除。
+
+## 首轮正式 CI 的发布脚本修复
+
+Run 39816002383 的 Android/check 成功，Windows EXE 编译及检查成功，但市场步骤从最多100条 release 列表判断归档不存在，随后创建固定 plugin-market tag 返回422（已存在）。旧归档未被覆盖、镜像发布跳过。直接按tag查询确认归档存在，因此改为固定tag读取；仅HTTP404允许首次创建，其余网络/授权错误终止，不跳过历史归档的签名校验。重新冻结提交再运行CI，首轮不作为发布成功。

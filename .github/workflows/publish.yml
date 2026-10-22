@@ -362,9 +362,14 @@ jobs:
             npm ci
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             # Carry forward immutable versions so a room can still request its pinned release.
-            $marketRelease = gh api "repos/$env:GH_REPO/releases?per_page=100" --jq '[.[] | select(.tag_name == "plugin-market")] | length'
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            if ([int]$marketRelease -gt 0) {
+            # Resolve the durable archive by tag, never by a paginated release listing.
+            $marketRelease = $null
+            try {
+              $marketRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GH_REPO/releases/tags/plugin-market" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } -TimeoutSec 60
+            } catch {
+              if ([int]$_.Exception.Response.StatusCode -ne 404) { throw }
+            }
+            if ($null -ne $marketRelease) {
               gh release download plugin-market --pattern market.zip --dir "$env:RUNNER_TEMP/plugin-market"
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
               Expand-Archive -LiteralPath "$env:RUNNER_TEMP/plugin-market/market.zip" -DestinationPath server/plugin-market
@@ -375,7 +380,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             # A durable backup survives Actions artifact expiry; it is not the live marketplace.
             Compress-Archive -Path server/plugin-market/* -DestinationPath "$env:RUNNER_TEMP/market.zip"
-            if ([int]$marketRelease -eq 0) {
+            if ($null -eq $marketRelease) {
               gh release create plugin-market --title 'Plugin marketplace archive' --notes 'Signed immutable plugin versions retained for future releases.' --prerelease --target "$env:GITHUB_SHA"
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
