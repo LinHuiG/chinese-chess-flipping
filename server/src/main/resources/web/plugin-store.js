@@ -8,7 +8,7 @@ export function marketURL(){const value=storageGet('cyber.market',native?'https:
 function database(){return new Promise((resolve,reject)=>{const request=indexedDB.open('cyber-plugins',1);request.onupgradeneeded=()=>{request.result.createObjectStore('packages');request.result.createObjectStore('state');};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});}
 export class PluginStore{
   async lock(id,action){if(navigator.locks)return navigator.locks.request('cyber.plugin.'+id,action);const queues=this.queues??=new Map(),old=queues.get(id)||Promise.resolve(),next=old.catch(()=>{}).then(action);queues.set(id,next);try{return await next;}finally{if(queues.get(id)===next)queues.delete(id);}}
-  trusted(record){const known=this.catalog?.releases.find(r=>r.id===record.id&&r.release===record.release);if(!known||known.revoked||JSON.stringify(known)!==JSON.stringify(record))throw Error('发布记录未通过当前市场签名校验');}
+  trusted(record){const known=this.latest().find(r=>r.id===record.id);if(known&&known.release!==record.release)throw Error('插件已更新，请升级至最新版本 '+known.version);if(!known||JSON.stringify(known)!==JSON.stringify(record))throw Error('发布记录未通过当前市场签名校验');}
   async transaction(store,mode,action){const db=await (this.db??=database());return new Promise((resolve,reject)=>{const tx=db.transaction(store,mode),request=action(tx.objectStore(store));tx.oncomplete=()=>resolve(request.result);tx.onabort=tx.onerror=()=>reject(tx.error||Error('插件存储失败'));});}
   get(store,key){return this.transaction(store,'readonly',s=>s.get(key));}
   put(store,key,value){return this.transaction(store,'readwrite',s=>s.put(value,key));}
@@ -23,13 +23,21 @@ export class PluginStore{
     for(const jwk of trust.keys){const key=await crypto.subtle.importKey('jwk',jwk,{name:'ECDSA',namedCurve:'P-256'},false,['verify']);if(await crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},key,decode64(envelope.signature),enc.encode(envelope.payload))){valid=true;break;}}
     if(!valid)throw Error('插件市场签名无效');const catalog=JSON.parse(envelope.payload);if(catalog.schemaVersion!==1||!Array.isArray(catalog.releases)||catalog.releases.length>10000)throw Error('插件市场格式无效');catalog.releases.forEach(validateRelease);return catalog;
   }
-  async refresh(){const envelope=JSON.parse(await this.fetch('catalog.json',4*1024*1024));const catalog=await this.verify(envelope);await this.put('state','catalog',envelope);this.catalog=catalog;return catalog;}
-  async cached(){const envelope=await this.get('state','catalog');if(!envelope)return {releases:[]};this.catalog=await this.verify(envelope);return this.catalog;}
-  latest(){const result=new Map();for(const r of this.catalog?.releases||[])if(!r.revoked)result.set(r.id,r);return [...result.values()];}
+  async refresh(){const url=marketURL().href;if(this.refreshing?.url===url)return this.refreshing.promise;const request={url};this.refreshing=request;
+    request.promise=(async()=>{const envelope=JSON.parse(await this.fetch('catalog.json',4*1024*1024)),catalog=await this.verify(envelope);
+      const current=()=>this.refreshing===request&&marketURL().href===url;if(!current())throw Error('插件市场已切换，请重试');
+      await this.put('state','catalog',{...envelope,marketURL:url});if(!current())throw Error('插件市场已切换，请重试');this.catalog=catalog;this.catalogURL=url;await this.prune();return catalog;
+    })();try{return await request.promise;}finally{if(this.refreshing===request)this.refreshing=null;}
+  }
+  async cached(){const url=marketURL().href,envelope=await this.get('state','catalog');if(!envelope||envelope.marketURL&&envelope.marketURL!==url)return {releases:[]};const catalog=await this.verify(envelope);if(!this.catalog&&marketURL().href===url){this.catalog=catalog;this.catalogURL=url;}return this.catalog||{releases:[]};}
+  latest(){if(this.catalogURL&&this.catalogURL!==marketURL().href)return [];const result=new Map();for(const r of this.catalog?.releases||[]){const old=result.get(r.id);if(!old||r.version.localeCompare(old.version,undefined,{numeric:true})>=0)result.set(r.id,r);}return [...result.values()].filter(r=>!r.revoked);}
+  async prune(){const catalog=this.catalog,url=this.catalogURL||marketURL().href,current=this.latest(),owned=()=>this.catalog===catalog&&marketURL().href===url,packages=new Set(current.map(r=>r.id+'@'+r.release)),hashes=new Set(current.flatMap(r=>Object.values(r.artifacts).flatMap(a=>[a.sha256,a.native?.sha256].filter(Boolean))));
+    for(const store of ['packages','state']){const keys=await this.transaction(store,'readonly',s=>s.getAllKeys());for(const key of keys){if(!owned())return;const stale=store==='packages'?!packages.has(key):typeof key==='string'&&key.startsWith('partial:')&&!hashes.has(key.slice(8));if(stale)await this.transaction(store,'readwrite',s=>owned()?s.delete(key):s.get(key));}}
+  }
   async installed(){return (await this.get('state','installed'))||{};}
   async prepareNative(record){const component=record.artifacts[platform()]?.native;if(!component)return;const q={...component,url:new URL(component.path,marketURL()).href};const result=JSON.parse(await nativeCall('extensionPrepare',JSON.stringify(q)));if(!result.ready)throw Error('请在系统界面允许并安装原生组件，然后返回这里重试');}
-  async find(id,release){const list=this.catalog?.releases||[];return release?list.find(r=>r.id===id&&r.release===release):this.latest().find(r=>r.id===id);}
-  async install(record){validateRelease(record);this.trusted(record);return this.lock(record.id,async()=>{const error=incompatibility(record.manifest,platform());if(error)throw Error(error);const a=record.artifacts[platform()],key=record.id+'@'+record.release;
+  async find(id,release){const record=this.latest().find(r=>r.id===id);return !release||record?.release===release?record:undefined;}
+  async install(record){validateRelease(record);this.trusted(record);return this.lock(record.id,async()=>{this.trusted(record);const error=incompatibility(record.manifest,platform());if(error)throw Error(error);const a=record.artifacts[platform()],key=record.id+'@'+record.release;
     const total=a.size+(a.native?.size||0);let loaded=0,phase='下载插件';
     const report=(received)=>{loaded=received;this.onProgress?.({id:record.id,name:record.manifest.name,received,total,phase});};
     const nativeProgress=e=>{const q=e.detail;if(q?.type!=='pluginDownload'||!Number.isFinite(q.received))return;if(q.sha256===a.sha256)report(Math.min(a.size,q.received));else if(q.sha256===a.native?.sha256)report(a.size+Math.min(a.native.size,q.received));};
@@ -43,19 +51,18 @@ export class PluginStore{
         phase='校验插件';report(a.size);
         if(typeof raw!=='string'||enc.encode(raw).length!==a.size||await digest(raw)!==a.sha256){await this.put('state','partial:'+a.sha256,null);throw Error('插件文件校验失败，请重新下载');}
         const payload=JSON.parse(raw);validateManifest(payload.manifest);if(JSON.stringify(payload.manifest)!==JSON.stringify(record.manifest)||typeof payload.script!=='string'||typeof payload.html!=='string'||typeof payload.style!=='string')throw Error('插件包与发布信息不一致');
-        saved={record,raw};await this.put('packages',key,saved);await this.put('state','partial:'+a.sha256,null);
+        this.trusted(record);saved={record,raw};await this.put('packages',key,saved);await this.put('state','partial:'+a.sha256,null);
       }
       phase=a.native?'下载播放组件':'安装插件';report(a.size);
       // Publish only after the package and its native component have both passed verification.
-      await this.prepareNative(record);this.trusted(record);await this.select(record.id,record.release);const result=await this.load(record.id,record.release);phase='安装完成';report(total);return result;
-    }catch(error){this.onProgress?.({id:record.id,name:record.manifest.name,received:loaded,total,phase:'下载未完成',error:error.message});throw error;}
+      this.trusted(record);await this.prepareNative(record);this.trusted(record);await this.select(record.id,record.release);const result=await this.load(record.id,record.release);phase='安装完成';report(total);return result;
+    }catch(error){if(!this.latest().some(r=>r.id===record.id&&r.release===record.release)){await this.transaction('packages','readwrite',s=>this.latest().some(r=>r.id===record.id&&r.release===record.release)?s.get(key):s.delete(key)).catch(()=>{});if(!this.latest().some(r=>r.artifacts[platform()]?.sha256===a.sha256))await this.transaction('state','readwrite',s=>this.latest().some(r=>r.artifacts[platform()]?.sha256===a.sha256)?s.get('partial:'+a.sha256):s.delete('partial:'+a.sha256)).catch(()=>{});}this.onProgress?.({id:record.id,name:record.manifest.name,received:loaded,total,phase:'下载未完成',error:error.message});throw error;}
     finally{globalThis.removeEventListener?.('native-room',nativeProgress);}
     });
   }
 
-  async load(id,release){release??=(await this.installed())[id];if(!release)return null;const saved=await this.get('packages',id+'@'+release);if(!saved)return null;validateRelease(saved.record);
-    const known=this.catalog?.releases.find(r=>r.id===id&&r.release===release);if(known?.revoked)throw Error('该插件版本已停止使用');if(!known||JSON.stringify(known)!==JSON.stringify(saved.record))throw Error('缺少该插件的有效签名记录，请刷新市场');const error=incompatibility(known.manifest,platform());if(error)throw Error(error);
-    if(await digest(saved.raw)!==saved.record.artifacts[platform()].sha256)throw Error('本地插件文件损坏，请重新安装');return {record:saved.record,payload:JSON.parse(saved.raw)};
+  async load(id,release){release??=(await this.installed())[id];if(!release)return null;const known=await this.find(id,release);if(!known){const latest=await this.find(id);throw Error(latest?'插件已更新，请升级至最新版本 '+latest.version:'该插件已停止使用，请刷新市场');}const saved=await this.get('packages',id+'@'+release);if(!saved)return null;validateRelease(saved.record);this.trusted(saved.record);const error=incompatibility(known.manifest,platform());if(error)throw Error(error);
+    if(await digest(saved.raw)!==saved.record.artifacts[platform()].sha256)throw Error('本地插件文件损坏，请重新安装');this.trusted(saved.record);return {record:saved.record,payload:JSON.parse(saved.raw)};
   }
   async uninstall(id){return this.lock(id,async()=>{await this.select(id,null);const keys=await this.transaction('packages','readonly',s=>s.getAllKeys());for(const key of keys)if(key.startsWith(id+'@'))await this.transaction('packages','readwrite',s=>s.delete(key));});}
 }

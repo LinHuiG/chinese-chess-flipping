@@ -212,7 +212,10 @@ jobs:
       - name: Check browser game recovery and protocol
         if: steps.scope.outputs.should_check == 'true'
         run: |
+          npm ci
           node scripts/plugin-test.mjs
+          node scripts/plugin-latest-test.mjs
+          node scripts/package-retention-test.mjs
           node scripts/plugin-modal-test.mjs
           node scripts/plugin-download-test.mjs
           node scripts/player-wake-test.mjs
@@ -363,7 +366,7 @@ jobs:
             Remove-Item Env:PLUGIN_SIGNING_KEY_PEM
             npm ci
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            # Carry forward immutable versions so a room can still request its pinned release.
+            # Verify the prior archive for native package identity/reuse, then retain only current releases.
             # Resolve the durable archive by tag, never by a paginated release listing.
             $marketRelease = $null
             try {
@@ -380,13 +383,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             node scripts/check-plugin-market.mjs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            # A durable backup survives Actions artifact expiry; it is not the live marketplace.
+            # Replace the latest-only archive; the image carries the matching live marketplace.
             Compress-Archive -Path server/plugin-market/* -DestinationPath "$env:RUNNER_TEMP/market.zip"
             if ($null -eq $marketRelease) {
-              gh release create plugin-market --title 'Plugin marketplace archive' --notes 'Signed immutable plugin versions retained for future releases.' --prerelease --target "$env:GITHUB_SHA"
+              gh release create plugin-market --title 'Plugin marketplace archive' --notes 'Signed latest plugin releases. Historical plugin versions are not retained.' --prerelease --target "$env:GITHUB_SHA"
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
             gh release upload plugin-market "$env:RUNNER_TEMP/market.zip" --clobber
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            gh release edit plugin-market --title 'Plugin marketplace (latest)' --notes 'Signed latest plugin releases. Historical plugin versions are not retained; clients must update and recreate old rooms.'
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } finally { Remove-Item -LiteralPath $keyPath -ErrorAction SilentlyContinue }
       - uses: actions/upload-artifact@v6
