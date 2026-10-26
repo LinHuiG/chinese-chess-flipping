@@ -1,6 +1,6 @@
 # 0.9.4 验收与发布记录
 
-更新日期：2026-10-27。用户已授权打包发布，正式构建与发布进行中。
+更新日期：2026-10-27。正式发布完成，第一台部署及公网核验待执行。
 
 ## 范围与版本
 
@@ -21,27 +21,32 @@
 - 最新版本策略专项通过：隔离真实打包流程验证只保留三个当前发布、清理旧文件、重复构建不增长、v103 复用、退役包名不可变约束及失败/签名/路径保护；PluginStore 验证最高版本、撤回不回退、异步加载/安装拒绝旧版、切换市场时清理所有权和个人存档保留。
 - 真实签名目录与浏览器 IndexedDB 的定向 UI 检查通过：旧安装更新入口、市场故障禁止创建/加入/恢复、旧房间拒绝、编辑建房和输入密码期间市场升级、并发启动、成功刷新后最新绑定创建/加入/恢复。该检查使用本地房间运行夹具，不代替真实跨端联机。现有大厅/播放器 UI 检查再次通过。
 
-## 正式发布待完成
+## 正式发布与部署清单
 
-- [ ] 冻结源码提交并完成 Actions 五项构建和检查。
-- [ ] 验证正式 APK/EXE 版本与散列、Android 签名、生产市场签名及历史清理。
-- [ ] 验证三端插件脚本来自冻结源码且无测试注入。
-- [ ] 发布 v0.9.4 附件及校验文件，记录 Actions 与多架构镜像 digest。
+- [x] 冻结源码提交并完成 Actions 五项构建和检查。
+- [x] 验证正式 APK/EXE 版本与散列、Android 签名、生产市场签名及历史清理。
+- [x] 验证三端插件脚本来自冻结源码且无测试注入。
+- [x] 发布 v0.9.4 附件及校验文件，记录 Actions 与多架构镜像 digest。
+- [ ] 通知既有部署线程部署第一台，完成公网核验后再关机。
 
 ## 验证边界
 
 本轮本地检查使用受控通信/状态夹具与浏览器；Android 实体机上的实际流畅度、跨端公网联机及本次正式 EXE 的电影播放链路尚未验证。正式构建、签名和文件一致性不能替代这些结果。网站上线状态与安装包发布分开记录。
 
-## 首轮候选（已被追加需求取代，不作为最终交付）
+## 正式发布产物
 
-- 首轮提交 `2c0011364758d93db6107e86449b60968b71af58` 已推送 main；[Actions 40351915064](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/40351915064) 五项成功，但尚未包含用户随后要求的市场清理和强制升级，不能作为最终交付。
-- 正式 APK/EXE 归档散列与 Actions digest 一致，ZIP CRC 通过；版本分别为 0.9.4/code22 与 0.9.4/x64，文件散列与构建清单一致。APK 为非 debuggable，v2 签名及证书与已发布 0.9.3 相同；内置 14 份网页资源与冻结 Git 对象逐字节相同。
-- v0.9.4 仍为未公开草稿，首轮三个附件上传后的 digest/大小匹配；将由纳入最新要求后的正式构建替换。
+- 最终冻结提交 `7fa8a6e232bd7adc28e9394b79655cffe21fcfbd`，[Actions 40360043136](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/40360043136) 五项全部成功。首轮 2c00113 / run40351915064 虽构建成功，随后因新增保留策略被替代，未作为正式版本公开；其草稿附件已全部替换。
+- [v0.9.4](https://github.com/LinHuiG/chinese-chess-flipping/releases/tag/v0.9.4) 已公开，标签指向最终冻结提交。三个正式附件上传后的 digest、大小与最终 CI 文件匹配，公开 SHA256SUMS.txt 已重新下载匹配。
+- APK/EXE 归档完整散列与 Actions digest 一致，ZIP CRC 通过；版本分别为 0.9.4/code22 与 0.9.4/x64。APK 非 debuggable，v2 签名及证书与已发布 0.9.3 相同；内置 14 份网页资源与最终 Git 对象逐字节相同。
 
 | 文件 | 字节数 | SHA-256 |
 |---|---:|---|
-| CyberRoom-0.9.4.apk | 2250807 | `5b2e208e235d08e55fa7dd1e086c0023267334b82cc55b2097e58c9be1edabe8` |
-| CyberRoom-0.9.4.exe | 11853312 | `3d000e5647ba6ae355089a3ead1b2a717a103624bf994c2cbb573e8d4476afbf` |
-| SHA256SUMS.txt | 174 | `c8adc8ac85e2b6e40a4a203e325a93791a4c7aa61158bd20912c0cdf7a76070d` |
+| CyberRoom-0.9.4.apk | 2252499 | `85e1b533d4fbe145f3776a352a00522f4b8f9c49682a0c15d9c509a5b5efc68d` |
+| CyberRoom-0.9.4.exe | 11857408 | `52a32370c63f9773ec6100ddfff678cd78a15b8cd78f828064d0106f40ab3577` |
+| SHA256SUMS.txt | 174 | `d33fff1dc33c4df60ced5fdc24afbe03fb7804c5f9be5f730d0be83c94ba84eb` |
 
-本地正式附件目录：`server/target/release-0.9.4/release-assets/`。下载遇到连接不稳定，市场大归档使用带精确 Content-Range 校验的并发分段下载；最终必须通过 Actions 提供的整份散列后才计为下载成功。
+本地正式附件目录：`server/target/release-0.9.4/final/release-assets/`。市场完整归档使用精确 Content-Range 分段下载，最终整份 SHA-256 与 Actions digest 一致，再完成 ZIP CRC、文件散列及签名核验。
+
+- 市场只有 3 条 1.0.4 发布和 11 份产物，生产签名及全部大小/散列通过；旧 12 条历史记录及其旧路径均不存在，目录没有未引用文件。9 个平台脚本与冻结源码 fresh esbuild 逐字节相同，无测试注入；HTML/CSS 换行规范化后与源码一致。catalog SHA-256 `e8cfa208a307bfb6e35802bbc70eff40f5399fbb2c39c7748553c8575b1a6c65`。
+- Actions 市场归档由 483,277,409 降至 96,683,801 字节，约减少 80%；公开 `plugin-market` 的 `market.zip` 为 96,704,711 字节。剩余当前平台 JSON 共 21,180,432 字节，当前原生 APK/EXE 共 85,906,181 字节（未压缩）。其中 Android v103 文件/源码指纹/包名/版本与此前相同，并独立验证同证书非调试签名；4 条已签名包名/散列约束仅为安全元数据，不提供旧插件下载。
+- 镜像 `ghcr.io/linhuig/chinese-chess-flipping:sha-7fa8a6e`，index `sha256:d484ee3576836e55a4a774abb6c52740563fa863ca42d989acdeca6ea2a5baa9`。amd64 构建 digest `sha256:b4f2eb4be7f8d9760d8d217f86f18eda72c857dd0c96ebdd14595eecc002e8d7`，arm64 构建 digest `sha256:de40b2752a7c43be4064f5be4882276cb53da82510e07b455b779a531a06e83c`；注册表 index/子清单及两个镜像配置中的源码 revision 与最终 CI 一致。
