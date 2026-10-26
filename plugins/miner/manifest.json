@@ -4,7 +4,7 @@
   "key": "miner",
   "name": "黄金矿工",
   "description": "各自操作爪子，共闯千关矿谷，房主保存进度。",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "hostApi": 1,
   "resumeKey": "cyber.miner.save",
   "protocol": "miner/1",

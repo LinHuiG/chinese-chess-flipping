@@ -1,6 +1,8 @@
 // 原创多人矿工规则。房主独占模拟；关卡由种子+关卡号生成，存档不存 1,000 张地图。
 export const MAX_LEVEL=1000;
 export const SHOP_SECONDS=20;
+export const clawSwingSpeed=level=>.60+Math.min(.25,level/3500);
+export const clawRetractSpeed=(player,item)=>240*(1+player.reel*.12)*(player.effects.strength?1.5:1)/(1+(item?.mass||0)*.32);
 export const SHOP=[
   {id:'dynamite',name:'随身炸药',icon:'✦',price:140,description:'炸掉爪上的重物，立即收钩',stack:true},
   {id:'strength',name:'大力汽水',icon:'ϟ',price:260,description:'下一关拉取速度提升 50%'},
@@ -124,26 +126,27 @@ export class GoldMine{
     if(this.paused||!Number.isFinite(dt)||dt<=0)return false;
     if(this.phase==='shop'){this.shopTime=Math.max(0,this.shopTime-dt);if(this.shopTime===0)this.next();return true;}
     if(this.phase!=='playing')return false;
-    this.time-=dt;this.elapsed+=dt;
-    // 计时使用真实间隔，运动分步避免偶发卡顿穿过物品。
-    const motion=Math.min(dt,.4),steps=Math.max(1,Math.ceil(motion/.025)),delta=motion/steps;
+    // Advance the same elapsed time for motion and the round clock. Dropping
+    // motion after a slow frame made claw speed depend on the host's CPU load.
+    const motion=Math.min(dt,Math.max(0,this.time)),steps=Math.max(1,Math.ceil(motion/.025)),delta=motion/steps;
+    this.time=Math.max(0,this.time-dt);
     for(let step=0;step<steps;step++){
+      this.elapsed+=delta;
       for(const item of this.items)if(item.type==='hamster'&&item.owner<0)item.x=Math.max(30,Math.min(930,item.homeX+Math.sin(this.elapsed*1.25+item.phase)*42));
       for(const p of this.players){
         const c=p.claw;c.stun=Math.max(0,c.stun-delta);
-        if(c.mode==='swing'){c.angle+=c.direction*delta*(.60+Math.min(.25,this.level/3500));if(Math.abs(c.angle)>1.25){c.angle=Math.sign(c.angle)*1.25;c.direction*=-1;}continue;}
+        if(c.mode==='swing'){c.angle+=c.direction*delta*clawSwingSpeed(this.level);if(c.angle>1.25){c.angle=2.5-c.angle;c.direction=-1;}else if(c.angle< -1.25){c.angle=-2.5-c.angle;c.direction=1;}continue;}
         if(c.mode==='extend'){
           const before=this.tip(p);c.length+=delta*280;const after=this.tip(p);
           const item=this.items.find(o=>o.owner<0&&distanceToSegment(o.x,o.y,before.x,before.y,after.x,after.y)<o.r+8+(p.effects.magnet?10:0));
           if(item){
             if(item.type==='tnt'){this.blast(item,p);continue;}
-            c.item=item.id;item.owner=p.slot;c.mode='retract';
+            c.item=item.id;item.owner=p.slot;c.mode='retract';item.x=after.x;item.y=after.y;
           }else if(after.x<14||after.x>946||after.y>626)c.mode='retract';
         }else{
-          const item=this.items.find(o=>o.id===c.item),mass=item?item.mass:0;
-          const speed=(240*(1+p.reel*.12)*(p.effects.strength?1.5:1))/(1+mass*.32);
+          const item=this.items.find(o=>o.id===c.item),speed=clawRetractSpeed(p,item);
           c.length=Math.max(24,c.length-delta*speed);
-          if(item){const tip=this.tip(p);item.x=tip.x;item.y=tip.y+item.r*.35;}
+          if(item){const tip=this.tip(p);item.x=tip.x;item.y=tip.y;}
           if(c.length<=24){if(item)this.haul(p,item);c.item=-1;c.mode='swing';}
         }
       }
@@ -153,7 +156,7 @@ export class GoldMine{
   snapshot(){return {seed:this.seed,level:this.level,phase:this.phase,paused:this.paused,time:this.time,shopTime:this.shopTime,elapsed:this.elapsed,target:this.target,roundBonus:this.roundBonus,players:this.players,items:this.items,events:this.events,eventId:this.eventId};}
   save(){return JSON.parse(JSON.stringify({version:1,...this.snapshot()}));}
   static restore(saved){
-    if(saved.version!==1||!Number.isInteger(saved.level)||saved.level<1||saved.level>MAX_LEVEL||!Array.isArray(saved.players)||saved.players.length<2||saved.players.length>3||!Array.isArray(saved.items)||saved.items.length>96||!Number.isFinite(saved.time))throw Error('矿工存档无效');
+    if(saved.version!==1||!Number.isInteger(saved.level)||saved.level<1||saved.level>MAX_LEVEL||!Array.isArray(saved.players)||saved.players.length<2||saved.players.length>3||!Array.isArray(saved.items)||saved.items.length>96||!Number.isFinite(saved.time)||saved.time<0||saved.time>110+3*12)throw Error('矿工存档无效');
     const game=Object.assign(Object.create(GoldMine.prototype),JSON.parse(JSON.stringify(saved)));game.paused=game.phase==='playing'||game.phase==='shop';
     game.shopTime=game.phase==='shop'?Math.max(0,Math.min(SHOP_SECONDS,Number.isFinite(saved.shopTime)?saved.shopTime:SHOP_SECONDS)):0;
     return game;

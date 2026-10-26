@@ -4,7 +4,7 @@
   "key": "watch",
   "name": "电影厅",
   "description": "一起看电影、发弹幕和语音聊天，房主控制播放。",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "hostApi": 1,
   "protocol": "watch/1",
   "roomFeature": "c1067e462c15443d896b2da3854e0128",

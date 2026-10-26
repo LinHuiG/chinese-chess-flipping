@@ -217,6 +217,8 @@ jobs:
           node scripts/plugin-download-test.mjs
           node scripts/player-wake-test.mjs
           node scripts/client-test.mjs
+          node scripts/miner-simulation-test.mjs
+          node scripts/miner-motion-test.mjs
           node scripts/watch-voice-test.mjs
           node scripts/subtitles-test.mjs
           node scripts/watch-subtitle-lifecycle-test.mjs

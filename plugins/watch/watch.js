@@ -75,7 +75,7 @@ export class WatchRoom {
   mediaTracks(){return this.tracks.map(({Index,Type,Codec,Language,DisplayTitle,IsExternal})=>({Index,Type,Codec,Language,DisplayTitle,IsExternal:!!IsExternal}));}
   embeddedSubtitle(stream){return this.directTracks&&stream&&!stream.IsExternal;}
   endpoint(path,query={},access=this.access){const url=new URL(access.base.replace(/\/$/,'')+'/'+path.replace(/^\//,''));for(const [k,v] of Object.entries(query))if(v!==undefined&&v!==null)url.searchParams.set(k,String(v));return url.toString();}
-  headers(access=this.access,deviceId=this.room.self){return {'Content-Type':'application/json','X-Emby-Token':access?.token||'','X-Emby-Authorization':`MediaBrowser Client="CyberRoom", Device="${native?'Native':'Web'}", DeviceId="${deviceId}", Version="0.9.3"`};}
+  headers(access=this.access,deviceId=this.room.self){return {'Content-Type':'application/json','X-Emby-Token':access?.token||'','X-Emby-Authorization':`MediaBrowser Client="CyberRoom", Device="${native?'Native':'Web'}", DeviceId="${deviceId}", Version="0.9.4"`};}
   validContext(context,generation){return this.active&&this.room.current(context)&&(generation===undefined||generation===this.generation);}
   validPlayback(context,generation,url){return this.validContext(context,generation)&&this.url===url&&this.epoch===this.room.room?.playback?.epoch&&this.failedEpoch!==this.epoch;}
   canSample(){return this.epoch===this.room.room?.playback?.epoch&&!!this.url&&!this.loading&&!this.error&&!this.pendingSeek&&this.failedEpoch!==this.epoch&&(this.nativePlayer||this.video.readyState>=2);}

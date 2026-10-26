@@ -4,7 +4,7 @@
   "key": "chess",
   "name": "翻棋",
   "description": "翻开暗棋决定阵营，和朋友下一盘。",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "hostApi": 1,
   "protocol": "chess/1",
   "roomFeature": "f937bda248ce4fab9c710a18bdffb2d3",

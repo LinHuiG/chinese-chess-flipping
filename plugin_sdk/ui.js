@@ -33,7 +33,7 @@ export function mount(rules,view){
   document.querySelectorAll('.rules-link').forEach(b=>b.onclick=()=>{text('rules-title',m.name+' · 规则');text('rules-body',bootstrap.rules||m.description);$('rules-dialog').showModal();});
   let passwordContext='';document.querySelectorAll('.room-password').forEach(b=>b.onclick=()=>{passwordContext=g.context();text('password-title','设置房间密码');text('password-hint','留空取消密码，修改不影响现有成员。');$('password-value').value='';$('password-dialog').showModal();});
   $('password-form').onsubmit=e=>{e.preventDefault();if(g.current(passwordContext))g.setPassword($('password-value').value).catch(fail);$('password-value').value='';$('password-dialog').close();};
-  onHostEvent(async(name,value)=>{if(name==='back'){const d=document.querySelector('dialog[open]');if(d)d.close();else leave().catch(fail);}if(name==='dispose'){try{await view.event?.({type:'leaving'});await g.saveProgress(false);g.checkpoint();await storageFlush();}catch(e){fail(e);}finally{call('plugin.disposed').catch(()=>{});}}});
+  onHostEvent(async(name,value)=>{if(name==='back'){const d=document.activeElement?.closest('dialog[open]')||[...document.querySelectorAll('dialog[open]')].at(-1);if(d){if(d.dispatchEvent(new Event('cancel',{cancelable:true}))&&d.open)d.close();}else leave().catch(fail);}if(name==='dispose'){try{await view.event?.({type:'leaving'});await g.saveProgress(false);g.checkpoint();await storageFlush();}catch(e){fail(e);}finally{call('plugin.disposed').catch(()=>{});}}});
   addEventListener('plugin-storage-error',e=>toast(e.detail));
   addEventListener('pagehide',()=>{g.saveProgress(false);g.checkpoint();});
   document.addEventListener('visibilitychange',()=>g.nativeEvent({type:document.hidden?'background':'foreground'}));

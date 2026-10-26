@@ -12,5 +12,11 @@ export const rules={
   async save(g,notify){if(!g.host||!g.engine)return false;const saved=g.engine.save();let ok=storageSet('cyber.miner.save',saved);g.checkpoint(saved);try{await storageFlush();}catch{ok=false;}if(notify||(!ok&&!g.saveFailed))g.events.notice?.(ok?'进度已保存在房主设备':'保存失败：设备存储空间不足');g.saveFailed=!ok;return ok;},
   memberLeft(g){if(g.engine){g.engine.paused=true;g.restoreSave=g.engine.save();g.saveProgress(false);}g.room.members.forEach(p=>p.ready=false);g.room.status='waiting';},
   background(g){if(g.engine){g.engine.paused=true;g.saveProgress(false);g.publish();}},
-  tick(g,now,dt){const phase=g.engine.phase;if(g.engine.step(dt)&&now-g.lastPublish>100){g.lastPublish=now;g.publish();}if(phase!==g.engine.phase){g.saveProgress(false);g.publish();}if(now-g.lastSave>5000){g.lastSave=now;g.saveProgress(false);}}
+  tick(g,now,dt){
+    const phase=g.engine.phase,changed=g.engine.step(dt),transition=phase!==g.engine.phase,due=now-g.lastPublish>=100;
+    // Keep a 100 ms cadence instead of rounding every interval up to four
+    // 33 ms ticks. A late tick sends the newest state once, never a backlog.
+    if(changed&&(due||transition)){g.lastPublish=due?now-(now-g.lastPublish)%100:now;g.publish();}
+    if(transition||now-g.lastSave>=5000){g.lastSave=now;g.saveProgress(false);}
+  }
 };

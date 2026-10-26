@@ -5,7 +5,7 @@ const {chromium}=require('playwright');
  const browser=await chromium.launch({channel:'msedge',headless:true,args:['--mute-audio']}),page=await browser.newPage();
  const diagnostics=[];let step='open lobby';
  try{
-  page.setDefaultTimeout(45000);page.on('dialog',d=>d.accept());
+  page.setDefaultTimeout(45000);page.on('dialog',d=>d.accept());await page.addLocatorHandler(page.locator('#action-dialog'),()=>page.locator('#action-confirm').click());
   page.on('console',m=>{if(m.type()==='error')diagnostics.push({console:m.text().replace(/https?:\/\/[^\s'"<>]+/g,'[URL]').slice(0,600)});});
   page.on('response',r=>{const u=new URL(r.url());if(u.pathname.endsWith('PlaybackInfo')||/\.(m3u8|ts)$/.test(u.pathname))diagnostics.push({kind:u.pathname.endsWith('PlaybackInfo')?'negotiation':u.pathname.endsWith('.m3u8')?'manifest':'segment',status:r.status()});});
   page.on('response',async r=>{if(!new URL(r.url()).pathname.endsWith('PlaybackInfo'))return;try{const info=await r.json();diagnostics.push({error:info.ErrorCode,sources:info.MediaSources?.map(s=>({container:s.Container,direct:s.SupportsDirectPlay,transcode:!!s.TranscodingUrl,streams:s.MediaStreams?.map(t=>({type:t.Type,codec:t.Codec}))}))});}catch{}});

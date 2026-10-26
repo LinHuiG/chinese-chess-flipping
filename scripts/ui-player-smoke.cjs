@@ -36,6 +36,20 @@ const server=http.createServer((req,res)=>{
   await page.waitForFunction(()=>document.querySelectorAll('.room-art img').length===3);
   await page.screenshot({path:path.join(out,'lobby-desktop.png'),fullPage:true});
   for(const [width,height]of [[390,844],[844,390]]){await page.setViewportSize({width,height});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:path.join(out,`lobby-${width}.png`),fullPage:true});}
+  for(const [width,height]of [[1440,900],[390,844],[320,568],[844,390]]){
+   await page.setViewportSize({width,height});
+   await page.locator('.room-card').filter({hasText:'今晚看点什么'}).click();await page.locator('#password-dialog').waitFor();
+   const buttons=await page.locator('#password-dialog').evaluate(d=>{const input=d.querySelector('input').getBoundingClientRect(),[a,b]=[...d.querySelectorAll('button')].map(e=>e.getBoundingClientRect()),r=d.getBoundingClientRect();return {gap:a.top-input.bottom,sameHeight:Math.abs(a.height-b.height),space:b.left-a.right,right:b.right<=r.right,left:a.left>=r.left,overflow:d.scrollWidth-d.clientWidth};});
+   assert(buttons.gap>=16&&buttons.sameHeight<1&&buttons.space>=8&&buttons.right&&buttons.left&&buttons.overflow<=1,'password actions are separate, aligned and fit');await page.screenshot({path:path.join(out,`password-${width}.png`)});await page.locator('#password-dialog .dialog-close').click();
+   for(const [open,dialog,label]of [['#settings-open','#settings-dialog','settings'],['#installed .primary','#create-dialog','create'],['#market-open','#market-dialog','market']]){
+    await page.locator(open).first().click();await page.locator(dialog).waitFor();assert(await page.locator(dialog).evaluate(d=>{const r=d.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1&&d.scrollWidth<=d.clientWidth+1;}),label+' dialog fits');await page.screenshot({path:path.join(out,`${label}-${width}.png`)});await page.locator(dialog+' .dialog-close').click();
+   }
+  }
+  const uninstall=page.locator('#installed .card').filter({has:page.getByRole('heading',{name:'黄金矿工',exact:true})}).getByRole('button',{name:'卸载',exact:true});
+  await uninstall.click();await page.locator('#action-dialog').waitFor();await page.keyboard.press('Escape');assert.equal(await page.locator('#installed .card').count(),3,'Escape keeps the plugin installed');
+  await uninstall.click();await page.locator('#action-dialog').waitFor();await page.evaluate(()=>cyberBack());await page.waitForFunction(()=>!document.getElementById('action-dialog').open);assert.equal(await page.locator('#installed .card').count(),3,'native Back cancels confirmation');
+  await uninstall.click();await page.click('#action-confirm');await page.waitForFunction(()=>document.querySelectorAll('#installed .card').length===2);assert.equal(await page.locator('#action-dialog').isVisible(),false,'confirmation completes uninstall');
+  await page.click('#settings-open');await page.evaluate(()=>document.querySelector('#installed .quiet-button').click());await page.locator('#action-dialog').waitFor();await page.evaluate(()=>cyberBack());await page.waitForFunction(()=>!document.getElementById('action-dialog').open);assert(await page.locator('#settings-dialog').isVisible(),'Back dismisses the focused top dialog, not the last dialog in DOM order');assert.equal(await page.locator('#installed .card').count(),2);await page.locator('#settings-dialog .dialog-close').click();
   await page.setViewportSize({width:1280,height:720});await page.goto(url+'/movie');await page.waitForFunction(()=>!!window.ui);await page.locator('body').click({position:{x:10,y:10}});
   await page.keyboard.press('Space');assert.equal(await page.evaluate(()=>watch.room.room.playback.playing),false);
   await page.keyboard.press('ArrowLeft');assert.equal(await page.evaluate(()=>watch.current()),740);await page.keyboard.press('ArrowRight');assert.equal(await page.evaluate(()=>watch.current()),770);

@@ -1,15 +1,21 @@
-import {$,text,element,toast,fail,confirm,mount,memberBadge,fullscreen} from '../../plugin_sdk/ui.js';
-import {native,nativeCall,storageGet,storageSet} from '../../plugin_sdk/transport.js';
+import {$,text,element,fail,mount,memberBadge,fullscreen} from '../../plugin_sdk/ui.js';
+import {storageGet} from '../../plugin_sdk/transport.js';
 import {rules} from './rules.js';
 import {SHOP,THEMES} from './miner.js';
 import {MinerView} from './miner-view.js';
 import {Sound} from '../../plugin_sdk/sound.js';
 const sound=new Sound(),view=new MinerView($('mine-canvas'),sound);sound.enabled=storageGet('cyber.sound',true);view.motion=storageGet('cyber.motion',true);
-const game=mount(rules,{render(){const active=game.room?.status!=='waiting';document.body.classList.toggle('mine-active',active);if(active)renderMine();else view.setState(null);},native(e){view.suspended=e.type==='background';if(e.type==='foreground')view.wake();}});
+let hudKey='';
+const game=mount(rules,{render(){const active=!!game.room&&game.room.status!=='waiting';document.body.classList.toggle('mine-active',active);if(active)renderMine();else{hudKey='';view.setState(null);}},native(e){if(e.type==='foreground'||e.type==='background')view.suspended=e.type==='background';}});
 async function act(a){sound.unlock();try{await game.action(a);}catch(e){fail(e);}}
 function renderMine(){
   const r=game.room,s=game.state;if(!s)return;
   const p=s.players.find(p=>p.id===game.self);if(!p)return;
+  view.setState(s,game.self,game.client.ready);clock();
+  // Positions arrive continuously; touch the HUD only when its displayed
+  // values or available actions change, not for every movement snapshot.
+  const nextHud=JSON.stringify([r.round,s.seed,s.level,s.phase,s.paused,s.target,s.roundBonus,game.host,game.client.ready,s.players.map(p=>[p.id,p.name,p.score,p.cash,p.round,p.reel,p.inventory,p.purchased,p.shopReady]),p.claw.mode,p.claw.item,p.claw.stun>0]);
+  if(nextHud===hudKey)return;hudKey=nextHud;
   $('miner').dataset.phase=s.phase;
   text('mine-biome',THEMES[Math.floor((s.level-1)/100)].name+' / 黄金矿工');
   text('mine-level','第 '+s.level.toLocaleString()+' / 1,000 关');
@@ -32,7 +38,6 @@ function renderMine(){
   $('save').hidden=!game.host;text('mine-help','点击矿场或按空格放爪 · '+(game.host?'进度自动保存':'进度由房主保存')+' · 爆破键 B');
   $('shop').hidden=s.phase!=='shop';$('mine-complete').hidden=s.phase!=='complete';
   if(s.phase==='shop')renderShop(s,p);
-  view.setState(s,game.self);clock();
 }
 function renderShop(s,p){
   text('shop-summary',s.paused?'补给已暂停，等待房主继续':s.roundBonus?'目标达成，每人 +150 积分':'20 秒补给后自动出发');

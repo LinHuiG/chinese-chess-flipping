@@ -10,7 +10,7 @@ const url=process.env.CHESS_WEB_URL||'http://127.0.0.1:18880';
  console.log('Native check: attached host and browser');await guest.addInitScript(()=>{const Socket=WebSocket;window.WebSocket=new Proxy(Socket,{construct(target,args){return window.__roomSocket=Reflect.construct(target,args);}});});await host.addInitScript(()=>{window.__viewports=[];const post=MessagePort.prototype.postMessage;MessagePort.prototype.postMessage=function(m,...rest){if(m.method==='native'&&m.args?.[0]==='playerCommand'){try{const q=JSON.parse(m.args[1]);if(q.bounds){__viewports.push({visible:q.visible,bounds:q.bounds});if(__viewports.length>100)__viewports.shift();}}catch{}}return post.call(this,m,...rest);};});
  const frame=p=>p.frames().find(f=>f.parentFrame()===p.mainFrame());
  try{
-  for(const p of [host,guest]){p.setDefaultTimeout(30000);p.on('pageerror',e=>errors.push(e.message));p.on('dialog',d=>d.accept());}
+  for(const p of [host,guest]){p.setDefaultTimeout(30000);p.on('pageerror',e=>errors.push(e.message));p.on('dialog',d=>d.accept());await p.addLocatorHandler(p.locator('#action-dialog'),()=>p.locator('#action-confirm').click());}
   await host.evaluate(async ({market,port})=>{await window.cyberDisconnect?.();await NativeRoom.secureWrite('official.watch','null');await NativeRoom.configure(JSON.stringify({...JSON.parse(NativeRoom.settings()),host:'127.0.0.1',port,transport:'TCP'}));localStorage.setItem('cyber.market',JSON.stringify(market));},{market:url+'/plugins/',port:Number(process.env.CHESS_TEST_TCP_PORT||18888)});console.log('Native check: configured');await host.reload({waitUntil:'domcontentloaded'});
   await host.locator('#status').filter({hasText:'已连接'}).waitFor();
   console.log('Native check: connected');

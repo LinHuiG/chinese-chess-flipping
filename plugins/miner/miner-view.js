@@ -1,13 +1,17 @@
 import {asset} from '../../plugin_sdk/transport.js';
+import {MineMotion,clawTip} from './miner-motion.js';
 const COLORS=['#8fddf4','#d7e3e9','#e8b65d'];
 const ART={gold:[56,63,313,307],rock:[469,63,319,306],diamond:[877,92,341,264],hamster:[43,457,355,295],bag:[447,484,361,250],poop:[863,497,365,227],tnt:[82,837,255,339],miner:[440,797,374,390],claw:[880,806,335,384]};
 export class MinerView{
   constructor(canvas,sound){
-    this.canvas=canvas;this.ctx=canvas.getContext('2d',{alpha:false});this.sound=sound;this.particles=[];this.seen=0;this.motion=true;this.previous=new Map();this.sprites=new Map();this.artX=this.artY=1;
+    this.canvas=canvas;this.ctx=canvas.getContext('2d',{alpha:false});this.sound=sound;this.particles=[];this.seen=0;this.motion=true;this.motionFrame=new MineMotion();this.connected=true;this.sprites=new Map();this.artX=this.artY=1;
     this.sizeDirty=true;this.background=document.createElement('canvas');this.background.width=960;this.background.height=640;
     this.terrain=document.createElement('canvas');this.terrain.width=960;this.terrain.height=640;this.last=performance.now();this.artCache=new Map();
     this.resize=new ResizeObserver(()=>{this.sizeDirty=true;this.wake();});this.resize.observe(canvas);
+    document.addEventListener('visibilitychange',()=>{this.suspended=document.hidden;});
   }
+  get suspended(){return !!this._suspended;}
+  set suspended(value){if(this._suspended===!!value){if(!value)this.wake();return;}this._suspended=!!value;if(value){this.motionFrame.setState(this.state,performance.now(),false);cancelAnimationFrame(this.raf);this.raf=0;}else{this.motionPending=true;this.wake();}}
   prepare(){
     if(this.ready)return this.ready;
     const load=name=>new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=reject;image.src=asset('assets/'+name);});
@@ -15,24 +19,17 @@ export class MinerView{
     return this.ready;
   }
   wake(){if(this.state&&!document.hidden&&!this.suspended&&!this.raf)this.raf=requestAnimationFrame(t=>this.draw(t));}
-  setState(state,self){
-    this.self=self;
-    if(!state){this.state=this.source=null;cancelAnimationFrame(this.raf);this.raf=0;this.level=null;this.previous.clear();this.sprites.clear();return;}
+  setState(state,self,connected=true){
+    this.self=self;this.connected=connected;
+    if(!state){this.state=this.source=null;cancelAnimationFrame(this.raf);this.raf=0;this.level=null;this.motionFrame.setState(null);this.sprites.clear();return;}
     this.prepare();
-    if(state===this.source){this.wake();return;}
-    if(this.level!==state.level||this.seed!==state.seed){this.seen=state.eventId;this.particles=[];this.level=state.level;this.seed=state.seed;this.paintBackground(state.level,state.seed);this.previous.clear();this.sprites.clear();this.terrainKey='';}
-    const now=performance.now(),duration=state.paused||state.phase!=='playing'?0:Math.max(60,Math.min(160,now-(this.received||now-110)));
+    if(state===this.source){this.motionPending=true;this.wake();return;}
+    if(this.level!==state.level||this.seed!==state.seed){this.seen=state.eventId;this.particles=[];this.level=state.level;this.seed=state.seed;this.paintBackground(state.level,state.seed);this.sprites.clear();this.terrainKey='';}
     this.source=state;
     // Host snapshots share mutable engine arrays. Freeze only this small render frame;
     // intermediate simulation ticks must not change the target during interpolation.
     this.state={...state,items:state.items.map(o=>({...o})),players:state.players.map(p=>({...p,claw:{...p.claw}}))};
-    const live=new Set();
-    const track=(key,value,fields)=>{live.add(key);let frame=this.previous.get(key);if(!frame){frame={from:{},to:{},value:{},at:now,duration:0};for(const f of fields)frame.value[f]=value[f];this.previous.set(key,frame);}else this.sample(frame,now);
-      frame.at=now;frame.duration=duration;for(const f of fields){frame.from[f]=frame.value[f];frame.to[f]=value[f];}return frame;};
-    for(const o of this.state.items)if(o.type==='hamster'||o.owner>=0)track('i'+o.id,o,['x','y']);
-    for(const p of this.state.players)track('p'+p.slot,p.claw,['angle','length']);
-    for(const key of this.previous.keys())if(!live.has(key))this.previous.delete(key);
-    this.received=now;
+    this.motionPending=true;
     const terrainKey=this.state.items.filter(o=>o.type!=='hamster'&&o.owner<0).map(o=>o.id).join(',');
     if(terrainKey!==this.terrainKey){this.terrainKey=terrainKey;this.terrainDirty=true;}
     for(const e of state.events||[])if(e.id>this.seen){
@@ -47,7 +44,7 @@ export class MinerView{
     if(this.particles.length>150)this.particles.splice(0,this.particles.length-150);
     this.wake();
   }
-  sample(frame,now){const t=frame.duration?Math.max(0,Math.min(1,(now-frame.at)/frame.duration)):1;for(const f in frame.to)frame.value[f]=frame.from[f]+(frame.to[f]-frame.from[f])*t;return frame.value;}
+  grip(slot,now){return clawTip(this.motionFrame.player(slot,now));}
   sprite(c,o,x=o.x,y=o.y,time=0){
     const key=o.type+':'+o.r+':'+!!o.gem;let sprite=this.sprites.get(key);
     if(!sprite){const image=document.createElement('canvas'),size=Math.ceil(Math.max(48,o.r+12)*2);image.width=image.height=size*2;
@@ -84,7 +81,12 @@ export class MinerView{
     c.save();c.translate(claw.x,claw.y);c.lineCap='round';
     c.strokeStyle='#070d12';c.lineWidth=5;c.beginPath();c.moveTo(0,0);c.lineTo(x,y);c.stroke();
     c.strokeStyle='#becbd2';c.lineWidth=2;c.stroke();
-    c.save();c.translate(x,y);c.scale(this.artX,this.artY);c.rotate(-Math.atan2(Math.sin(claw.angle)/this.artX,Math.cos(claw.angle)/this.artY));this.art(c,'claw',0,1,34);c.restore();
+    const held=this.state.items.find(o=>o.id===claw.item&&o.owner===p.slot);
+    if(held)this.sprite(c,held,x,y,time);
+    const gripWidth=held?Math.max(34,Math.min(106,held.r*2.8)):34,gripHeight=gripWidth*ART.claw[3]/ART.claw[2];
+    // The atlas palm is 77% down the image, not its rectangular center. The
+    // object and palm share the rope tip before the viewport aspect transform.
+    c.save();c.translate(x,y);c.scale(this.artX,this.artY);c.rotate(-Math.atan2(Math.sin(claw.angle)/this.artX,Math.cos(claw.angle)/this.artY));this.art(c,'claw',0,-gripHeight*.27,gripWidth);c.restore();
     // The short landscape field has less space above the winch. Fit the crew
     // inside that space without changing the rope origin or collision world.
     const width=Math.min(170,(claw.y-14)/this.artY*374/390),height=width*390/374;
@@ -99,6 +101,9 @@ export class MinerView{
     this.raf=0;if(!this.state||document.hidden||this.suspended)return;
     const dt=Math.min(.05,(now-this.last)/1000);this.last=now;
     const s=this.state,c=this.ctx;
+    // A busy main thread can deliver a snapshot after the queued rAF timestamp.
+    // Apply its visual pose on the same frame clock used to sample it, once.
+    if(this.motionPending){this.motionPending=false;this.motionFrame.setState(s,now,this.connected);}
     if(this.sizeDirty){
       this.sizeDirty=false;const width=Math.max(1,this.canvas.clientWidth),height=Math.max(1,this.canvas.clientHeight),ratio=Math.min(1.5,globalThis.devicePixelRatio||1,Math.sqrt(1500000/(width*height)));
       this.canvas.width=Math.round(width*ratio);this.canvas.height=Math.round(height*ratio);
@@ -108,9 +113,9 @@ export class MinerView{
     if(!this.atlas){c.drawImage(this.background,0,0);c.fillStyle='#d5e6ee';c.font='24px sans-serif';c.textAlign='center';c.fillText(this.assetError?'采掘画面加载失败，请重新载入':'正在准备采掘设备…',480,320);return;}
     if(this.terrainDirty){const terrain=this.terrain.getContext('2d');terrain.drawImage(this.background,0,0);for(const o of s.items)if(o.type!=='hamster'&&o.owner<0)this.sprite(terrain,o);this.terrainDirty=false;}
     c.drawImage(this.terrain,0,0);
-    const time=this.motion?s.elapsed+(s.paused?0:Math.min(.15,(now-this.received)/1000)):0;
-    for(const item of s.items)if(item.type==='hamster'||item.owner>=0){const point=this.sample(this.previous.get('i'+item.id),now);this.sprite(c,item,point.x,point.y,time);}
-    for(const p of s.players){const pose=this.sample(this.previous.get('p'+p.slot),now);p.claw.angle=pose.angle;p.claw.length=pose.length;this.player(c,p,time);}
+    const time=this.motionFrame.time(now);
+    for(const item of s.items)if(item.type==='hamster'&&item.owner<0)this.sprite(c,item,Math.max(30,Math.min(930,item.homeX+Math.sin(time*1.25+item.phase)*42)),item.y,time);
+    for(const p of s.players){p.claw=this.motionFrame.player(p.slot,now);this.player(c,p,time);}
     for(const p of this.particles){
       p.life-=dt;p.x+=(p.vx||0)*dt;p.y+=(p.vy||-35)*dt;if(p.vy!==undefined)p.vy+=230*dt;
       c.save();c.globalAlpha=Math.max(0,Math.min(1,p.life/p.max));c.fillStyle=p.color;
@@ -124,6 +129,6 @@ export class MinerView{
       c.save();c.translate(480,305);c.scale(this.artX,this.artY);c.fillText(s.paused?'采掘暂停 · 进度已保留':s.phase==='complete'?'第 1,000 关完成！':'这一趟，满载而归',0,0);
       c.font='18px sans-serif';c.fillText(s.paused?'等待房主继续冒险':'去商店，为下一次出发做准备',0,37);c.restore();
     }
-    if((s.phase==='playing'&&!s.paused)||this.particles.length)this.raf=requestAnimationFrame(t=>this.draw(t));
+    if(this.motionFrame.moving(now)||this.particles.length)this.raf=requestAnimationFrame(t=>this.draw(t));
   }
 }

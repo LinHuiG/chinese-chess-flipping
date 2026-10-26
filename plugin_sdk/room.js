@@ -114,7 +114,7 @@ export class PluginRoom{
     this.lifecycle++;this.operation++;this.recovery++;clearTimeout(this.rejoinTimer);this.clearMemberNetwork();
     this.room=this.engine=this.state=this.restoreSave=this.mediaAccess=null;this.seq=-1;this.completed.clear();this.client.clearPeers();this.offers.clear();this.candidates=[];
     for(const a of this.actions.values()){clearTimeout(a.retry);clearTimeout(a.timeout);a.reject(Error('房间已结束'));}this.actions.clear();
-    this.password='';this.membershipVersion=0;this.approved=null;this.pendingAdmissions?.clear();this.updateTimer();storageSet(this.activeKey(),null);if(native)nativeCall('roomActive','');this.events.module?.({type:'reset'});
+    this.password='';this.membershipVersion=0;this.approved=null;this.pendingAdmissions?.clear();this.updateTimer();storageSet(this.activeKey(),null);this.events.module?.({type:'reset'});
   }
   message(m){
     try{
@@ -183,14 +183,14 @@ export class PluginRoom{
     this.room.seq++;const snapshot=this.snapshot();this.state=snapshot.state;this.stateAt=performance.now();this.seq=this.room.seq;
     const bytes=encoder.encode(JSON.stringify(snapshot));
     for(const p of this.room.members)if(p.id!==this.self&&p.id!==exclude)Promise.resolve(this.client.sendTo(this.room.roomId,p.id,{type:'state'},bytes,'relay')).catch(()=>{});
-    this.updateTimer();this.events.changed?.();if(native)nativeCall('roomActive',this.room.name).catch(()=>{});
+    this.updateTimer();this.events.changed?.();
   }
   apply(snapshot){
     if(!snapshot.room||snapshot.room.roomId!==this.room?.roomId||snapshot.room.hostId!==this.room.hostId||!sameBinding(snapshot.room.plugin,this.room.plugin)||snapshot.room.game!==this.room.game||snapshot.room.seq<=this.seq)return;
     const changed=JSON.stringify(this.room.members)!==JSON.stringify(snapshot.room.members);
     if(changed){this.clearMemberNetwork();this.client.clearPeers();this.offers.clear();}
     this.room=snapshot.room;this.seq=this.room.seq;this.state=snapshot.state;this.stateAt=performance.now();this.events.changed?.();if(changed||performance.now()-(this.lastCheckpoint||0)>3000)this.checkpoint();
-    this.updateTimer();if(native)nativeCall('roomActive',this.room.name).catch(()=>{});this.setupPeers();
+    this.updateTimer();this.setupPeers();
   }
   action(action){
     if(!this.room)return Promise.reject(Error('尚未加入房间'));
@@ -249,7 +249,7 @@ export class PluginRoom{
   nativeEvent(e){
     if(e.type==='udpLocal'){this.candidates.push(...e.candidates);this.setupPeers();}
     else if(e.type==='networkChanged'){this.clearMemberNetwork();this.events.network?.();this.client.clearPeers();this.offers.clear();this.candidates=[];this.discover();this.events.module?.(e);}
-    else if(e.type==='foreground'||e.type==='background'){this.background=e.type==='background';if(this.background&&this.host)this.rules.background?.(this);this.updateTimer();this.events.module?.(e);if(!this.background){if(this.client.ready)this.connected(this.client.identity,true);else if(this.client.enabled)this.client.connect();}}
+    else if(e.type==='foreground'||e.type==='background'){this.background=e.type==='background';if(this.background&&this.host)this.rules.background?.(this);this.updateTimer();this.events.native?.(e);this.events.module?.(e);if(!this.background){if(this.client.ready)this.connected(this.client.identity,true);else if(this.client.enabled)this.client.connect();}}
     else {this.events.module?.(e);this.events.native?.(e);}
   }
   reconcile(membership){

@@ -106,6 +106,52 @@ await room.joinRequest({control:{roomId:room.room.roomId,from:players[2].id},raw
 room.reset();
 console.log('PASS host framework: admission, readiness, one execution for duplicate action, private checkpoint');
 clearInterval(room.timer);
+await withClock(async()=>{
+  const host=fixture(),guest=fixture();host.self=id();guest.self=id();host.client.ready=guest.client.ready=true;
+  host.room={roomId:id(),hostId:host.self,name:'chess actions',game:'chess',capacity:2,members:[{id:host.self,name:'host'},{id:guest.self,name:'guest'}],status:'waiting',seconds:60,round:id(),seq:0,move:0};
+  const deliver=(receiver,from,rid,headers,body)=>{receiver.message({kind:64,control:{...headers,roomId:rid,from},rawBody:body instanceof Uint8Array?body:new TextEncoder().encode(JSON.stringify(body))});return true;};
+  host.client.sendTo=(rid,to,headers,body)=>deliver(guest,host.self,rid,headers,body);
+  guest.client.sendTo=(rid,to,headers,body)=>deliver(host,guest.self,rid,headers,body);
+  guest.room=structuredClone(host.room);
+  const start=()=>{host.start();host.publish();},same=()=>assert.deepEqual(guest.room,host.room),offer=()=>host.room.drawOffer.id;
+  try{
+    for(const [loser,winner] of [[host,guest],[guest,host]]){
+      start();const board=host.engine.publicBoard();await loser.action({type:'SURRENDER'});same();
+      assert.equal(host.room.result.winnerId,winner.self);assert.equal(host.room.result.reason,'投降认输');assert.equal(host.room.status,'finished');assert.deepEqual(host.engine.publicBoard(),board);
+      await assert.rejects(loser.action({type:'SURRENDER'}),/结束/);assert.equal(host.room.members.length,2);
+    }
+    for(const [requester,responder] of [[host,guest],[guest,host]]){
+      start();const deadline=host.engine.deadline;await requester.action({type:'DRAW_OFFER'});const pending=offer();same();
+      assert.equal(host.engine.deadline,deadline,'offering a draw must not reset the turn clock');
+      await assert.rejects(requester.action({type:'DRAW_REPLY',offer:pending,accept:true}),/失效/);
+      await assert.rejects(responder.action({type:'DRAW_REPLY',offer:pending+1,accept:true}),/失效/);
+      await assert.rejects(responder.action({type:'DRAW_REPLY',offer:pending,accept:'true'}),/失效/);
+      await assert.rejects(responder.action({type:'DRAW_OFFER'}),/等待答复/);
+      await responder.action({type:'DRAW_REPLY',offer:pending,accept:false});same();assert.equal(host.room.status,'playing');assert.equal(host.room.drawOffer,null);
+      await assert.rejects(requester.action({type:'DRAW_OFFER'}),/本步已请求/);
+      const actor=host.engine.turn===0?host:guest;await actor.action({type:'MOVE',from:-1,to:0,move:host.room.move});
+      await requester.action({type:'DRAW_OFFER'});const renewed=offer();assert.notEqual(renewed,pending);
+      await assert.rejects(responder.action({type:'DRAW_REPLY',offer:pending,accept:true}),/失效/);
+      const saved=JSON.parse(JSON.stringify({room:host.room,engine:host.engine.save(performance.now())}));
+      host.room=saved.room;host.engine=chessRules.restore(saved.engine);host.publish();same();assert.equal(host.room.drawOffer.id,renewed,'pending requests survive a host checkpoint restore');
+      await responder.action({type:'DRAW_REPLY',offer:renewed,accept:true});same();
+      assert.deepEqual(host.room.result,{winnerId:null,draw:true,reason:'双方同意和棋'});assert.equal(host.room.status,'finished');assert.equal(host.room.drawOffer,null);
+      await assert.rejects(responder.action({type:'DRAW_REPLY',offer:renewed,accept:false}),/结束/);
+    }
+    start();assert.deepEqual(host.room.drawOfferedAt,[-1,-1]);assert.equal(host.room.drawOffer,null);
+    assert.match(host.perform(id(),{round:host.room.round,action:{type:'SURRENDER'}}),/不在房间/);
+    assert.match(host.perform(guest.self,{round:'old-round',action:{type:'SURRENDER'}}),/更新/);
+    await host.action({type:'DRAW_OFFER'});const expired=offer(),actor=host.engine.turn===0?host:guest;
+    await actor.action({type:'MOVE',from:-1,to:0,move:0});assert.equal(host.room.drawOffer,null);
+    await assert.rejects(guest.action({type:'DRAW_REPLY',offer:expired,accept:true}),/失效/);
+    await host.action({type:'DRAW_OFFER'});const timed=offer(),timeoutWinner=host.room.members[1-host.engine.turn].id;host.engine.deadline=performance.now()-1;
+    await assert.rejects(guest.action({type:'DRAW_REPLY',offer:timed,accept:true}),/超时/);same();assert.equal(host.room.result.winnerId,timeoutWinner);assert.equal(host.room.result.reason,'回合超时');
+    start();await host.action({type:'DRAW_OFFER'});await guest.action({type:'SURRENDER'});same();assert.equal(host.room.drawOffer,null);assert.equal(host.room.result.winnerId,host.self);
+    start();await host.action({type:'DRAW_OFFER'});chessRules.memberLeft(host);assert.equal(host.room.drawOffer,null);assert.equal(host.room.status,'waiting');
+    host.rematch();start();host.room.seconds=0;host.engine.seconds=0;await host.action({type:'DRAW_OFFER'});await guest.action({type:'DRAW_REPLY',offer:offer(),accept:true});same();assert.equal(host.room.result.draw,true);
+  }finally{host.reset();guest.reset();clearInterval(host.timer);clearInterval(guest.timer);}
+});
+console.log('PASS chess actions: both players surrender, draw offer/reject/accept, reliable snapshots, host restore, stale/self/outsider denial, timeout priority, move/leave cleanup and rematch');
 for(const vector of JSON.parse(await readFile(new URL('./fixtures/voice-crv1.json',import.meta.url),'utf8')).vectors){
   const bytes=Uint8Array.from(Buffer.from(vector.packetHex,'hex')),decoded=decodeVoice(bytes);
   assert.deepEqual(Array.from(decoded.samples,s=>Math.round(s*32768)),vector.decoded,vector.name+' decode');
@@ -362,4 +408,6 @@ await withClock(async()=>{
   const snapshot=JSON.parse(JSON.stringify(host.snapshot()));assert.equal(snapshot.state.shopTime,0);assert.equal(snapshot.state.level,level+1);
   assert.ok(perform(host.self,{type:'NEXT'}),'Previous-level action is rejected');assert.ok(perform(guest,{type:'BUY',item:'strength'}));assert.equal(host.engine.level,level+1);host.reset();
 });
-console.log('PASS miner authority: host-only pause/early next, offline freeze, expired shop snapshot and stale-level rejection');
+const nativeEvents=[],nativeRoom=fixture('miner',{native:e=>nativeEvents.push(e.type)});nativeRoom.client.ready=false;nativeRoom.client.enabled=false;
+try{nativeRoom.nativeEvent({type:'background'});assert.equal(nativeRoom.background,true);nativeRoom.nativeEvent({type:'foreground'});assert.equal(nativeRoom.background,false);assert.deepEqual(nativeEvents,['background','foreground'],'native lifecycle reaches the renderer callback');}finally{clearInterval(nativeRoom.timer);}
+console.log('PASS miner authority: host-only pause/early next, offline freeze, expired shop snapshot, stale-level rejection and native renderer lifecycle');

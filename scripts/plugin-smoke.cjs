@@ -7,7 +7,7 @@ const url=process.env.CHESS_WEB_URL||'http://127.0.0.1:18880';
   const errors=[];
   try{
     const host=await browser.newPage(),guest=await browser.newPage();
-    for(const p of [host,guest]){p.on('pageerror',e=>errors.push(e.message));p.on('dialog',d=>d.accept());p.setDefaultTimeout(12000);await p.goto(url);await p.locator('#status').filter({hasText:'已连接'}).waitFor();}
+    for(const p of [host,guest]){p.on('pageerror',e=>errors.push(e.message));p.on('dialog',d=>d.accept());await p.addLocatorHandler(p.locator('#action-dialog'),()=>p.locator('#action-confirm').click());p.setDefaultTimeout(12000);await p.goto(url);await p.locator('#status').filter({hasText:'已连接'}).waitFor();}
     await host.locator('#installed-empty').waitFor();
     await host.click('#market-open');
     for(const name of ['翻棋','黄金矿工','电影厅']){const card=host.locator('#market-list .card').filter({has:host.getByRole('heading',{name,exact:true})});await card.getByRole('button',{name:'安装',exact:true}).click();await card.getByRole('button',{name:'已安装',exact:true}).waitFor();}
