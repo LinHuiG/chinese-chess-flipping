@@ -1,13 +1,16 @@
 # 项目执行记录与交接
 
-## 0.9.4 已发布，待第一台部署（2026-10-27）
+## 0.9.4 已发布并完成第一台部署及公网核验（2026-10-27）
 
 - 用户授权本轮深色 UI、翻棋单屏/动效/投降和棋、矿工卡顿及抓取修复打包发布；追加长期规则“插件不保留历史版本、旧插件必须升级”，已写入 AGENTS.md 并实现。最后授权通知既有“部署线程”部署第一台 fqgame.tdcode.tech，部署及核验成功后关机；未完成或失败不得关机，第二台不操作。
 - 最终冻结提交 `7fa8a6e232bd7adc28e9394b79655cffe21fcfbd` 已推送 main；[Actions 40360043136](https://github.com/LinHuiG/chinese-chess-flipping/actions/runs/40360043136) 五项全部成功，[v0.9.4](https://github.com/LinHuiG/chinese-chess-flipping/releases/tag/v0.9.4) 已公开，标签和附件 digest 与最终构建匹配。首轮 2c00113 候选已被新增规则取代，草稿附件已全部替换。
 - 宿主/服务端 0.9.4、Android code22、三个插件 1.0.4。市场现在只有 3 条当前发布、11 份产物；旧包和旧版本目录清理，Actions 归档 483,277,409→96,683,801 字节（约减少 80%）。Android 复用 v103 组件，签名目录只额外保留 4 条包名/散列约束元数据，防止绕过不可变 APK 规则。
 - 新客户端创建/加入/恢复前刷新签名市场，旧安装显示更新入口，旧房间需重建；处理市场切换、排队安装和迟到下载竞态，清理旧脚本/下载片段，保留个人存档。真实签名目录与浏览器 IndexedDB 的专项检查及既有 UI 检查通过。
 - 正式 APK/EXE 版本、散列、ZIP CRC、APK 非调试/同证书 v2 签名通过；APK 内置 14 份网页资源与冻结源码逐字节一致。市场生产签名、全部 11 文件大小/散列、旧路径不存在及 9 个平台脚本 fresh bundle 一致性通过。
-- 镜像 `ghcr.io/linhuig/chinese-chess-flipping:sha-7fa8a6e`，index `sha256:d484ee3576836e55a4a774abb6c52740563fa863ca42d989acdeca6ea2a5baa9`；注册表两个架构与 CI digest/源码 revision 匹配。正式本地产物 `server/target/release-0.9.4/final/release-assets/`。部署及公网检查待执行，Android 实体机性能、本次正式 EXE 电影播放链路仍未验证；详见 [0.9.4 验收](docs/ACCEPTANCE_0_9_4.md)。
+- 镜像 `ghcr.io/linhuig/chinese-chess-flipping:sha-7fa8a6e`，index `sha256:d484ee3576836e55a4a774abb6c52740563fa863ca42d989acdeca6ea2a5baa9`；注册表两个架构与 CI digest/源码 revision 匹配。既有“部署线程”完成第一台更新，容器 running/restarts=0、revision 正确，保留配置、端口与本地回滚镜像，第二台未操作。
+- 主线程独立公网 HTTPS、加密 TCP 握手/PONG、WSS、UDP、APK/EXE 完整下载散列通过；市场生产签名及三个当前发布、9 份 JSON 完整散列、两份原生组件首尾共 4 次 Range 字节、44 个旧路径 404、14 份宿主资源与冻结源码逐字节一致。公网双浏览器安装三插件、缺失补装入房、隔离、开局、刷新恢复和房主退出解散通过。
+- 镜像下载前两次完整层散列失败均阻止导入，从零固定偏移重下后通过；主线程公网首轮连接重置及市场两轮读取超时，降低文件下载并发后通过，未修改产品超时。既有 Docker 自动拉取代理故障仍待单独处理；完整过程及核验边界见 [部署记录](docs/DEPLOYMENT_0_9_4.md)。
+- 正式本地产物 `server/target/release-0.9.4/final/release-assets/`。Android 实体机性能、原生客户端与 Web 的真实跨端业务、本次正式 EXE 电影播放链路仍未验证；详见 [0.9.4 验收](docs/ACCEPTANCE_0_9_4.md)。归档提交推送后按本轮授权关闭本机，实际关机安排以工具结果为准。
 
 ## 黄金矿工卡顿与抓取偏移（2026-10-26，本地修复，未发布）
 
