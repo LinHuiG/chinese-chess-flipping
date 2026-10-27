@@ -4,7 +4,7 @@
 
 项目提供 Android、Windows 和适配手机、电脑的网页版，共用一份界面与玩法，支持跨端联机。Rust 只管理通用房间、房主声明的路由授权与不透明转发，可通过 Docker 自行部署。
 
-0.9.4 已发布并部署至 [第一台服务器](https://fqgame.tdcode.tech)，统一深色界面，优化翻棋单屏布局、星纹与走子动效，增加投降和请求和棋；修复黄金矿工卡顿、忽快忽慢及抓取偏移。插件市场只保留最新版，旧插件必须更新：升级宿主后，在插件市场更新三个插件至 1.0.4 并新建房间。[下载 0.9.4](https://github.com/LinHuiG/chinese-chess-flipping/releases/tag/v0.9.4)，公网核验及验证边界见 [验收记录](docs/ACCEPTANCE_0_9_4.md)。
+0.9.5 已发布并部署至 [第一台服务器](https://fqgame.tdcode.tech)，修复 Emby 转码时误烧录默认文字字幕，导致部分影片分片失败、无法播放的问题。电影厅更新至 1.0.5，翻棋和矿工保持 1.0.4；在插件市场更新电影厅并重建房间。[下载 0.9.5](https://github.com/LinHuiG/chinese-chess-flipping/releases/tag/v0.9.5)，真实片源检查及验证边界见 [验收记录](docs/ACCEPTANCE_0_9_5.md)。
 
 ## 功能
 
@@ -33,7 +33,7 @@
 
 ## 开始游戏
 
-当前 0.9.4：翻棋、黄金矿工和电影厅均从签名插件市场独立安装，房间固定插件发布，支持 Web、Android 和 Windows。宿主升级后在“插件市场”更新三个插件至 1.0.4 并新建房间；Android 电影厅沿用官方同签名 v103 组件，已安装者无需重复安装。验证结果和发布进展见 [验收记录](docs/ACCEPTANCE_0_9_4.md)与[执行记录](PROJECT_STATUS.md)。
+当前 0.9.5：翻棋、黄金矿工和电影厅均从签名插件市场独立安装，房间固定插件发布，支持 Web、Android 和 Windows。在“插件市场”更新电影厅至 1.0.5 并新建房间，翻棋和矿工当前为 1.0.4；Android 电影厅沿用官方同签名 v103 组件，已安装者无需重复安装。验证结果和发布进展见 [验收记录](docs/ACCEPTANCE_0_9_5.md)与[执行记录](PROJECT_STATUS.md)。
 
 ### Android
 
