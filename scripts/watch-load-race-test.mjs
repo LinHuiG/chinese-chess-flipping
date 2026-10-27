@@ -30,7 +30,7 @@ function harness(){
     if(parsed.pathname.endsWith('.m3u8'))return new Response(fixture.playlist);
     if(parsed.pathname.endsWith('/PlaybackInfo'))return new Promise(resolve=>{
       const index=requests.length+1,request={url,body,headers:options.headers,index,done:false};requests.push(request);
-      request.reply=(direct=false,session='session-'+index)=>{if(request.done)return;request.done=true;resolve({status:200,text:async()=>JSON.stringify({PlaySessionId:session,MediaSources:[{Id:'source-'+index,RunTimeTicks:6000000000,LiveStreamId:'live-'+index,SupportsDirectPlay:direct,Container:'mp4',MediaStreams:[{Type:'Video',Codec:'h264'},{Type:'Audio',Codec:'aac',Index:1}],...(direct?{DirectStreamUrl:'/video.mp4'}:{TranscodingUrl:'/hls/'+session+'.m3u8?StartTimeTicks='+body.StartTimeTicks+'&allowVideoStreamCopy=true&videoCodec=copy&allowAudioStreamCopy=true'})}]})});};
+      request.reply=(direct=false,session='session-'+index,extra={})=>{if(request.done)return;request.done=true;resolve({status:200,text:async()=>JSON.stringify({PlaySessionId:session,MediaSources:[{Id:'source-'+index,RunTimeTicks:6000000000,LiveStreamId:'live-'+index,SupportsDirectPlay:direct,Container:'mp4',MediaStreams:[{Type:'Video',Codec:'h264'},{Type:'Audio',Codec:'aac',Index:1}],...(direct?{DirectStreamUrl:'/video.mp4'}:{TranscodingUrl:'/hls/'+session+'.m3u8?StartTimeTicks='+body.StartTimeTicks+'&allowVideoStreamCopy=true&videoCodec=copy&allowAudioStreamCopy=true&subtitleMethod=Encode&subtitleStreamIndex=3'}),...extra}]})});};
     });
     reports.push({path:parsed.pathname,query:Object.fromEntries(parsed.searchParams),body,headers:options.headers});
     return {status:200,text:async()=>'{}'};
@@ -51,6 +51,13 @@ const tests=[
     const loading=h.watch.load(h.room.room.playback);await until(()=>h.requests.length===1,'full timeline negotiation');h.requests[0].reply();await loading;
     assert.equal(h.watch.offset,0);assert.equal(h.watch.hls.config.startPosition,180);assert.equal(h.video.currentTime,180);
     const query=new URL(h.watch.url).searchParams;for(const key of ['AllowVideoStreamCopy','AllowAudioStreamCopy','EnableAutoStreamCopy']){assert.equal(query.get(key),'false');assert.equal([...query.keys()].filter(k=>k.toLowerCase()===key.toLowerCase()).length,1);}assert.equal(query.get('VideoCodec'),'h264');assert(!query.has('videoCodec'));await h.update(55);assert.equal(h.requests.length,1,'full HLS seeks reuse the active Emby session');assert.equal(h.video.currentTime,55);
+    assert.equal(query.get('SubtitleMethod'),'External','Server-provided HLS URLs must not restore default subtitle burn-in');assert.equal(query.get('SubtitleStreamIndex'),'-1');for(const key of ['SubtitleMethod','SubtitleStreamIndex'])assert.equal([...query.keys()].filter(k=>k.toLowerCase()===key.toLowerCase()).length,1);
+  }],
+  ['explicit image subtitles still request burn-in and the selected track',async h=>{
+    const subtitle={Type:'Subtitle',Codec:'pgssub',Index:7};Object.assign(h.watch,{epoch:'film',subtitleIndex:7,burnSubtitle:true,tracks:[subtitle]});
+    const loading=h.watch.load(h.room.room.playback);await until(()=>h.requests.length===1,'image subtitle negotiation');assert.equal(h.requests[0].body.SubtitleStreamIndex,7);
+    h.requests[0].reply(false,'image-session',{MediaStreams:[{Type:'Video',Codec:'h264'},{Type:'Audio',Codec:'aac',Index:1},subtitle]});await loading;
+    const query=new URL(h.watch.url).searchParams;assert.equal(query.get('SubtitleMethod'),'Encode');assert.equal(query.get('SubtitleStreamIndex'),'7');for(const key of ['SubtitleMethod','SubtitleStreamIndex'])assert.equal([...query.keys()].filter(k=>k.toLowerCase()===key.toLowerCase()).length,1);
   }],
   ['an old seek timeout cannot poison the next episode while its save is pending',async h=>{
     const {watch,room,requests}=h;await startDirect(h);room.host=true;
