@@ -75,7 +75,7 @@ export class WatchRoom {
   mediaTracks(){return this.tracks.map(({Index,Type,Codec,Language,DisplayTitle,IsExternal})=>({Index,Type,Codec,Language,DisplayTitle,IsExternal:!!IsExternal}));}
   embeddedSubtitle(stream){return this.directTracks&&stream&&!stream.IsExternal;}
   endpoint(path,query={},access=this.access){const url=new URL(access.base.replace(/\/$/,'')+'/'+path.replace(/^\//,''));for(const [k,v] of Object.entries(query))if(v!==undefined&&v!==null)url.searchParams.set(k,String(v));return url.toString();}
-  headers(access=this.access,deviceId=this.room.self){return {'Content-Type':'application/json','X-Emby-Token':access?.token||'','X-Emby-Authorization':`MediaBrowser Client="CyberRoom", Device="${native?'Native':'Web'}", DeviceId="${deviceId}", Version="0.9.5"`};}
+  headers(access=this.access,deviceId=this.room.self){return {'Content-Type':'application/json','X-Emby-Token':access?.token||'','X-Emby-Authorization':`MediaBrowser Client="CyberRoom", Device="${native?'Native':'Web'}", DeviceId="${deviceId}", Version="0.9.6"`};}
   validContext(context,generation){return this.active&&this.room.current(context)&&(generation===undefined||generation===this.generation);}
   validPlayback(context,generation,url){return this.validContext(context,generation)&&this.url===url&&this.epoch===this.room.room?.playback?.epoch&&this.failedEpoch!==this.epoch;}
   canSample(){return this.epoch===this.room.room?.playback?.epoch&&!!this.url&&!this.loading&&!this.error&&!this.pendingSeek&&this.failedEpoch!==this.epoch&&(this.nativePlayer||this.video.readyState>=2);}
@@ -147,8 +147,8 @@ export class WatchRoom {
   async setSubtitle(value){const index=Number(value),stream=this.tracks.find(s=>s.Type==='Subtitle'&&s.Index===index);if(index!==-1&&!stream)return;watchLog('subtitle.select',{itemId:this.session?.itemId,playbackId:this.playbackId,index});const wasBurned=this.burnSubtitle;this.subtitlePreference=stream?{...stream}:null;this.subtitleIndex=index;this.burnSubtitle=!!stream&&!this.textSubtitle(stream)&&!this.embeddedSubtitle(stream);this.subtitleError='';this.clearSubtitles();if(wasBurned||this.burnSubtitle)await this.reload();else await this.loadSubtitles();this.render();await this.saveHost();}
   textSubtitle(stream){return stream.IsTextSubtitleStream===true||/^(subrip|srt|vtt|webvtt|ass|ssa|mov_text|text)$/i.test(stream.Codec||'');}
   clearSubtitles(){const hadCues=this.subtitleCues?.length;this.subtitleLoading=false;this.subtitleGeneration=(this.subtitleGeneration||0)+1;this.subtitleCues=[];const overlay=globalThis.document?.getElementById('watch-subtitle');if(overlay)overlay.textContent='';if(this.nativePlayer&&hadCues)nativeCall('playerCommand',JSON.stringify({playbackId:this.playbackId,subtitleCues:[],subtitleOffsetMs:0}));}
-  async loadSubtitles(){
-    this.subtitleError='';this.clearSubtitles();
+  async loadSubtitles(advance=false){
+    this.subtitleError='';if(advance)this.subtitleGeneration=(this.subtitleGeneration||0)+1;else this.clearSubtitles();
     const stream=this.tracks.find(s=>s.Type==='Subtitle'&&s.Index===this.subtitleIndex),context=this.room.context(),generation=this.generation,operation=this.subtitleGeneration,session=this.session,access=this.access,playbackId=this.playbackId;
     const current=()=>this.validContext(context,generation)&&operation===this.subtitleGeneration&&this.session===session&&this.access===access;
     const log=(event,extra={})=>watchLog(event,{itemId:session?.itemId,playbackId,generation,index:this.subtitleIndex,...extra});
@@ -158,8 +158,11 @@ export class WatchRoom {
       if(!session||!stream||this.burnSubtitle)return;
       this.subtitleLoading=true;log('subtitle.request');
       const key=JSON.stringify([access.base,access.userId,access.token,session.itemId,session.sourceId,stream.Index]);
-      let cues=this.subtitleCache?.key===key?this.subtitleCache.cues:null;
-      if(!cues){const text=await mediaRequest(this.endpoint('Videos/'+encodeURIComponent(session.itemId)+'/'+encodeURIComponent(session.sourceId)+'/Subtitles/'+stream.Index+'/Stream.vtt',{StartPositionTicks:0},access),'GET',this.headers(access),undefined,60000,'text');if(!current())return;cues=parseVtt(text);if(!cues.length)throw Error('此字幕没有可显示的文本');this.subtitleCache={key,cues};}
+      // Remote embedded subtitles can take longer than a proxy's response limit
+      // to extract in full. Seek on the source and retain absolute cue times.
+      const position=session.remote&&!stream.IsExternal?Math.max(0,this.current()):0,start=Math.max(0,Math.floor(position/120)*120-15),range=session.remote&&!stream.IsExternal?{start,end:start+180}:null,cache=this.subtitleCache?.key===key?this.subtitleCache:null;
+      let cues=!advance&&cache&&(!cache.range||position>=cache.range.start&&position<cache.range.end)?cache.cues:null;
+      if(!cues){const query=range?{StartPositionTicks:Math.round(range.start*tick),EndPositionTicks:Math.round(range.end*tick),CopyTimestamps:true}:{StartPositionTicks:0},text=await mediaRequest(this.endpoint('Videos/'+encodeURIComponent(session.itemId)+'/'+encodeURIComponent(session.sourceId)+'/Subtitles/'+stream.Index+'/Stream.vtt',query,access),'GET',this.headers(access),undefined,60000,'text');if(!current())return;cues=parseVtt(text);if(!cues.length&&!range)throw Error('此字幕没有可显示的文本');this.subtitleCache={key,cues,range};}
       if(!current())return;this.subtitleCues=cues;
       if(this.nativePlayer)await nativeCall('playerCommand',JSON.stringify({playbackId,subtitleCues:cues,subtitleOffsetMs:(this.offset||0)*1000}));
       if(!current())return;log('subtitle.ready',{cues:cues.length,offset:this.offset||0,elapsedMs:Math.round(performance.now()-started)});this.paintSubtitle();
@@ -275,7 +278,7 @@ export class WatchRoom {
       const force=(this.quality||'auto')!=='auto'||this.compatibility||this.burnSubtitle||this.audioExplicit&&!this.nativeTracks,request={UserId:access.userId,StartTimeTicks:Math.round(start*tick),IsPlayback:true,AutoOpenLiveStream:true,AudioStreamIndex:this.audioIndex,SubtitleStreamIndex:this.burnSubtitle?this.subtitleIndex:-1,...playbackRequest(this.quality,force)};if(this.burnSubtitle)request.DeviceProfile.SubtitleProfiles=[{Format:'pgssub',Method:'Encode'},{Format:'dvdsub',Method:'Encode'},{Format:'dvbsub',Method:'Encode'}];
       this.loadingStage='Emby 播放协商中（最长 60 秒）…';this.render();const info=await mediaRequest(this.endpoint('Items/'+encodeURIComponent(state.itemId)+'/PlaybackInfo',{...Object.fromEntries(Object.entries(request).filter(([key])=>key!=='DeviceProfile')),DeviceId:deviceId},access),'POST',this.headers(access,deviceId),request,60000);
       const sources=info.MediaSources||[],source=(!force&&sources.find(s=>directCompatible(s)))||sources.find(s=>s.TranscodingUrl)||(access.canTranscode===true&&info.PlaySessionId?sources.find(s=>s.Id):null);
-      openedSession={itemId:state.itemId,id:info.PlaySessionId,sourceId:source?.Id,liveStreamId:source?.LiveStreamId,transcoded:!!source?.TranscodingUrl||force,deviceId};
+      openedSession={itemId:state.itemId,id:info.PlaySessionId,sourceId:source?.Id,liveStreamId:source?.LiveStreamId,remote:source?.IsRemote===true,transcoded:!!source?.TranscodingUrl||force,deviceId};
       if(!current()){await this.endSession(openedSession,access,start);openedSession=null;return;}
       this.tracks=(source||sources[0])?.MediaStreams||[];if(!source||info.ErrorCode)throw Error(this.burnSubtitle?'Emby 未提供图片字幕烧录，请检查视频转码权限，或关闭此字幕':force?'Emby 未提供所选画质或音轨的兼容转码；请改用自动画质、兼容音轨，或检查片源转码服务':'此影片无法直接播放，Emby 未提供 H.264 / AAC 兼容转码；请换兼容音轨或影片，或检查片源转码服务');
       if(!this.tracks.some(s=>s.Type==='Audio'&&s.Index===this.audioIndex))this.audioIndex=undefined;
@@ -452,6 +455,7 @@ export class WatchRoom {
     if(this.room.host&&!this.room.background){state.position=this.hostPosition(state);state.buffering=!!this.loading||!!this.buffering||!!this.pendingSeek||!!this.error;if(state.duration>0&&state.position>=state.duration)state.playing=false;state.version++;state.at=performance.now();this.receivedAt=performance.now();this.send('watch.state',state).catch(()=>{});}
     else if(!this.room.host&&performance.now()-this.lastHost>5000){this.waiting=true;this.requestSync();await this.follow();if(performance.now()-this.lastHost>60000){try{await this.room.client.roomSync(this.room.room.roomId);}catch(e){if(this.validContext(context)&&e.code==='ROOM_NOT_FOUND'){this.room.reset();this.room.events.changed?.();}}}}
     if(!this.validContext(context))return;
+    const subtitleRange=this.subtitleCache?.range;if(this.session&&subtitleRange&&this.subtitleIndex>=0&&!this.room.background&&!this.directTracks&&!this.burnSubtitle&&!this.loading&&!this.subtitleLoading&&!this.subtitleError){const position=this.current();if(position<subtitleRange.start||position>=subtitleRange.end-30)this.loadSubtitles(true).catch(()=>{});}
     if(this.session&&performance.now()-(this.lastCheckin||0)>10000){this.lastCheckin=performance.now();this.checkin('Playing/Progress').catch(()=>{});}
   }
   async checkin(path){if(!this.session||!this.access)return;const s=this.session;await mediaRequest(this.endpoint('Sessions/'+path),'POST',this.headers(),{ItemId:s.itemId,MediaSourceId:s.sourceId,PlaySessionId:s.id,PositionTicks:Math.round(this.current()*tick),IsPaused:!this.room.room?.playback?.playing,CanSeek:true,PlayMethod:s.transcoded?'Transcode':'DirectPlay'});}

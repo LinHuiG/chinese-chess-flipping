@@ -226,6 +226,7 @@ jobs:
           node scripts/subtitles-test.mjs
           node scripts/watch-subtitle-lifecycle-test.mjs
           node scripts/watch-subtitle-transition-test.mjs
+          node scripts/watch-subtitle-window-test.mjs
           node scripts/watch-player-test.mjs
           node scripts/watch-native-player-test.mjs
           node scripts/watch-seek-test.mjs
